@@ -450,7 +450,7 @@ function offset(options: PageOptions): number {
 
 function mapPlayerRow(row: Record<string, any>): PlayerRow {
   return {
-    id: row.id,
+    id: Number(row.id),
     bungieName: row.bungie_name,
     displayName: row.display_name,
     displayNameCode: row.display_name_code,
@@ -465,7 +465,7 @@ function mapPlayerRow(row: Record<string, any>): PlayerRow {
 
 function mapQueryLogRow(row: Record<string, any>): QueryLogRow {
   return {
-    id: row.id,
+    id: Number(row.id),
     route: row.route,
     cacheHit: row.cache_hit,
     ipHash: row.ip_hash ?? undefined,
@@ -475,7 +475,7 @@ function mapQueryLogRow(row: Record<string, any>): QueryLogRow {
 
 function mapQqBindingRow(row: Record<string, any>): QqBindingRow {
   return {
-    id: row.id,
+    id: Number(row.id),
     qq: row.qq,
     membershipType: row.membership_type,
     membershipId: row.membership_id,
@@ -491,7 +491,7 @@ function mapQqBindingRow(row: Record<string, any>): QqBindingRow {
 
 function mapAdminAuditLogRow(row: Record<string, any>): AdminAuditLogRow {
   return {
-    id: row.id,
+    id: Number(row.id),
     actor: row.actor,
     action: row.action,
     target: row.target ?? undefined,
