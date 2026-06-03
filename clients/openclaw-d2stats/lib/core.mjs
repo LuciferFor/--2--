@@ -1,5 +1,10 @@
+import { readFileSync } from "node:fs";
+
 const MODES = new Set(["all", "raid", "dungeon", "trials", "pvp", "gambit"]);
 const CARDS = new Set(["summary", "profile", "weapons", "raid_overview", "latest_activity", "activity"]);
+const CARD_WIDTH = 1200;
+const CJK_FONT_URL = new URL("../assets/NotoSansSC-VF.ttf", import.meta.url).href;
+let cachedFontFaceCss;
 
 const MODE_LABELS = {
   all: "总览",
@@ -216,7 +221,7 @@ async function renderCardFromPublicJson(card, params, config, options) {
     const sourceUrl = buildPublicDataUrl("pgcr", undefined, params, config);
     const pgcr = await fetchEnvelope(sourceUrl, config, options);
     return {
-      width: 1100,
+      width: CARD_WIDTH,
       height: 650,
       sourceUrl,
       html: renderActivityHtml(pgcr),
@@ -229,7 +234,7 @@ async function renderCardFromPublicJson(card, params, config, options) {
     const sourceUrl = buildPublicDataUrl("summary", resolved, params, config);
     const summary = await fetchEnvelope(sourceUrl, config, options);
     return {
-      width: 1100,
+      width: CARD_WIDTH,
       height: 620,
       sourceUrl,
       html: renderSummaryHtml(resolved.player, summary),
@@ -240,7 +245,7 @@ async function renderCardFromPublicJson(card, params, config, options) {
     const sourceUrl = buildPublicDataUrl("profile", resolved, params, config);
     const profile = await fetchEnvelope(sourceUrl, config, options);
     return {
-      width: 1100,
+      width: CARD_WIDTH,
       height: 650,
       sourceUrl,
       html: renderProfileHtml(resolved.player, profile),
@@ -251,7 +256,7 @@ async function renderCardFromPublicJson(card, params, config, options) {
     const sourceUrl = buildPublicDataUrl("weapons", resolved, params, config);
     const weapons = await fetchEnvelope(sourceUrl, config, options);
     return {
-      width: 1100,
+      width: CARD_WIDTH,
       height: 720,
       sourceUrl,
       html: renderWeaponsHtml(resolved.player, weapons),
@@ -268,7 +273,7 @@ async function renderCardFromPublicJson(card, params, config, options) {
     const sourceUrl = buildPublicDataUrl("pgcr", undefined, { activityId: activity.activityId }, config);
     const pgcr = await fetchEnvelope(sourceUrl, config, options);
     return {
-      width: 1100,
+      width: CARD_WIDTH,
       height: 650,
       sourceUrl,
       html: renderActivityHtml(pgcr),
@@ -279,7 +284,7 @@ async function renderCardFromPublicJson(card, params, config, options) {
     const sourceUrl = buildPublicDataUrl("raids", resolved, params, config);
     const overview = await fetchEnvelope(sourceUrl, config, options);
     return {
-      width: 1100,
+      width: CARD_WIDTH,
       height: 720,
       sourceUrl,
       html: renderRaidOverviewHtml(resolved.player, overview),
@@ -539,14 +544,15 @@ function cardPage({ eyebrow, title, subtitle, body }) {
 <head>
   <meta charset="utf-8" />
   <style>
+    ${fontFaceCss()}
     * { box-sizing: border-box; }
     html, body { margin: 0; padding: 0; background: transparent; }
     body {
-      font-family: "Noto Sans CJK SC", "Noto Sans SC", "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+      font-family: "D2CJK", "Noto Sans CJK SC", "Noto Sans SC", "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
       color: #f5f7fb;
     }
     #d2-card {
-      width: 1100px;
+      width: ${CARD_WIDTH}px;
       min-height: 620px;
       padding: 42px 48px 36px;
       background:
@@ -664,7 +670,7 @@ function cardPage({ eyebrow, title, subtitle, body }) {
       text-overflow: ellipsis;
     }
     .metrics-4 .metric-value {
-      font-size: 38px;
+      font-size: 32px;
     }
     .kv-grid {
       display: grid;
@@ -719,9 +725,9 @@ function cardPage({ eyebrow, title, subtitle, body }) {
       color: #ffffff;
       font-weight: 900;
     }
-    .raid-grid { grid-template-columns: minmax(250px, 2.2fr) 76px 120px 130px 100px 112px; }
-    .weapon-grid { grid-template-columns: minmax(360px, 1fr) 130px 130px 160px; }
-    .activity-grid { grid-template-columns: minmax(280px, 1fr) 100px 100px 100px 100px 120px; }
+    .raid-grid { grid-template-columns: minmax(320px, 1.8fr) 90px 150px 155px 120px 135px; }
+    .weapon-grid { grid-template-columns: minmax(420px, 1fr) 145px 145px 180px; }
+    .activity-grid { grid-template-columns: minmax(340px, 1fr) 110px 110px 110px 110px 130px; }
     .list { display: grid; gap: 12px; }
     .list-row {
       display: grid;
@@ -791,6 +797,35 @@ function cardPage({ eyebrow, title, subtitle, body }) {
   </main>
 </body>
 </html>`;
+}
+
+function fontFaceCss() {
+  if (cachedFontFaceCss !== undefined) {
+    return cachedFontFaceCss;
+  }
+  try {
+    const base64 = readFileSync(new URL("../assets/NotoSansSC-VF.ttf", import.meta.url)).toString("base64");
+    cachedFontFaceCss = `
+      @font-face {
+        font-family: "D2CJK";
+        src: url("data:font/ttf;base64,${base64}") format("truetype");
+        font-weight: 100 900;
+        font-style: normal;
+        font-display: block;
+      }
+    `;
+  } catch {
+    cachedFontFaceCss = `
+      @font-face {
+        font-family: "D2CJK";
+        src: url("${CJK_FONT_URL}") format("truetype");
+        font-weight: 100 900;
+        font-style: normal;
+        font-display: block;
+      }
+    `;
+  }
+  return cachedFontFaceCss;
 }
 
 function metric(label, value) {
