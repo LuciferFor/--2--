@@ -13,6 +13,7 @@ FROM deps AS build
 COPY tsconfig.json vitest.config.ts ./
 COPY src ./src
 COPY scripts ./scripts
+COPY admin ./admin
 RUN npm run build
 
 FROM base AS runtime

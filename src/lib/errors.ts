@@ -1,5 +1,6 @@
 export type ErrorCode =
   | "BAD_REQUEST"
+  | "UNAUTHORIZED"
   | "NOT_FOUND"
   | "UPSTREAM_ERROR"
   | "BUNGIE_ERROR"

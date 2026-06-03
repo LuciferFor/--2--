@@ -1,8 +1,14 @@
+import staticPlugin from "@fastify/static";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import Fastify, { type FastifyInstance } from "fastify";
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { AppConfig } from "./config.js";
 import { loadConfig } from "./config.js";
+import { registerAdminRoutes } from "./admin/admin-routes.js";
+import { isAdminEnabled, toAdminAuthConfig } from "./admin/auth.js";
 import { MemoryCacheStore, type CacheStore } from "./cache/cache.js";
 import { RedisCacheStore } from "./cache/redis-cache.js";
 import { CardService } from "./cards/card-service.js";
@@ -28,6 +34,7 @@ export interface AppDeps {
 
 export async function buildApp(overrides: AppDeps = {}): Promise<FastifyInstance> {
   const config = overrides.config ?? loadConfig();
+  const startedAt = Date.now();
   const app = Fastify({
     logger: config.NODE_ENV === "test" ? false : true
   });
@@ -72,6 +79,15 @@ export async function buildApp(overrides: AppDeps = {}): Promise<FastifyInstance
   });
 
   await registerHealthRoutes(app);
+  await registerAdminRoutes(app, {
+    config,
+    cache,
+    store,
+    destinyService,
+    manifestService,
+    startedAt
+  });
+  await registerAdminFrontend(app, config);
   await registerD2Routes(app, {
     destinyService,
     cardService,
@@ -81,6 +97,46 @@ export async function buildApp(overrides: AppDeps = {}): Promise<FastifyInstance
   });
 
   return app;
+}
+
+async function registerAdminFrontend(app: FastifyInstance, config: AppConfig): Promise<void> {
+  const authConfig = toAdminAuthConfig(config);
+  const adminRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "admin");
+
+  if (!isAdminEnabled(authConfig)) {
+    app.get("/admin", async (_request, reply) => {
+      reply.type("text/html; charset=utf-8").send(disabledAdminHtml());
+    });
+    app.get("/admin/*", async (_request, reply) => {
+      reply.type("text/html; charset=utf-8").send(disabledAdminHtml());
+    });
+    return;
+  }
+
+  if (!existsSync(path.join(adminRoot, "index.html"))) {
+    app.get("/admin", async (_request, reply) => {
+      reply.type("text/html; charset=utf-8").send(missingAdminHtml());
+    });
+    app.get("/admin/*", async (_request, reply) => {
+      reply.type("text/html; charset=utf-8").send(missingAdminHtml());
+    });
+    return;
+  }
+
+  await app.register(staticPlugin, {
+    root: adminRoot,
+    prefix: "/admin/"
+  });
+
+  app.get("/admin", async (_request, reply) => reply.redirect("/admin/"));
+}
+
+function disabledAdminHtml(): string {
+  return `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>管理后台未启用</title><body style="font-family: sans-serif; padding: 40px;"><h1>管理后台未启用</h1><p>请配置 ADMIN_PASSWORD_HASH 和 ADMIN_SESSION_SECRET 后重启服务。</p></body></html>`;
+}
+
+function missingAdminHtml(): string {
+  return `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>管理后台未构建</title><body style="font-family: sans-serif; padding: 40px;"><h1>管理后台未构建</h1><p>请运行 npm run build 生成 dist/admin。</p></body></html>`;
 }
 
 function createCache(config: AppConfig): CacheStore {

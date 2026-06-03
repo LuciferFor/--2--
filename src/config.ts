@@ -17,7 +17,11 @@ const schema = z.object({
     .string()
     .optional()
     .transform((value) => value === "true"),
-  CARD_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(600)
+  CARD_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(600),
+  ADMIN_USERNAME: z.string().min(1).default("admin"),
+  ADMIN_PASSWORD_HASH: z.string().optional().default(""),
+  ADMIN_SESSION_SECRET: z.string().optional().default(""),
+  ADMIN_SESSION_TTL_SECONDS: z.coerce.number().int().positive().default(86400)
 });
 
 export type AppConfig = z.infer<typeof schema>;
@@ -41,6 +45,10 @@ export function makeTestConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     MANIFEST_LOCALE: "zh-chs",
     MANIFEST_PRELOAD: false,
     CARD_CACHE_TTL_SECONDS: 600,
+    ADMIN_USERNAME: "admin",
+    ADMIN_PASSWORD_HASH: "",
+    ADMIN_SESSION_SECRET: "",
+    ADMIN_SESSION_TTL_SECONDS: 86400,
     ...overrides
   };
 }

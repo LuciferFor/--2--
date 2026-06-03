@@ -16,6 +16,7 @@ cd /opt/destiny2-public-stats/app
 sudo docker compose -p destiny2-public-stats ps
 sudo docker compose -p destiny2-public-stats logs -f app
 sudo docker compose -p destiny2-public-stats --env-file .env up -d --build app
+sudo docker compose -p destiny2-public-stats --env-file .env run --rm app npm run migrate
 ```
 
 ## 配置
@@ -31,4 +32,30 @@ sudo nano /opt/destiny2-public-stats/app/.env
 ```bash
 cd /opt/destiny2-public-stats/app
 sudo docker compose -p destiny2-public-stats --env-file .env up -d app
+```
+
+## 管理后台
+
+管理后台地址是 `http://192.168.31.11:3011/admin`。默认未启用，需要在服务器生成密码哈希并写入 `.env`：
+
+```bash
+cd /opt/destiny2-public-stats/app
+sudo docker compose -p destiny2-public-stats --env-file .env run --rm app npm run admin:hash -- "your-password"
+sudo nano /opt/destiny2-public-stats/app/.env
+sudo docker compose -p destiny2-public-stats --env-file .env up -d --build app
+```
+
+需要配置的变量：
+
+```env
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD_HASH=scrypt$...
+ADMIN_SESSION_SECRET=generated-secret
+```
+
+已有数据库升级后执行一次迁移，创建后台审计日志表和查询索引：
+
+```bash
+cd /opt/destiny2-public-stats/app
+sudo docker compose -p destiny2-public-stats --env-file .env run --rm app npm run migrate
 ```

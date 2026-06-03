@@ -4,6 +4,8 @@ export interface CacheStore {
   getBuffer(key: string): Promise<Buffer | null>;
   setBuffer(key: string, value: Buffer, ttlSeconds: number): Promise<void>;
   del(key: string): Promise<void>;
+  deleteByPrefix(prefix: string): Promise<number>;
+  ping(): Promise<boolean>;
   close(): Promise<void>;
 }
 
@@ -38,6 +40,21 @@ export class MemoryCacheStore implements CacheStore {
 
   async del(key: string): Promise<void> {
     this.store.delete(key);
+  }
+
+  async deleteByPrefix(prefix: string): Promise<number> {
+    let deleted = 0;
+    for (const key of [...this.store.keys()]) {
+      if (key.startsWith(prefix)) {
+        this.store.delete(key);
+        deleted += 1;
+      }
+    }
+    return deleted;
+  }
+
+  async ping(): Promise<boolean> {
+    return true;
   }
 
   async close(): Promise<void> {

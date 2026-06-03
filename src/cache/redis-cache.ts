@@ -44,6 +44,25 @@ export class RedisCacheStore implements CacheStore {
     await this.redis.del(key);
   }
 
+  async deleteByPrefix(prefix: string): Promise<number> {
+    await this.connect();
+    let cursor = "0";
+    let deleted = 0;
+    do {
+      const [nextCursor, keys] = await this.redis.scan(cursor, "MATCH", `${prefix}*`, "COUNT", 100);
+      cursor = nextCursor;
+      if (keys.length > 0) {
+        deleted += await this.redis.del(...keys);
+      }
+    } while (cursor !== "0");
+    return deleted;
+  }
+
+  async ping(): Promise<boolean> {
+    await this.connect();
+    return (await this.redis.ping()) === "PONG";
+  }
+
   async close(): Promise<void> {
     await this.redis.quit();
   }
