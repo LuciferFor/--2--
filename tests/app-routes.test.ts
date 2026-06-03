@@ -113,6 +113,82 @@ describe("Fastify routes", () => {
     await app.close();
   });
 
+  it("creates and resolves QQ bindings with BungieName input", async () => {
+    const store = new NullStore();
+    const app = await buildApp({
+      config: makeTestConfig(),
+      cache: new MemoryCacheStore(),
+      store,
+      destinyService: fakeDestinyService as never,
+      cardService: fakeCardService as never
+    });
+
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/d2/bindings/qq",
+      payload: { qq: "607972716", bungieName: "Guardian#0007" }
+    });
+    expect(create.statusCode).toBe(200);
+    expect(create.json()).toMatchObject({
+      success: true,
+      data: {
+        qq: "607972716",
+        membershipType: 3,
+        membershipId: "4611686018",
+        bungieName: "Guardian#0007"
+      }
+    });
+
+    const conflict = await app.inject({
+      method: "POST",
+      url: "/api/d2/bindings/qq",
+      payload: { qq: "607972716", membershipType: 3, membershipId: "4611686019" }
+    });
+    expect(conflict.statusCode).toBe(400);
+
+    const resolve = await app.inject({ method: "GET", url: "/api/d2/bindings/qq/607972716" });
+    expect(resolve.statusCode).toBe(200);
+    expect(resolve.json()).toMatchObject({
+      success: true,
+      data: {
+        qq: "607972716",
+        membershipType: 3,
+        membershipId: "4611686018"
+      }
+    });
+    expect(resolve.json().data.lastResolvedAt).toEqual(expect.any(String));
+    await app.close();
+  });
+
+  it("creates QQ bindings with membership input and returns 404 for missing QQ", async () => {
+    const app = await buildApp({
+      config: makeTestConfig(),
+      cache: new MemoryCacheStore(),
+      store: new NullStore(),
+      destinyService: fakeDestinyService as never,
+      cardService: fakeCardService as never
+    });
+
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/d2/bindings/qq",
+      payload: { qq: "123456", membershipType: 3, membershipId: "4611686018" }
+    });
+    expect(create.statusCode).toBe(200);
+    expect(create.json()).toMatchObject({
+      success: true,
+      data: {
+        qq: "123456",
+        membershipType: 3,
+        membershipId: "4611686018"
+      }
+    });
+
+    const missing = await app.inject({ method: "GET", url: "/api/d2/bindings/qq/999999" });
+    expect(missing.statusCode).toBe(404);
+    await app.close();
+  });
+
   it("returns JSON errors for bad requests", async () => {
     const app = await buildApp({
       config: makeTestConfig(),

@@ -186,12 +186,14 @@ h2 {
   min-width: 280px;
 }
 
-.tester {
+.tester,
+.binding-form {
   display: grid;
   gap: 14px;
 }
 
 .tester label,
+.binding-form label,
 .form-row label {
   color: #3c4958;
   display: grid;
@@ -203,6 +205,10 @@ h2 {
   display: grid;
   gap: 12px;
   grid-template-columns: minmax(220px, 1fr) 120px;
+}
+
+.form-row.three {
+  grid-template-columns: minmax(160px, 1fr) minmax(160px, 1fr) minmax(220px, 2fr);
 }
 
 .query-editor {
@@ -292,6 +298,12 @@ pre {
   font-size: 13px;
 }
 
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 table {
   background: #ffffff;
   border-collapse: collapse;
@@ -329,12 +341,19 @@ td {
 }
 
 .error,
+.success,
 .error-row {
   background: #fff1f1;
   border: 1px solid #efb6b6;
   border-radius: 6px;
   color: #8a1f1f;
   padding: 10px 12px;
+}
+
+.success {
+  background: #eefaf4;
+  border-color: #a8d9bf;
+  color: #16623f;
 }
 
 .error-row {
@@ -369,6 +388,7 @@ td {
   }
 
   .form-row,
+  .form-row.three,
   .query-row {
     grid-template-columns: 1fr;
   }

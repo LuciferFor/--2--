@@ -8,6 +8,8 @@ import type {
   PaginatedResult,
   PlayerCacheRecord,
   PlayerRow,
+  QqBindingRecord,
+  QqBindingRow,
   QueryLogRow,
   Store
 } from "./store.js";
@@ -83,6 +85,125 @@ export class PostgresStore implements Store {
       page: options.page,
       pageSize: options.pageSize
     };
+  }
+
+  async createQqBinding(binding: QqBindingRecord): Promise<QqBindingRow | null> {
+    const result = await this.pool.query(
+      `
+        INSERT INTO qq_bindings (
+          qq,
+          membership_type,
+          membership_id,
+          bungie_name,
+          display_name,
+          display_name_code,
+          notes
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (qq) DO NOTHING
+        RETURNING id, qq, membership_type, membership_id, bungie_name, display_name,
+                  display_name_code, notes, last_resolved_at, created_at, updated_at
+      `,
+      [
+        binding.qq,
+        binding.membershipType,
+        binding.membershipId,
+        binding.bungieName ?? null,
+        binding.displayName ?? null,
+        binding.displayNameCode ?? null,
+        binding.notes ?? null
+      ]
+    );
+
+    return result.rows[0] ? mapQqBindingRow(result.rows[0]) : null;
+  }
+
+  async upsertQqBinding(binding: QqBindingRecord): Promise<QqBindingRow> {
+    const result = await this.pool.query(
+      `
+        INSERT INTO qq_bindings (
+          qq,
+          membership_type,
+          membership_id,
+          bungie_name,
+          display_name,
+          display_name_code,
+          notes
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (qq)
+        DO UPDATE SET
+          membership_type = EXCLUDED.membership_type,
+          membership_id = EXCLUDED.membership_id,
+          bungie_name = EXCLUDED.bungie_name,
+          display_name = EXCLUDED.display_name,
+          display_name_code = EXCLUDED.display_name_code,
+          notes = EXCLUDED.notes,
+          updated_at = NOW()
+        RETURNING id, qq, membership_type, membership_id, bungie_name, display_name,
+                  display_name_code, notes, last_resolved_at, created_at, updated_at
+      `,
+      [
+        binding.qq,
+        binding.membershipType,
+        binding.membershipId,
+        binding.bungieName ?? null,
+        binding.displayName ?? null,
+        binding.displayNameCode ?? null,
+        binding.notes ?? null
+      ]
+    );
+
+    return mapQqBindingRow(result.rows[0]);
+  }
+
+  async getQqBinding(qq: string): Promise<QqBindingRow | null> {
+    const result = await this.pool.query(
+      `
+        SELECT id, qq, membership_type, membership_id, bungie_name, display_name,
+               display_name_code, notes, last_resolved_at, created_at, updated_at
+        FROM qq_bindings
+        WHERE qq = $1
+      `,
+      [qq]
+    );
+
+    return result.rows[0] ? mapQqBindingRow(result.rows[0]) : null;
+  }
+
+  async listQqBindings(query: string | undefined, options: PageOptions): Promise<PaginatedResult<QqBindingRow>> {
+    const where = query
+      ? `WHERE qq LIKE $1 OR membership_id = $2 OR LOWER(COALESCE(bungie_name, '')) LIKE LOWER($3) OR LOWER(COALESCE(display_name, '')) LIKE LOWER($4)`
+      : "";
+    const params = query ? [`%${query}%`, query, `%${query}%`, `%${query}%`] : [];
+    const countResult = await this.pool.query(`SELECT COUNT(*)::int AS total FROM qq_bindings ${where}`, params);
+    const result = await this.pool.query(
+      `
+        SELECT id, qq, membership_type, membership_id, bungie_name, display_name,
+               display_name_code, notes, last_resolved_at, created_at, updated_at
+        FROM qq_bindings
+        ${where}
+        ORDER BY updated_at DESC
+        LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+      `,
+      [...params, options.pageSize, offset(options)]
+    );
+
+    return {
+      items: result.rows.map(mapQqBindingRow),
+      total: countResult.rows[0]?.total ?? 0,
+      page: options.page,
+      pageSize: options.pageSize
+    };
+  }
+
+  async deleteQqBinding(qq: string): Promise<boolean> {
+    const result = await this.pool.query("DELETE FROM qq_bindings WHERE qq = $1", [qq]);
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async touchQqBinding(qq: string): Promise<void> {
+    await this.pool.query("UPDATE qq_bindings SET last_resolved_at = NOW() WHERE qq = $1", [qq]);
   }
 
   async listQueryLogs(
@@ -349,6 +470,22 @@ function mapQueryLogRow(row: Record<string, any>): QueryLogRow {
     cacheHit: row.cache_hit,
     ipHash: row.ip_hash ?? undefined,
     createdAt: row.created_at.toISOString()
+  };
+}
+
+function mapQqBindingRow(row: Record<string, any>): QqBindingRow {
+  return {
+    id: row.id,
+    qq: row.qq,
+    membershipType: row.membership_type,
+    membershipId: row.membership_id,
+    bungieName: row.bungie_name ?? undefined,
+    displayName: row.display_name ?? undefined,
+    displayNameCode: row.display_name_code ?? undefined,
+    notes: row.notes ?? undefined,
+    lastResolvedAt: row.last_resolved_at?.toISOString(),
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString()
   };
 }
 

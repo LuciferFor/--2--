@@ -6,7 +6,7 @@ type ApiEnvelope<T> =
   | { success: true; data: T; error: null; meta: Record<string, unknown> }
   | { success: false; data: null; error: { code: string; message: string }; meta: Record<string, unknown> };
 
-type Tab = "overview" | "tester" | "metrics" | "queries" | "players" | "manifest" | "config" | "audit";
+type Tab = "overview" | "tester" | "metrics" | "queries" | "players" | "qqBindings" | "manifest" | "config" | "audit";
 
 interface Overview {
   service: { status: string; uptimeSeconds: number; nodeEnv: string };
@@ -60,6 +60,19 @@ interface AuditRow {
   createdAt: string;
 }
 
+interface QqBindingRow {
+  id: number;
+  qq: string;
+  membershipType: number;
+  membershipId: string;
+  bungieName?: string;
+  displayName?: string;
+  displayNameCode?: number;
+  notes?: string;
+  lastResolvedAt?: string;
+  updatedAt: string;
+}
+
 interface QueryParam {
   id: number;
   key: string;
@@ -99,6 +112,7 @@ const tabs: Array<{ id: Tab; label: string }> = [
   { id: "metrics", label: "指标" },
   { id: "queries", label: "查询日志" },
   { id: "players", label: "玩家缓存" },
+  { id: "qqBindings", label: "QQ绑定" },
   { id: "manifest", label: "Manifest" },
   { id: "config", label: "配置" },
   { id: "audit", label: "审计" }
@@ -197,6 +211,7 @@ function Dashboard({ username, onLogout }: { username: string; onLogout: () => v
       {tab === "metrics" && <MetricsPanel />}
       {tab === "queries" && <QueriesPanel />}
       {tab === "players" && <PlayersPanel />}
+      {tab === "qqBindings" && <QqBindingsPanel />}
       {tab === "manifest" && <ManifestPanel />}
       {tab === "config" && <ConfigPanel />}
       {tab === "audit" && <AuditPanel />}
@@ -420,6 +435,142 @@ function PlayersPanel() {
                 <td>{`${player.membershipType}:${player.membershipId}`}</td>
                 <td>{formatDate(player.lastSeenAt)}</td>
                 <td><button onClick={() => refresh(player)}>刷新</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
+function QqBindingsPanel() {
+  const [q, setQ] = useState("");
+  const [url, setUrl] = useState("/api/admin/bindings/qq?pageSize=50");
+  const [mode, setMode] = useState<"bungieName" | "membership">("bungieName");
+  const [qq, setQq] = useState("");
+  const [bungieName, setBungieName] = useState("");
+  const [membershipType, setMembershipType] = useState("3");
+  const [membershipId, setMembershipId] = useState("");
+  const [notes, setNotes] = useState("");
+  const [saved, setSaved] = useState<QqBindingRow | null>(null);
+  const [formError, setFormError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const { data, error, reload } = useLoader<Paginated<QqBindingRow>>(url);
+
+  function search(event: React.FormEvent) {
+    event.preventDefault();
+    setUrl(`/api/admin/bindings/qq?pageSize=50&q=${encodeURIComponent(q)}`);
+  }
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setSaved(null);
+    setFormError("");
+    try {
+      const body =
+        mode === "bungieName"
+          ? { qq, bungieName, notes }
+          : { qq, membershipType: Number(membershipType), membershipId, notes };
+      const result = await api<QqBindingRow>("/api/admin/bindings/qq", { method: "POST", body });
+      setSaved(result);
+      reload();
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "保存失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteBinding(binding: QqBindingRow) {
+    if (!window.confirm(`删除 QQ ${binding.qq} 的绑定？`)) return;
+    await api(`/api/admin/bindings/qq/${binding.qq}`, { method: "DELETE" });
+    reload();
+  }
+
+  async function copyMembership(binding: QqBindingRow) {
+    await navigator.clipboard.writeText(`${binding.membershipType}:${binding.membershipId}`).catch(() => undefined);
+  }
+
+  return (
+    <section className="stack">
+      <form className="panel binding-form" onSubmit={submit}>
+        <div className="form-row three">
+          <label>
+            QQ
+            <input value={qq} onChange={(event) => setQq(event.target.value)} placeholder="123456" />
+          </label>
+          <label>
+            绑定方式
+            <select value={mode} onChange={(event) => setMode(event.target.value as "bungieName" | "membership")}>
+              <option value="bungieName">BungieName</option>
+              <option value="membership">Membership</option>
+            </select>
+          </label>
+          <label>
+            备注
+            <input value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="可选" />
+          </label>
+        </div>
+        {mode === "bungieName" ? (
+          <label>
+            BungieName
+            <input value={bungieName} onChange={(event) => setBungieName(event.target.value)} placeholder="Name#1234" />
+          </label>
+        ) : (
+          <div className="form-row">
+            <label>
+              MembershipType
+              <input value={membershipType} onChange={(event) => setMembershipType(event.target.value)} />
+            </label>
+            <label>
+              MembershipId
+              <input value={membershipId} onChange={(event) => setMembershipId(event.target.value)} placeholder="461168..." />
+            </label>
+          </div>
+        )}
+        {formError && <div className="error">{formError}</div>}
+        {saved && <div className="success">{`已保存 ${saved.qq} -> ${saved.membershipType}:${saved.membershipId}`}</div>}
+        <div className="toolbar">
+          <button disabled={busy}>{busy ? "保存中" : "保存/覆盖绑定"}</button>
+        </div>
+      </form>
+      <form className="toolbar" onSubmit={search}>
+        <input placeholder="QQ、BungieName 或 membershipId" value={q} onChange={(event) => setQ(event.target.value)} />
+        <button>搜索</button>
+      </form>
+      {error && <ErrorBox message={error} onRetry={reload} />}
+      {!data ? (
+        <Loading />
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>QQ</th>
+              <th>玩家</th>
+              <th>Membership</th>
+              <th>备注</th>
+              <th>最近解析</th>
+              <th>更新</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.items.length === 0 ? (
+              <tr><td colSpan={7}>暂无 QQ 绑定</td></tr>
+            ) : data.items.map((binding) => (
+              <tr key={binding.qq}>
+                <td>{binding.qq}</td>
+                <td>{binding.bungieName ?? binding.displayName ?? "-"}</td>
+                <td>{`${binding.membershipType}:${binding.membershipId}`}</td>
+                <td>{binding.notes ?? "-"}</td>
+                <td>{binding.lastResolvedAt ? formatDate(binding.lastResolvedAt) : "-"}</td>
+                <td>{formatDate(binding.updatedAt)}</td>
+                <td className="actions">
+                  <button onClick={() => copyMembership(binding)}>复制ID</button>
+                  <button onClick={() => deleteBinding(binding)}>删除</button>
+                </td>
               </tr>
             ))}
           </tbody>

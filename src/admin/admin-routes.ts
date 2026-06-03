@@ -4,6 +4,7 @@ import type { CacheStore } from "../cache/cache.js";
 import type { Store } from "../db/store.js";
 import type { DestinyService } from "../destiny/destiny-service.js";
 import type { ManifestService } from "../destiny/manifest-service.js";
+import { parseQq } from "../bindings/qq.js";
 import { parseMembershipType, parseId } from "../destiny/validators.js";
 import { BadRequestError } from "../lib/errors.js";
 import { sha256Hex } from "../lib/hash.js";
@@ -124,6 +125,32 @@ export async function registerAdminRoutes(app: FastifyInstance, deps: AdminRoute
     const query = request.query as Query;
     const q = typeof query.q === "string" && query.q.length > 0 ? query.q : undefined;
     return ok(await deps.store.listPlayers(q, parsePageOptions(query)));
+  });
+
+  app.get("/api/admin/bindings/qq", async (request) => {
+    requireAdminSession(request, authConfig);
+    const query = request.query as Query;
+    const q = typeof query.q === "string" && query.q.length > 0 ? query.q : undefined;
+    return ok(await deps.store.listQqBindings(q, parsePageOptions(query)));
+  });
+
+  app.post("/api/admin/bindings/qq", async (request) => {
+    const session = requireAdminSession(request, authConfig);
+    const binding = await resolveAdminQqBindingInput(request.body, deps.destinyService);
+    const saved = await deps.store.upsertQqBinding(binding);
+    await audit(deps.store, request, session.username, "qq.bind.upsert", binding.qq, {
+      membershipType: binding.membershipType,
+      membershipId: binding.membershipId
+    });
+    return ok(saved);
+  });
+
+  app.delete("/api/admin/bindings/qq/:qq", async (request) => {
+    const session = requireAdminSession(request, authConfig);
+    const qq = parseQq((request.params as Params).qq);
+    const deleted = await deps.store.deleteQqBinding(qq);
+    await audit(deps.store, request, session.username, "qq.bind.delete", qq, { deleted });
+    return ok({ qq, deleted });
   });
 
   app.post("/api/admin/d2/query", async (request) => {
@@ -398,4 +425,48 @@ function parseResponseBody(body: string): unknown {
   } catch {
     return body;
   }
+}
+
+async function resolveAdminQqBindingInput(
+  body: unknown,
+  destinyService: DestinyService
+): Promise<{
+  qq: string;
+  membershipType: number;
+  membershipId: string;
+  bungieName?: string;
+  displayName?: string;
+  displayNameCode?: number;
+  notes?: string;
+}> {
+  if (!isRecord(body)) {
+    throw new BadRequestError("Request body must be an object");
+  }
+
+  const qq = parseQq(body.qq);
+  const notes = typeof body.notes === "string" && body.notes.trim().length > 0 ? body.notes.trim() : undefined;
+
+  if (typeof body.bungieName === "string" && body.bungieName.trim().length > 0) {
+    const player = await destinyService.searchPlayer(body.bungieName.trim());
+    return {
+      qq,
+      membershipType: player.membershipType,
+      membershipId: player.membershipId,
+      bungieName: player.bungieName,
+      displayName: player.displayName,
+      displayNameCode: player.displayNameCode,
+      notes
+    };
+  }
+
+  if (body.membershipType !== undefined && body.membershipId !== undefined) {
+    return {
+      qq,
+      membershipType: parseMembershipType(body.membershipType),
+      membershipId: parseId(body.membershipId, "membershipId"),
+      notes
+    };
+  }
+
+  throw new BadRequestError("Provide either bungieName or membershipType and membershipId");
 }

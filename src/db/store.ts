@@ -40,6 +40,23 @@ export interface QueryLogRow {
   createdAt: string;
 }
 
+export interface QqBindingRecord {
+  qq: string;
+  membershipType: number;
+  membershipId: string;
+  bungieName?: string;
+  displayName?: string;
+  displayNameCode?: number;
+  notes?: string;
+}
+
+export interface QqBindingRow extends QqBindingRecord {
+  id: number;
+  lastResolvedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AdminAuditLogRow {
   id: number;
   actor: string;
@@ -77,6 +94,12 @@ export interface Store {
   upsertPlayer(player: PlayerCacheRecord): Promise<void>;
   logQuery(route: string, cacheHit: boolean, ipHash?: string): Promise<void>;
   listPlayers(query: string | undefined, options: PageOptions): Promise<PaginatedResult<PlayerRow>>;
+  createQqBinding(binding: QqBindingRecord): Promise<QqBindingRow | null>;
+  upsertQqBinding(binding: QqBindingRecord): Promise<QqBindingRow>;
+  getQqBinding(qq: string): Promise<QqBindingRow | null>;
+  listQqBindings(query: string | undefined, options: PageOptions): Promise<PaginatedResult<QqBindingRow>>;
+  deleteQqBinding(qq: string): Promise<boolean>;
+  touchQqBinding(qq: string): Promise<void>;
   listQueryLogs(
     filters: { route?: string; cacheHit?: boolean },
     options: PageOptions
@@ -109,6 +132,7 @@ export class NullStore implements Store {
   private readonly definitions = new Map<string, unknown>();
   private readonly players: PlayerRow[] = [];
   private readonly queryLogs: QueryLogRow[] = [];
+  private readonly qqBindings: QqBindingRow[] = [];
   private readonly auditLogs: AdminAuditLogRow[] = [];
 
   async upsertPlayer(player: PlayerCacheRecord): Promise<void> {
@@ -145,6 +169,68 @@ export class NullStore implements Store {
       ? this.players.filter((player) => player.bungieName.toLowerCase().includes(normalized))
       : this.players;
     return paginate(rows, options);
+  }
+
+  async createQqBinding(binding: QqBindingRecord): Promise<QqBindingRow | null> {
+    if (this.qqBindings.some((row) => row.qq === binding.qq)) {
+      return null;
+    }
+    const row = this.makeQqBindingRow(binding);
+    this.qqBindings.push(row);
+    return row;
+  }
+
+  async upsertQqBinding(binding: QqBindingRecord): Promise<QqBindingRow> {
+    const existing = this.qqBindings.find((row) => row.qq === binding.qq);
+    const now = new Date().toISOString();
+    if (existing) {
+      Object.assign(existing, binding, {
+        bungieName: binding.bungieName,
+        displayName: binding.displayName,
+        displayNameCode: binding.displayNameCode,
+        notes: binding.notes,
+        updatedAt: now
+      });
+      return existing;
+    }
+    const row = this.makeQqBindingRow(binding);
+    this.qqBindings.push(row);
+    return row;
+  }
+
+  async getQqBinding(qq: string): Promise<QqBindingRow | null> {
+    return this.qqBindings.find((row) => row.qq === qq) ?? null;
+  }
+
+  async listQqBindings(query: string | undefined, options: PageOptions): Promise<PaginatedResult<QqBindingRow>> {
+    const normalized = query?.toLowerCase();
+    const rows = normalized
+      ? this.qqBindings.filter((binding) => {
+          return (
+            binding.qq.includes(normalized) ||
+            binding.membershipId.includes(normalized) ||
+            binding.bungieName?.toLowerCase().includes(normalized) ||
+            binding.displayName?.toLowerCase().includes(normalized)
+          );
+        })
+      : this.qqBindings;
+    return paginate([...rows].reverse(), options);
+  }
+
+  async deleteQqBinding(qq: string): Promise<boolean> {
+    const index = this.qqBindings.findIndex((row) => row.qq === qq);
+    if (index < 0) {
+      return false;
+    }
+    this.qqBindings.splice(index, 1);
+    return true;
+  }
+
+  async touchQqBinding(qq: string): Promise<void> {
+    const existing = this.qqBindings.find((row) => row.qq === qq);
+    if (existing) {
+      existing.lastResolvedAt = new Date().toISOString();
+    }
   }
 
   async listQueryLogs(
@@ -234,7 +320,18 @@ export class NullStore implements Store {
     this.definitions.clear();
     this.players.length = 0;
     this.queryLogs.length = 0;
+    this.qqBindings.length = 0;
     this.auditLogs.length = 0;
+  }
+
+  private makeQqBindingRow(binding: QqBindingRecord): QqBindingRow {
+    const now = new Date().toISOString();
+    return {
+      id: this.qqBindings.length + 1,
+      ...binding,
+      createdAt: now,
+      updatedAt: now
+    };
   }
 
   private key(locale: string, entityType: string, hashIdentifier: string): string {

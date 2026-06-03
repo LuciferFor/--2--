@@ -3,8 +3,9 @@ import type { CacheStore } from "../cache/cache.js";
 import type { CardService } from "../cards/card-service.js";
 import type { Store } from "../db/store.js";
 import type { DestinyService } from "../destiny/destiny-service.js";
+import { parseQq } from "../bindings/qq.js";
 import { parseCount, parseId, parseMembershipType, parsePage } from "../destiny/validators.js";
-import { BadRequestError } from "../lib/errors.js";
+import { BadRequestError, NotFoundError } from "../lib/errors.js";
 import { sha256Hex } from "../lib/hash.js";
 import { ok } from "../lib/response.js";
 
@@ -26,6 +27,29 @@ export async function registerD2Routes(app: FastifyInstance, deps: D2RouteDeps):
     const data = await deps.destinyService.searchPlayer(getRequiredQueryString(query, "bungieName"));
     await recordQuery(deps.store, request, false);
     return ok(data, { tookMs: Date.now() - started });
+  });
+
+  app.post("/api/d2/bindings/qq", async (request) => {
+    const started = Date.now();
+    const binding = await resolveBindingInput(request.body, deps.destinyService);
+    const created = await deps.store.createQqBinding(binding);
+    if (!created) {
+      throw new BadRequestError("qq is already bound");
+    }
+    await recordQuery(deps.store, request, false);
+    return ok(created, { tookMs: Date.now() - started });
+  });
+
+  app.get("/api/d2/bindings/qq/:qq", async (request) => {
+    const started = Date.now();
+    const qq = parseQq((request.params as Params).qq);
+    const binding = await deps.store.getQqBinding(qq);
+    if (!binding) {
+      throw new NotFoundError("qq binding was not found");
+    }
+    await deps.store.touchQqBinding(qq);
+    await recordQuery(deps.store, request, false);
+    return ok({ ...binding, lastResolvedAt: new Date().toISOString() }, { tookMs: Date.now() - started });
   });
 
   app.get("/api/d2/profile/:membershipType/:membershipId", async (request) => {
@@ -110,6 +134,54 @@ function getRequiredQueryString(query: Query, key: string): string {
     throw new BadRequestError(`${key} is required`);
   }
   return value.trim();
+}
+
+async function resolveBindingInput(
+  body: unknown,
+  destinyService: DestinyService
+): Promise<{
+  qq: string;
+  membershipType: number;
+  membershipId: string;
+  bungieName?: string;
+  displayName?: string;
+  displayNameCode?: number;
+  notes?: string;
+}> {
+  if (!isRecord(body)) {
+    throw new BadRequestError("Request body must be an object");
+  }
+
+  const qq = parseQq(body.qq);
+  const notes = typeof body.notes === "string" && body.notes.trim().length > 0 ? body.notes.trim() : undefined;
+
+  if (typeof body.bungieName === "string" && body.bungieName.trim().length > 0) {
+    const player = await destinyService.searchPlayer(body.bungieName.trim());
+    return {
+      qq,
+      membershipType: player.membershipType,
+      membershipId: player.membershipId,
+      bungieName: player.bungieName,
+      displayName: player.displayName,
+      displayNameCode: player.displayNameCode,
+      notes
+    };
+  }
+
+  if (body.membershipType !== undefined && body.membershipId !== undefined) {
+    return {
+      qq,
+      membershipType: parseMembershipType(body.membershipType),
+      membershipId: parseId(body.membershipId, "membershipId"),
+      notes
+    };
+  }
+
+  throw new BadRequestError("Provide either bungieName or membershipType and membershipId");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function sendCachedPng(

@@ -314,6 +314,95 @@ describe("admin routes", () => {
     expect(audit.json().data.items.map((row: { action: string }) => row.action)).toContain("admin.d2.query");
     await app.close();
   });
+
+  it("manages QQ bindings from admin APIs and writes audit logs", async () => {
+    const app = await buildApp({
+      config: adminConfig,
+      cache: new MemoryCacheStore(),
+      store: new NullStore(),
+      destinyService: fakeDestinyService as never,
+      manifestService: fakeManifestService as never
+    });
+
+    const unauthorized = await app.inject({ method: "GET", url: "/api/admin/bindings/qq" });
+    expect(unauthorized.statusCode).toBe(401);
+
+    const login = await app.inject({
+      method: "POST",
+      url: "/api/admin/auth/login",
+      payload: { username: "admin", password: "admin-password" }
+    });
+    const cookie = firstCookie(login.headers["set-cookie"]);
+
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/admin/bindings/qq",
+      headers: { cookie },
+      payload: { qq: "607972716", bungieName: "Guardian#0007", notes: "test user" }
+    });
+    expect(create.statusCode).toBe(200);
+    expect(create.json()).toMatchObject({
+      success: true,
+      data: {
+        qq: "607972716",
+        membershipType: 3,
+        membershipId: "4611686018",
+        notes: "test user"
+      }
+    });
+
+    const overwrite = await app.inject({
+      method: "POST",
+      url: "/api/admin/bindings/qq",
+      headers: { cookie },
+      payload: { qq: "607972716", membershipType: 3, membershipId: "4611686019" }
+    });
+    expect(overwrite.statusCode).toBe(200);
+    expect(overwrite.json()).toMatchObject({
+      success: true,
+      data: {
+        qq: "607972716",
+        membershipId: "4611686019"
+      }
+    });
+
+    const list = await app.inject({
+      method: "GET",
+      url: "/api/admin/bindings/qq?q=607&pageSize=10",
+      headers: { cookie }
+    });
+    expect(list.statusCode).toBe(200);
+    expect(list.json()).toMatchObject({
+      success: true,
+      data: {
+        total: 1,
+        items: [
+          {
+            qq: "607972716",
+            membershipId: "4611686019"
+          }
+        ]
+      }
+    });
+
+    const remove = await app.inject({
+      method: "DELETE",
+      url: "/api/admin/bindings/qq/607972716",
+      headers: { cookie }
+    });
+    expect(remove.statusCode).toBe(200);
+    expect(remove.json()).toMatchObject({ success: true, data: { qq: "607972716", deleted: true } });
+
+    const audit = await app.inject({
+      method: "GET",
+      url: "/api/admin/audit?pageSize=20",
+      headers: { cookie }
+    });
+    const actions = audit.json().data.items.map((row: { action: string }) => row.action);
+    expect(actions).toContain("qq.bind.upsert");
+    expect(actions).toContain("qq.bind.delete");
+    await app.close();
+  });
 });
 
 function firstCookie(value: string | string[] | undefined): string {
