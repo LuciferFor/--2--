@@ -6,7 +6,7 @@ type ApiEnvelope<T> =
   | { success: true; data: T; error: null; meta: Record<string, unknown> }
   | { success: false; data: null; error: { code: string; message: string }; meta: Record<string, unknown> };
 
-type Tab = "overview" | "metrics" | "queries" | "players" | "manifest" | "config" | "audit";
+type Tab = "overview" | "tester" | "metrics" | "queries" | "players" | "manifest" | "config" | "audit";
 
 interface Overview {
   service: { status: string; uptimeSeconds: number; nodeEnv: string };
@@ -60,14 +60,59 @@ interface AuditRow {
   createdAt: string;
 }
 
+interface QueryParam {
+  id: number;
+  key: string;
+  value: string;
+}
+
+interface QueryPreset {
+  label: string;
+  path: string;
+  query: Record<string, string>;
+}
+
+type AdminD2QueryResult =
+  | {
+      kind: "json";
+      method: string;
+      url: string;
+      statusCode: number;
+      contentType: string;
+      body: unknown;
+      tookMs: number;
+    }
+  | {
+      kind: "image";
+      method: string;
+      url: string;
+      statusCode: number;
+      contentType: string;
+      bytes: number;
+      base64: string;
+      tookMs: number;
+    };
+
 const tabs: Array<{ id: Tab; label: string }> = [
   { id: "overview", label: "总览" },
+  { id: "tester", label: "接口测试" },
   { id: "metrics", label: "指标" },
   { id: "queries", label: "查询日志" },
   { id: "players", label: "玩家缓存" },
   { id: "manifest", label: "Manifest" },
   { id: "config", label: "配置" },
   { id: "audit", label: "审计" }
+];
+
+const queryPresets: QueryPreset[] = [
+  { label: "搜索玩家", path: "/api/d2/search", query: { bungieName: "Guardian#0007" } },
+  { label: "账号 Profile", path: "/api/d2/profile/3/4611686018", query: {} },
+  { label: "总览战绩", path: "/api/d2/summary/3/4611686018", query: { mode: "all" } },
+  { label: "最近活动", path: "/api/d2/activities/3/4611686018", query: { mode: "raid", count: "10", page: "0" } },
+  { label: "PGCR 单局", path: "/api/d2/pgcr/123", query: {} },
+  { label: "武器统计", path: "/api/d2/weapons/3/4611686018", query: {} },
+  { label: "总览卡片", path: "/api/d2/cards/summary.png", query: { bungieName: "Guardian#0007", mode: "raid" } },
+  { label: "单局卡片", path: "/api/d2/cards/activity.png", query: { activityId: "123" } }
 ];
 
 function App() {
@@ -148,6 +193,7 @@ function Dashboard({ username, onLogout }: { username: string; onLogout: () => v
         ))}
       </nav>
       {tab === "overview" && <OverviewPanel />}
+      {tab === "tester" && <TesterPanel />}
       {tab === "metrics" && <MetricsPanel />}
       {tab === "queries" && <QueriesPanel />}
       {tab === "players" && <PlayersPanel />}
@@ -155,6 +201,119 @@ function Dashboard({ username, onLogout }: { username: string; onLogout: () => v
       {tab === "config" && <ConfigPanel />}
       {tab === "audit" && <AuditPanel />}
     </Shell>
+  );
+}
+
+function TesterPanel() {
+  const [path, setPath] = useState(queryPresets[0].path);
+  const [params, setParams] = useState<QueryParam[]>(queryToRows(queryPresets[0].query));
+  const [result, setResult] = useState<AdminD2QueryResult | null>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  function applyPreset(indexText: string) {
+    const preset = queryPresets[Number(indexText)];
+    if (!preset) return;
+    setPath(preset.path);
+    setParams(queryToRows(preset.query));
+    setResult(null);
+    setError("");
+  }
+
+  function updateParam(id: number, field: "key" | "value", value: string) {
+    setParams((items) => items.map((item) => (item.id === id ? { ...item, [field]: value } : item)));
+  }
+
+  function removeParam(id: number) {
+    setParams((items) => (items.length > 1 ? items.filter((item) => item.id !== id) : [{ id: Date.now(), key: "", value: "" }]));
+  }
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setLoading(true);
+    setError("");
+    setResult(null);
+    try {
+      setResult(
+        await api<AdminD2QueryResult>("/api/admin/d2/query", {
+          method: "POST",
+          body: {
+            method: "GET",
+            path,
+            query: rowsToQuery(params)
+          }
+        })
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "请求失败");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <section className="stack">
+      <form className="panel tester" onSubmit={submit}>
+        <div className="form-row">
+          <label>
+            预设
+            <select onChange={(event) => applyPreset(event.target.value)} defaultValue="0">
+              {queryPresets.map((preset, index) => (
+                <option key={preset.label} value={index}>{preset.label}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            方法
+            <input value="GET" disabled />
+          </label>
+        </div>
+        <label>
+          路径
+          <input value={path} onChange={(event) => setPath(event.target.value)} />
+        </label>
+        <div className="query-editor">
+          <div className="query-editor-head">
+            <span>Query 参数</span>
+            <button type="button" onClick={() => setParams((items) => [...items, { id: Date.now(), key: "", value: "" }])}>添加参数</button>
+          </div>
+          {params.map((param) => (
+            <div className="query-row" key={param.id}>
+              <input placeholder="key" value={param.key} onChange={(event) => updateParam(param.id, "key", event.target.value)} />
+              <input placeholder="value" value={param.value} onChange={(event) => updateParam(param.id, "value", event.target.value)} />
+              <button type="button" onClick={() => removeParam(param.id)}>删除</button>
+            </div>
+          ))}
+        </div>
+        {error && <div className="error">{error}</div>}
+        <div className="toolbar">
+          <button disabled={loading}>{loading ? "请求中" : "发送请求"}</button>
+        </div>
+      </form>
+      {result && <QueryResultPanel result={result} />}
+    </section>
+  );
+}
+
+function QueryResultPanel({ result }: { result: AdminD2QueryResult }) {
+  return (
+    <div className="panel result-panel">
+      <div className="result-meta">
+        <span>{result.method}</span>
+        <span>{result.statusCode}</span>
+        <span>{result.tookMs}ms</span>
+        <span>{result.contentType || "-"}</span>
+      </div>
+      <div className="result-url">{result.url}</div>
+      {result.kind === "image" ? (
+        <div className="image-result">
+          <img src={`data:${result.contentType};base64,${result.base64}`} alt="接口图片结果" />
+          <div>{result.bytes} bytes</div>
+        </div>
+      ) : (
+        <pre>{JSON.stringify(result.body, null, 2)}</pre>
+      )}
+    </div>
   );
 }
 
@@ -411,6 +570,19 @@ function formatUptime(seconds: number) {
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
   return `${hours}h ${minutes}m`;
+}
+
+function queryToRows(query: Record<string, string>): QueryParam[] {
+  const rows = Object.entries(query).map(([key, value], index) => ({ id: Date.now() + index, key, value }));
+  return rows.length > 0 ? rows : [{ id: Date.now(), key: "", value: "" }];
+}
+
+function rowsToQuery(rows: QueryParam[]): Record<string, string> {
+  return Object.fromEntries(
+    rows
+      .map((row) => [row.key.trim(), row.value] as const)
+      .filter(([key]) => key.length > 0)
+  );
 }
 
 createRoot(document.getElementById("root")!).render(<App />);

@@ -126,6 +126,48 @@ export async function registerAdminRoutes(app: FastifyInstance, deps: AdminRoute
     return ok(await deps.store.listPlayers(q, parsePageOptions(query)));
   });
 
+  app.post("/api/admin/d2/query", async (request) => {
+    const session = requireAdminSession(request, authConfig);
+    const parsed = parseAdminD2Query(request.body);
+    const started = Date.now();
+    const response = await app.inject({
+      method: parsed.method,
+      url: parsed.url
+    });
+    const tookMs = Date.now() - started;
+    const contentType = headerValue(response.headers["content-type"]);
+    const isImage = contentType.toLowerCase().startsWith("image/png");
+
+    await audit(deps.store, request, session.username, "admin.d2.query", parsed.url, {
+      statusCode: response.statusCode,
+      contentType,
+      tookMs
+    });
+
+    if (isImage) {
+      return ok({
+        kind: "image",
+        method: parsed.method,
+        url: parsed.url,
+        statusCode: response.statusCode,
+        contentType,
+        bytes: response.rawPayload.length,
+        base64: response.rawPayload.toString("base64"),
+        tookMs
+      });
+    }
+
+    return ok({
+      kind: "json",
+      method: parsed.method,
+      url: parsed.url,
+      statusCode: response.statusCode,
+      contentType,
+      body: parseResponseBody(response.body),
+      tookMs
+    });
+  });
+
   app.post("/api/admin/players/:membershipType/:membershipId/refresh", async (request) => {
     const session = requireAdminSession(request, authConfig);
     const { membershipType, membershipId } = parseMembershipParams(request.params as Params);
@@ -263,4 +305,97 @@ async function audit(
     details,
     ipHash: sha256Hex(request.ip)
   });
+}
+
+function parseAdminD2Query(body: unknown): { method: "GET"; path: string; url: string } {
+  if (!isRecord(body)) {
+    throw new BadRequestError("Request body must be an object");
+  }
+
+  const method = typeof body.method === "string" ? body.method.toUpperCase() : "GET";
+  if (method !== "GET") {
+    throw new BadRequestError("Only GET is supported");
+  }
+
+  const path = typeof body.path === "string" ? body.path.trim() : "";
+  if (path.length === 0) {
+    throw new BadRequestError("path is required");
+  }
+  if (path.includes("://") || path.startsWith("//")) {
+    throw new BadRequestError("Full URLs are not allowed");
+  }
+  if (path.includes("?")) {
+    throw new BadRequestError("Put query parameters in the query object");
+  }
+  if (!isAllowedD2Path(path)) {
+    throw new BadRequestError("Path is not allowed");
+  }
+
+  const queryString = serializeQuery(body.query);
+  return {
+    method: "GET",
+    path,
+    url: queryString.length > 0 ? `${path}?${queryString}` : path
+  };
+}
+
+function isAllowedD2Path(path: string): boolean {
+  return [
+    /^\/api\/d2\/search$/,
+    /^\/api\/d2\/profile\/[^/?#]+\/[^/?#]+$/,
+    /^\/api\/d2\/summary\/[^/?#]+\/[^/?#]+$/,
+    /^\/api\/d2\/activities\/[^/?#]+\/[^/?#]+$/,
+    /^\/api\/d2\/pgcr\/[^/?#]+$/,
+    /^\/api\/d2\/weapons\/[^/?#]+\/[^/?#]+$/,
+    /^\/api\/d2\/cards\/summary\.png$/,
+    /^\/api\/d2\/cards\/activity\.png$/
+  ].some((pattern) => pattern.test(path));
+}
+
+function serializeQuery(value: unknown): string {
+  if (value === undefined || value === null) {
+    return "";
+  }
+  if (!isRecord(value)) {
+    throw new BadRequestError("query must be an object");
+  }
+
+  const search = new URLSearchParams();
+  for (const [key, entry] of Object.entries(value)) {
+    if (entry === undefined || entry === null) {
+      continue;
+    }
+    if (Array.isArray(entry)) {
+      for (const item of entry) {
+        appendQueryValue(search, key, item);
+      }
+      continue;
+    }
+    appendQueryValue(search, key, entry);
+  }
+  return search.toString();
+}
+
+function appendQueryValue(search: URLSearchParams, key: string, value: unknown): void {
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    search.append(key, String(value));
+    return;
+  }
+  throw new BadRequestError("query values must be strings, numbers, booleans, or arrays of those values");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function headerValue(value: string | string[] | undefined): string {
+  return Array.isArray(value) ? value.join(", ") : value ?? "";
+}
+
+function parseResponseBody(body: string): unknown {
+  try {
+    return JSON.parse(body);
+  } catch {
+    return body;
+  }
 }
