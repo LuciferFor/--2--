@@ -5,6 +5,7 @@ import { AppError } from "../lib/errors.js";
 
 const COOKIE_NAME = "d2_admin_session";
 const HASH_PREFIX = "scrypt";
+const HASH_SEPARATOR = ":";
 
 export interface AdminSession {
   username: string;
@@ -37,11 +38,12 @@ export function hashPassword(password: string): string {
   }
   const salt = randomBytes(16);
   const hash = scryptSync(password, salt, 64);
-  return `${HASH_PREFIX}$${salt.toString("base64url")}$${hash.toString("base64url")}`;
+  return [HASH_PREFIX, salt.toString("base64url"), hash.toString("base64url")].join(HASH_SEPARATOR);
 }
 
 export function verifyPassword(password: string, encodedHash: string): boolean {
-  const [prefix, saltText, hashText] = encodedHash.split("$");
+  const separator = encodedHash.includes("$") ? "$" : HASH_SEPARATOR;
+  const [prefix, saltText, hashText] = encodedHash.split(separator);
   if (prefix !== HASH_PREFIX || !saltText || !hashText) {
     return false;
   }

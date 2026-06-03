@@ -16,6 +16,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "migrate": "tsx scripts/migrate.ts",
+    "migrate:prod": "node dist/scripts/migrate.js",
     "admin:hash": "tsx scripts/admin-hash.ts"
   },
   "dependencies": {

@@ -19,15 +19,21 @@ describe("admin auth", () => {
   it("hashes and verifies admin passwords", () => {
     const hash = hashPassword("correct horse battery staple");
 
-    expect(hash).toMatch(/^scrypt\$/);
+    expect(hash).toMatch(/^scrypt:/);
     expect(verifyPassword("correct horse battery staple", hash)).toBe(true);
     expect(verifyPassword("wrong password", hash)).toBe(false);
   });
 
+  it("still verifies legacy dollar-delimited hashes", () => {
+    const legacyHash = hashPassword("correct horse battery staple").replaceAll(":", "$");
+
+    expect(verifyPassword("correct horse battery staple", legacyHash)).toBe(true);
+  });
+
   it("requires a password hash and long session secret before enabling admin", () => {
-    expect(isAdminEnabled({ ...authConfig, passwordHash: "scrypt$salt$hash" })).toBe(true);
+    expect(isAdminEnabled({ ...authConfig, passwordHash: "scrypt:salt:hash" })).toBe(true);
     expect(isAdminEnabled({ ...authConfig, passwordHash: "" })).toBe(false);
-    expect(isAdminEnabled({ ...authConfig, passwordHash: "scrypt$salt$hash", sessionSecret: "short" })).toBe(false);
+    expect(isAdminEnabled({ ...authConfig, passwordHash: "scrypt:salt:hash", sessionSecret: "short" })).toBe(false);
   });
 
   it("creates signed sessions and rejects expired or tampered cookies", () => {

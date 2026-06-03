@@ -16,7 +16,7 @@ cd /opt/destiny2-public-stats/app
 sudo docker compose -p destiny2-public-stats ps
 sudo docker compose -p destiny2-public-stats logs -f app
 sudo docker compose -p destiny2-public-stats --env-file .env up -d --build app
-sudo docker compose -p destiny2-public-stats --env-file .env run --rm app npm run migrate
+sudo docker compose -p destiny2-public-stats --env-file .env run --rm app npm run migrate:prod
 ```
 
 ## 配置
@@ -49,7 +49,7 @@ sudo docker compose -p destiny2-public-stats --env-file .env up -d --build app
 
 ```env
 ADMIN_USERNAME=admin
-ADMIN_PASSWORD_HASH=scrypt$...
+ADMIN_PASSWORD_HASH=scrypt:...
 ADMIN_SESSION_SECRET=generated-secret
 ```
 
@@ -57,5 +57,5 @@ ADMIN_SESSION_SECRET=generated-secret
 
 ```bash
 cd /opt/destiny2-public-stats/app
-sudo docker compose -p destiny2-public-stats --env-file .env run --rm app npm run migrate
+sudo docker compose -p destiny2-public-stats --env-file .env run --rm app npm run migrate:prod
 ```

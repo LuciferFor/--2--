@@ -40,7 +40,7 @@ npm run admin:hash -- "your-password"
 
 ```env
 ADMIN_USERNAME=admin
-ADMIN_PASSWORD_HASH=scrypt$...
+ADMIN_PASSWORD_HASH=scrypt:...
 ADMIN_SESSION_SECRET=replace-with-a-long-random-session-secret
 ```
 
