@@ -74,6 +74,32 @@ const fakeManifestService = {
   }
 };
 
+const fakeBungieClient = {
+  async rawRequest(method: string, path: string, options: { query?: unknown; body?: unknown; headers?: Record<string, string> }) {
+    return {
+      url: `https://example.test/Platform${path}`,
+      statusCode: method === "POST" ? 202 : 200,
+      statusText: method === "POST" ? "Accepted" : "OK",
+      contentType: "application/json; charset=utf-8",
+      headers: { "content-type": "application/json; charset=utf-8" },
+      body: {
+        Response: {
+          method,
+          path,
+          query: options.query,
+          body: options.body,
+          authorization: options.headers?.Authorization ? "present" : "none"
+        },
+        ErrorCode: 1,
+        ErrorStatus: "Success",
+        Message: "Ok",
+        ThrottleSeconds: 0
+      },
+      text: ""
+    };
+  }
+};
+
 describe("admin routes", () => {
   it("returns 503 when admin is not configured", async () => {
     const app = await buildApp({
@@ -312,6 +338,100 @@ describe("admin routes", () => {
       headers: { cookie }
     });
     expect(audit.json().data.items.map((row: { action: string }) => row.action)).toContain("admin.d2.query");
+    await app.close();
+  });
+
+  it("proxies full Bungie Platform requests from admin APIs and writes audit logs", async () => {
+    const app = await buildApp({
+      config: adminConfig,
+      cache: new MemoryCacheStore(),
+      store: new NullStore(),
+      bungieClient: fakeBungieClient as never,
+      destinyService: fakeDestinyService as never,
+      manifestService: fakeManifestService as never
+    });
+
+    const unauthorized = await app.inject({
+      method: "POST",
+      url: "/api/admin/bungie/query",
+      payload: { method: "GET", path: "/Destiny2/Manifest/" }
+    });
+    expect(unauthorized.statusCode).toBe(401);
+
+    const login = await app.inject({
+      method: "POST",
+      url: "/api/admin/auth/login",
+      payload: { username: "admin", password: "admin-password" }
+    });
+    const cookie = firstCookie(login.headers["set-cookie"]);
+
+    const invalid = await app.inject({
+      method: "POST",
+      url: "/api/admin/bungie/query",
+      headers: { cookie },
+      payload: { method: "GET", path: "https://www.bungie.net/Platform/Destiny2/Manifest/" }
+    });
+    expect(invalid.statusCode).toBe(400);
+
+    const getResponse = await app.inject({
+      method: "POST",
+      url: "/api/admin/bungie/query",
+      headers: { cookie },
+      payload: {
+        method: "GET",
+        path: "/Platform/Destiny2/Manifest/",
+        query: { lc: "zh-chs" }
+      }
+    });
+    expect(getResponse.statusCode).toBe(200);
+    expect(getResponse.json()).toMatchObject({
+      success: true,
+      data: {
+        kind: "bungie",
+        method: "GET",
+        path: "/Destiny2/Manifest/",
+        statusCode: 200,
+        body: {
+          Response: {
+            path: "/Destiny2/Manifest/",
+            query: { lc: "zh-chs" }
+          }
+        }
+      }
+    });
+
+    const postResponse = await app.inject({
+      method: "POST",
+      url: "/api/admin/bungie/query",
+      headers: { cookie },
+      payload: {
+        method: "POST",
+        path: "/Destiny2/SearchDestinyPlayerByBungieName/-1/",
+        body: { displayName: "Guardian", displayNameCode: 7 },
+        oauthAccessToken: "test-oauth-token"
+      }
+    });
+    expect(postResponse.statusCode).toBe(200);
+    expect(postResponse.json()).toMatchObject({
+      success: true,
+      data: {
+        method: "POST",
+        statusCode: 202,
+        body: {
+          Response: {
+            body: { displayName: "Guardian", displayNameCode: 7 },
+            authorization: "present"
+          }
+        }
+      }
+    });
+
+    const audit = await app.inject({
+      method: "GET",
+      url: "/api/admin/audit?pageSize=20",
+      headers: { cookie }
+    });
+    expect(audit.json().data.items.map((row: { action: string }) => row.action)).toContain("admin.bungie.query");
     await app.close();
   });
 

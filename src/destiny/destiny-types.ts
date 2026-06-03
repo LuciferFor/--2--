@@ -95,3 +95,59 @@ export interface WeaponsSummary {
   weapons: WeaponUsageSummary[];
   updatedAt: string;
 }
+
+export interface RaidOverviewFlawlessStatus {
+  status: "confirmed" | "not_found_in_scanned_pgcr" | "unknown";
+  personal: boolean;
+  fireteam: boolean;
+  activityId?: string;
+  period?: string;
+}
+
+export interface RaidOverviewDayOneStatus {
+  status: "confirmed" | "not_found_in_scanned_pgcr" | "unknown";
+  releaseAt?: string;
+  windowHours?: number;
+  activityId?: string;
+  period?: string;
+}
+
+export interface RaidOverviewActivity {
+  name: string;
+  activityHashes: number[];
+  pgcrImage?: string;
+  clears: number;
+  completions: number;
+  wins: number;
+  kills: number;
+  deaths: number;
+  secondsPlayed: number;
+  fastestCompletionMs?: number;
+  fastestCompletionDisplay?: string;
+  fastestActivityId?: string;
+  lastClearedAt?: string;
+  lastActivityId?: string;
+  flawless: RaidOverviewFlawlessStatus;
+  dayOne: RaidOverviewDayOneStatus;
+}
+
+export interface RaidOverview {
+  membershipType: number;
+  membershipId: string;
+  totals: {
+    raids: number;
+    clears: number;
+    kills: number;
+    deaths: number;
+    secondsPlayed: number;
+  };
+  raids: RaidOverviewActivity[];
+  scan: {
+    historyPages: number;
+    pgcrLimit: number;
+    recentActivitiesScanned: number;
+    pgcrScanned: number;
+    note: string;
+  };
+  updatedAt: string;
+}

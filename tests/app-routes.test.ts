@@ -47,7 +47,51 @@ const fakeDestinyService = {
     };
   },
   async getActivities() {
-    return [];
+    return [
+      {
+        period: "2026-06-03T00:00:00.000Z",
+        activityId: "123",
+        activityName: "Activity",
+        values: {}
+      }
+    ];
+  },
+  async getRaidOverview() {
+    return {
+      membershipType: 3,
+      membershipId: "4611686018",
+      totals: {
+        raids: 1,
+        clears: 3,
+        kills: 100,
+        deaths: 10,
+        secondsPlayed: 3600
+      },
+      raids: [
+        {
+          name: "Last Wish",
+          activityHashes: [1],
+          clears: 3,
+          completions: 3,
+          wins: 3,
+          kills: 100,
+          deaths: 10,
+          secondsPlayed: 3600,
+          fastestCompletionMs: 1800000,
+          fastestCompletionDisplay: "30:00.000",
+          flawless: { status: "unknown", personal: false, fireteam: false },
+          dayOne: { status: "unknown", releaseAt: "2018-09-14T17:00:00.000Z", windowHours: 24 }
+        }
+      ],
+      scan: {
+        historyPages: 1,
+        pgcrLimit: 40,
+        recentActivitiesScanned: 0,
+        pgcrScanned: 0,
+        note: "test"
+      },
+      updatedAt: "2026-06-03T00:00:00.000Z"
+    };
   },
   async getPgcr() {
     return {
@@ -71,8 +115,41 @@ const fakeCardService = {
   async renderSummaryCard() {
     return Buffer.from("fake-png");
   },
+  async renderProfileCard() {
+    return Buffer.from("fake-profile-png");
+  },
+  async renderWeaponsCard() {
+    return Buffer.from("fake-weapons-png");
+  },
+  async renderRaidOverviewCard() {
+    return Buffer.from("fake-raids-png");
+  },
   async renderActivityCard() {
     return Buffer.from("fake-png");
+  }
+};
+
+const fakeBungieClient = {
+  async rawRequest(method: string, path: string, options: { query?: unknown }) {
+    return {
+      url: `https://example.test/Platform${path}`,
+      statusCode: 200,
+      statusText: "OK",
+      contentType: "application/json; charset=utf-8",
+      headers: { "content-type": "application/json; charset=utf-8" },
+      body: {
+        Response: {
+          method,
+          path,
+          query: options.query
+        },
+        ErrorCode: 1,
+        ErrorStatus: "Success",
+        Message: "Ok",
+        ThrottleSeconds: 0
+      },
+      text: ""
+    };
   }
 };
 
@@ -209,6 +286,36 @@ describe("Fastify routes", () => {
     await app.close();
   });
 
+  it("returns deep raid overview", async () => {
+    const app = await buildApp({
+      config: makeTestConfig(),
+      cache: new MemoryCacheStore(),
+      store: new NullStore(),
+      destinyService: fakeDestinyService as never,
+      cardService: fakeCardService as never
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/d2/raids/3/4611686018?historyPages=1&pgcrLimit=10"
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      success: true,
+      data: {
+        totals: { clears: 3 },
+        raids: [
+          {
+            name: "Last Wish",
+            clears: 3,
+            fastestCompletionDisplay: "30:00.000"
+          }
+        ]
+      }
+    });
+    await app.close();
+  });
+
   it("returns image/png for card routes", async () => {
     const app = await buildApp({
       config: makeTestConfig(),
@@ -225,6 +332,123 @@ describe("Fastify routes", () => {
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("image/png");
     expect(response.body).toBe("fake-png");
+    await app.close();
+  });
+
+  it("returns card PNGs for QQ, membership, profile, weapons, and latest activity targets", async () => {
+    const store = new NullStore();
+    await store.createQqBinding({
+      qq: "607972716",
+      membershipType: 3,
+      membershipId: "4611686018",
+      bungieName: "Guardian#0007",
+      displayName: "Guardian",
+      displayNameCode: 7
+    });
+    const app = await buildApp({
+      config: makeTestConfig(),
+      cache: new MemoryCacheStore(),
+      store,
+      destinyService: fakeDestinyService as never,
+      cardService: fakeCardService as never
+    });
+
+    const summaryByQq = await app.inject({
+      method: "GET",
+      url: "/api/d2/cards/summary.png?qq=607972716&mode=raid"
+    });
+    const summaryByMembership = await app.inject({
+      method: "GET",
+      url: "/api/d2/cards/summary.png?membershipType=3&membershipId=4611686018"
+    });
+    const profile = await app.inject({
+      method: "GET",
+      url: "/api/d2/cards/profile.png?qq=607972716"
+    });
+    const weapons = await app.inject({
+      method: "GET",
+      url: "/api/d2/cards/weapons.png?membershipType=3&membershipId=4611686018"
+    });
+    const raids = await app.inject({
+      method: "GET",
+      url: "/api/d2/cards/raids.png?membershipType=3&membershipId=4611686018"
+    });
+    const latest = await app.inject({
+      method: "GET",
+      url: "/api/d2/cards/latest-activity.png?qq=607972716&mode=raid"
+    });
+
+    expect(summaryByQq.statusCode).toBe(200);
+    expect(summaryByMembership.statusCode).toBe(200);
+    expect(profile.statusCode).toBe(200);
+    expect(profile.body).toBe("fake-profile-png");
+    expect(weapons.statusCode).toBe(200);
+    expect(weapons.body).toBe("fake-weapons-png");
+    expect(raids.statusCode).toBe(200);
+    expect(raids.body).toBe("fake-raids-png");
+    expect(latest.statusCode).toBe(200);
+    expect(latest.body).toBe("fake-png");
+    await app.close();
+  });
+
+  it("returns 404 JSON when a card query uses an unbound QQ", async () => {
+    const app = await buildApp({
+      config: makeTestConfig(),
+      cache: new MemoryCacheStore(),
+      store: new NullStore(),
+      destinyService: fakeDestinyService as never,
+      cardService: fakeCardService as never
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/d2/cards/summary.png?qq=999999"
+    });
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toMatchObject({
+      success: false,
+      error: {
+        code: "NOT_FOUND"
+      }
+    });
+    await app.close();
+  });
+
+  it("proxies public read-only Bungie Platform GET requests", async () => {
+    const app = await buildApp({
+      config: makeTestConfig(),
+      cache: new MemoryCacheStore(),
+      store: new NullStore(),
+      bungieClient: fakeBungieClient as never,
+      destinyService: fakeDestinyService as never,
+      cardService: fakeCardService as never
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/bungie/Destiny2/Manifest/?lc=zh-chs"
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      success: true,
+      data: {
+        method: "GET",
+        path: "/Destiny2/Manifest/",
+        statusCode: 200,
+        body: {
+          Response: {
+            path: "/Destiny2/Manifest/",
+            query: { lc: "zh-chs" }
+          }
+        }
+      }
+    });
+
+    const invalid = await app.inject({
+      method: "GET",
+      url: "/api/bungie/https%3A%2F%2Fevil.test"
+    });
+    expect(invalid.statusCode).toBe(400);
     await app.close();
   });
 });

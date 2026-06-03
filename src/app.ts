@@ -19,6 +19,7 @@ import { DestinyService } from "./destiny/destiny-service.js";
 import { ManifestService } from "./destiny/manifest-service.js";
 import { toAppError } from "./lib/errors.js";
 import { fail } from "./lib/response.js";
+import { registerBungieProxyRoutes } from "./routes/bungie-proxy-routes.js";
 import { registerD2Routes } from "./routes/d2-routes.js";
 import { registerHealthRoutes } from "./routes/health.js";
 
@@ -83,6 +84,7 @@ export async function buildApp(overrides: AppDeps = {}): Promise<FastifyInstance
     config,
     cache,
     store,
+    bungieClient,
     destinyService,
     manifestService,
     startedAt
@@ -94,6 +96,10 @@ export async function buildApp(overrides: AppDeps = {}): Promise<FastifyInstance
     cache,
     store,
     cardCacheTtlSeconds: config.CARD_CACHE_TTL_SECONDS
+  });
+  await registerBungieProxyRoutes(app, {
+    bungieClient,
+    store
   });
 
   return app;

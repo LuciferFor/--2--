@@ -2,7 +2,7 @@ FROM node:22-bookworm-slim AS base
 WORKDIR /app
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends fontconfig fonts-noto-cjk ca-certificates \
+  && apt-get install -y --no-install-recommends fontconfig fonts-noto-cjk ca-certificates chromium \
   && rm -rf /var/lib/apt/lists/*
 
 FROM base AS deps
@@ -18,9 +18,11 @@ RUN npm run build
 
 FROM base AS runtime
 ENV NODE_ENV=production
+ENV CARD_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 COPY package.json package-lock.json* ./
 RUN npm install --omit=dev
 COPY --from=build /app/dist ./dist
+COPY src/cards/assets ./dist/src/cards/assets
 COPY migrations ./migrations
 EXPOSE 3000
 CMD ["node", "dist/src/index.js"]

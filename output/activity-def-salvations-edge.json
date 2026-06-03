@@ -1,0 +1,207 @@
+﻿{
+    "displayProperties":  {
+                              "description":  "Free the Light.",
+                              "name":  "Salvation\u0027s Edge",
+                              "icon":  "/common/destiny2_content/icons/bd7a1fc995f87be96698263bc16698e7.png",
+                              "iconHash":  0,
+                              "hasIcon":  true
+                          },
+    "originalDisplayProperties":  {
+                                      "description":  "Free the Light.",
+                                      "name":  "Salvation\u0027s Edge",
+                                      "icon":  "/img/misc/missing_icon_d2.png",
+                                      "iconHash":  0,
+                                      "hasIcon":  false
+                                  },
+    "releaseIcon":  "/img/misc/missing_icon_d2.png",
+    "releaseTime":  0,
+    "completionUnlockHash":  0,
+    "activityLightLevel":  1990,
+    "destinationHash":  3998251206,
+    "placeHash":  3998251206,
+    "activityTypeHash":  2043403989,
+    "tier":  0,
+    "pgcrImage":  "/img/destiny_content/pgcr/raid_splinter.jpg",
+    "rewards":  [
+
+                ],
+    "modifiers":  [
+                      {
+                          "activityModifierHash":  1009404927
+                      },
+                      {
+                          "activityModifierHash":  3621023005
+                      },
+                      {
+                          "activityModifierHash":  1204802854
+                      },
+                      {
+                          "activityModifierHash":  1553052482
+                      },
+                      {
+                          "activityModifierHash":  2821522136
+                      },
+                      {
+                          "activityModifierHash":  1315424373
+                      },
+                      {
+                          "activityModifierHash":  3076996298
+                      },
+                      {
+                          "activityModifierHash":  1783825372
+                      },
+                      {
+                          "activityModifierHash":  1806775150
+                      }
+                  ],
+    "isPlaylist":  false,
+    "challenges":  [
+
+                   ],
+    "optionalUnlockStrings":  [
+
+                              ],
+    "inheritFromFreeRoam":  false,
+    "activityFamilyHashes":  [
+                                 2970303077,
+                                 755208650,
+                                 2175789180
+                             ],
+    "traitHashes":  [
+                        621715997,
+                        3396834334,
+                        597957208,
+                        299829906
+                    ],
+    "suppressOtherRewards":  false,
+    "requirements":  {
+                         "leaderRequirementLabels":  [
+                                                         {
+                                                             "displayString":  "Requires The Final Shape Campaign Progress"
+                                                         },
+                                                         {
+                                                             "displayString":  ""
+                                                         },
+                                                         {
+                                                             "displayString":  "Requires Destiny 2: The Final Shape"
+                                                         },
+                                                         {
+                                                             "displayString":  ""
+                                                         },
+                                                         {
+                                                             "displayString":  ""
+                                                         },
+                                                         {
+                                                             "displayString":  "PlayStation®Plus Required"
+                                                         },
+                                                         {
+                                                             "displayString":  "Xbox Live Gold Required"
+                                                         }
+                                                     ],
+                         "fireteamRequirementLabels":  [
+                                                           {
+                                                               "displayString":  "Requires Destiny 2: The Final Shape"
+                                                           },
+                                                           {
+                                                               "displayString":  ""
+                                                           },
+                                                           {
+                                                               "displayString":  ""
+                                                           },
+                                                           {
+                                                               "displayString":  "PlayStation®Plus Required"
+                                                           },
+                                                           {
+                                                               "displayString":  "Xbox Live Gold Required"
+                                                           },
+                                                           {
+                                                               "displayString":  "Complete step 5 of the \"A Spark of Hope\" quest."
+                                                           }
+                                                       ]
+                     },
+    "selectableSkullCollectionHashes":  [
+
+                                        ],
+    "selectableSkullCollections":  [
+
+                                   ],
+    "playlistItems":  [
+
+                      ],
+    "activityGraphList":  [
+                              {
+                                  "activityGraphHash":  3510444975
+                              }
+                          ],
+    "matchmaking":  {
+                        "isMatchmade":  false,
+                        "minParty":  1,
+                        "maxParty":  6,
+                        "maxPlayers":  6,
+                        "requiresGuardianOath":  false
+                    },
+    "directActivityModeHash":  2043403989,
+    "directActivityModeType":  4,
+    "activityModeHashes":  [
+                               2043403989,
+                               1164760493
+                           ],
+    "activityModeTypes":  [
+                              4,
+                              7
+                          ],
+    "isPvP":  false,
+    "insertionPoints":  [
+                            {
+                                "phaseHash":  3430465913,
+                                "unlockHash":  0
+                            },
+                            {
+                                "phaseHash":  2761002327,
+                                "unlockHash":  0
+                            },
+                            {
+                                "phaseHash":  1121168154,
+                                "unlockHash":  0
+                            },
+                            {
+                                "phaseHash":  193978048,
+                                "unlockHash":  0
+                            },
+                            {
+                                "phaseHash":  2924464570,
+                                "unlockHash":  0
+                            },
+                            {
+                                "phaseHash":  1727550020,
+                                "unlockHash":  0
+                            },
+                            {
+                                "phaseHash":  2900607060,
+                                "unlockHash":  0
+                            },
+                            {
+                                "phaseHash":  637313410,
+                                "unlockHash":  0
+                            },
+                            {
+                                "phaseHash":  3896025901,
+                                "unlockHash":  0
+                            },
+                            {
+                                "phaseHash":  4077323831,
+                                "unlockHash":  0
+                            }
+                        ],
+    "activityLocationMappings":  [
+
+                                 ],
+    "curatorBlockDefinition":  {
+                                   "quickplaySortPriority":  0,
+                                   "quickplaySortToFront":  false
+                               },
+    "hash":  2192826039,
+    "index":  314,
+    "redacted":  false,
+    "blacklisted":  false
+}

@@ -1,0 +1,58 @@
+{
+  "id": "d2stats",
+  "name": "Destiny 2 Stats",
+  "description": "Query Destiny 2 public JSON data, render HTML cards inside OpenClaw, and return PNG images.",
+  "version": "0.1.0",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "destiny2_card_query",
+      "destiny2_bind_qq"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": true
+      },
+      "baseUrl": {
+        "type": "string",
+        "default": "http://192.168.31.11:3011"
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 1000,
+        "maximum": 60000,
+        "default": 10000
+      },
+      "defaultCard": {
+        "type": "string",
+        "enum": ["summary", "profile", "weapons", "raid_overview", "latest_activity", "activity"],
+        "default": "summary"
+      },
+      "defaultMode": {
+        "type": "string",
+        "enum": ["all", "raid", "dungeon", "trials", "pvp", "gambit"],
+        "default": "all"
+      },
+      "defaultMembershipType": {
+        "type": "integer",
+        "default": 3
+      },
+      "logging": {
+        "type": "boolean",
+        "default": true
+      }
+    }
+  },
+  "uiHints": {
+    "baseUrl": {
+      "label": "Destiny 2 backend URL"
+    }
+  }
+}

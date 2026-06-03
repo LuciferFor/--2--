@@ -15,11 +15,23 @@ export interface BungieEnvelope<T> {
 export interface BungieRequestOptions {
   query?: Record<string, string | number | boolean | Array<string | number> | undefined>;
   body?: unknown;
+  headers?: Record<string, string | undefined>;
   retries?: number;
   timeoutMs?: number;
 }
 
 export type FetchLike = typeof fetch;
+export type BungieHttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+
+export interface BungieRawResponse {
+  url: string;
+  statusCode: number;
+  statusText: string;
+  contentType: string;
+  headers: Record<string, string>;
+  body: unknown;
+  text: string;
+}
 
 export class BungieClient {
   private readonly baseUrl: string;
@@ -41,6 +53,37 @@ export class BungieClient {
   }
 
   async request<T>(method: "GET" | "POST", path: string, options: BungieRequestOptions = {}): Promise<T> {
+    const raw = await this.rawRequest(method, path, options);
+    const payload = raw.body as BungieEnvelope<T> | null;
+
+    if (raw.statusCode < 200 || raw.statusCode >= 300) {
+      throw new UpstreamError("Bungie API HTTP error", {
+        status: raw.statusCode,
+        body: payload ?? raw.text
+      });
+    }
+
+    if (!payload || typeof payload.ErrorCode !== "number") {
+      throw new UpstreamError("Unexpected Bungie API response", payload);
+    }
+
+    if (payload.ErrorCode !== 1) {
+      throw new BungiePlatformError(
+        payload.Message || payload.ErrorStatus || "Bungie API returned an error",
+        payload.ErrorCode,
+        payload.ErrorStatus,
+        payload
+      );
+    }
+
+    return payload.Response;
+  }
+
+  async rawRequest(
+    method: BungieHttpMethod,
+    path: string,
+    options: BungieRequestOptions = {}
+  ): Promise<BungieRawResponse> {
     const retries = options.retries ?? 2;
     const timeoutMs = options.timeoutMs ?? 15000;
     const url = this.buildUrl(path, options.query);
@@ -56,40 +99,30 @@ export class BungieClient {
           headers: {
             "X-API-Key": this.apiKey,
             Accept: "application/json",
-            ...(options.body === undefined ? {} : { "Content-Type": "application/json" })
+            ...(options.body === undefined ? {} : { "Content-Type": "application/json" }),
+            ...this.cleanHeaders(options.headers)
           },
           body: options.body === undefined ? undefined : JSON.stringify(options.body)
         });
 
         const text = await response.text();
-        const payload = text.length > 0 ? (JSON.parse(text) as BungieEnvelope<T>) : null;
 
         if (!response.ok) {
           if (attempt < retries && (response.status === 429 || response.status >= 500)) {
             await this.backoff(attempt, response.headers.get("retry-after"));
             continue;
           }
-
-          throw new UpstreamError("Bungie API HTTP error", {
-            status: response.status,
-            body: payload ?? text
-          });
         }
 
-        if (!payload || typeof payload.ErrorCode !== "number") {
-          throw new UpstreamError("Unexpected Bungie API response", payload);
-        }
-
-        if (payload.ErrorCode !== 1) {
-          throw new BungiePlatformError(
-            payload.Message || payload.ErrorStatus || "Bungie API returned an error",
-            payload.ErrorCode,
-            payload.ErrorStatus,
-            payload
-          );
-        }
-
-        return payload.Response;
+        return {
+          url,
+          statusCode: response.status,
+          statusText: response.statusText,
+          contentType: response.headers.get("content-type") ?? "",
+          headers: this.responseHeaders(response.headers),
+          body: parseBody(text),
+          text
+        };
       } catch (error) {
         if (attempt < retries && this.shouldRetry(error)) {
           await this.backoff(attempt);
@@ -132,5 +165,37 @@ export class BungieClient {
 
   private shouldRetry(error: unknown): boolean {
     return error instanceof UpstreamError || (error instanceof Error && error.name === "AbortError");
+  }
+
+  private cleanHeaders(headers: BungieRequestOptions["headers"]): Record<string, string> {
+    const cleaned: Record<string, string> = {};
+    for (const [key, value] of Object.entries(headers ?? {})) {
+      if (typeof value === "string" && value.length > 0) {
+        cleaned[key] = value;
+      }
+    }
+    return cleaned;
+  }
+
+  private responseHeaders(headers: Headers): Record<string, string> {
+    const result: Record<string, string> = {};
+    for (const key of ["content-type", "retry-after", "cache-control"]) {
+      const value = headers.get(key);
+      if (value) {
+        result[key] = value;
+      }
+    }
+    return result;
+  }
+}
+
+function parseBody(text: string): unknown {
+  if (text.length === 0) {
+    return null;
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
   }
 }

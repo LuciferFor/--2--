@@ -76,12 +76,18 @@ button:disabled {
 }
 
 input,
-select {
+select,
+textarea {
   border: 1px solid #bec8d2;
   border-radius: 6px;
   font: inherit;
   min-height: 36px;
   padding: 8px 10px;
+}
+
+textarea {
+  min-height: 150px;
+  resize: vertical;
 }
 
 .login {

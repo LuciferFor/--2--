@@ -10,6 +10,7 @@ export const CACHE_TTL = {
   summary: 30 * 60,
   activities: 5 * 60,
   pgcr: 30 * 24 * 60 * 60,
+  raidOverview: 30 * 60,
   weapons: 30 * 60,
   manifestDefinition: 30 * 24 * 60 * 60
 } as const;

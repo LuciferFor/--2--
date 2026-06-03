@@ -50,11 +50,55 @@ ADMIN_SESSION_SECRET=replace-with-a-long-random-session-secret
 - `GET /api/d2/search?bungieName=Name%231234`
 - `GET /api/d2/profile/:membershipType/:membershipId`
 - `GET /api/d2/summary/:membershipType/:membershipId?mode=all|raid|dungeon|trials|pvp|gambit`
+- `GET /api/d2/raids/:membershipType/:membershipId?historyPages=1&pgcrLimit=20`
 - `GET /api/d2/activities/:membershipType/:membershipId?mode=raid&count=10&page=0`
 - `GET /api/d2/pgcr/:activityId`
 - `GET /api/d2/weapons/:membershipType/:membershipId`
 - `GET /api/d2/cards/summary.png?bungieName=Name%231234&mode=raid`
+- `GET /api/d2/cards/summary.png?qq=607972716&mode=raid`
+- `GET /api/d2/cards/summary.png?membershipType=3&membershipId=461168...&mode=raid`
+- `GET /api/d2/cards/profile.png?qq=607972716`
+- `GET /api/d2/cards/weapons.png?membershipType=3&membershipId=461168...`
+- `GET /api/d2/cards/latest-activity.png?qq=607972716&mode=raid`
 - `GET /api/d2/cards/activity.png?activityId=...`
+- `GET /api/bungie/:platformPath*`：公开只读 Bungie Platform 代理，例如 `/api/bungie/Destiny2/Manifest/`
+
+## Bungie 全量接口代理
+
+后台提供两种 Bungie Platform 通用代理：
+
+- 公开只读：`GET /api/bungie/Destiny2/Manifest/`
+- 管理员完整代理：`POST /api/admin/bungie/query`
+
+公开代理只支持 `GET`，会自动带服务端 `BUNGIE_API_KEY`，适合查询 Bungie 官方所有公开 GET 接口。路径是 `https://www.bungie.net/Platform` 后面的相对路径。
+
+管理员完整代理需要先登录后台，支持 `GET/POST/PUT/PATCH/DELETE`、query、body 和可选 OAuth access token：
+
+```json
+{
+  "method": "POST",
+  "path": "/Destiny2/SearchDestinyPlayerByBungieName/-1/",
+  "body": {
+    "displayName": "Guardian",
+    "displayNameCode": 7
+  }
+}
+```
+
+如果接口需要 OAuth，可传：
+
+```json
+{
+  "method": "GET",
+  "path": "/Destiny2/3/Profile/461168.../",
+  "query": {
+    "components": "100,102,200,201"
+  },
+  "oauthAccessToken": "..."
+}
+```
+
+注意：没有 OAuth 时，Bungie 官方要求授权的私密接口仍会返回 Bungie 错误；本项目不会绕过 Bungie 权限限制。
 
 JSON 响应统一为：
 
@@ -66,6 +110,8 @@ JSON 响应统一为：
   "meta": {}
 }
 ```
+
+`/api/d2/summary?mode=raid` 是 Bungie raid 模式累计统计；`/api/d2/raids/...` 才是突袭总览，会按每个 raid 返回 clears、最快通关、击杀/死亡/时长、最近通关，以及从扫描到的 PGCR 中确认 flawless/day one。`historyPages` 和 `pgcrLimit` 越大越接近完整历史，但请求更慢。
 
 ## 测试
 

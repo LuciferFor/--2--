@@ -3,6 +3,7 @@ import type { CacheStore } from "../cache/cache.js";
 import type { CardService } from "../cards/card-service.js";
 import type { Store } from "../db/store.js";
 import type { DestinyService } from "../destiny/destiny-service.js";
+import type { PlayerSearchResult } from "../destiny/destiny-types.js";
 import { parseQq } from "../bindings/qq.js";
 import { parseCount, parseId, parseMembershipType, parsePage } from "../destiny/validators.js";
 import { BadRequestError, NotFoundError } from "../lib/errors.js";
@@ -19,6 +20,12 @@ export interface D2RouteDeps {
 
 type Query = Record<string, unknown>;
 type Params = Record<string, unknown>;
+type CardTarget = {
+  membershipType: number;
+  membershipId: string;
+  player: PlayerSearchResult;
+  cacheKey: string;
+};
 
 export async function registerD2Routes(app: FastifyInstance, deps: D2RouteDeps): Promise<void> {
   app.get("/api/d2/search", async (request) => {
@@ -69,6 +76,18 @@ export async function registerD2Routes(app: FastifyInstance, deps: D2RouteDeps):
     return ok(data, { tookMs: Date.now() - started });
   });
 
+  app.get("/api/d2/raids/:membershipType/:membershipId", async (request) => {
+    const started = Date.now();
+    const { membershipType, membershipId } = parseMembershipParams(request.params as Params);
+    const query = request.query as Query;
+    const data = await deps.destinyService.getRaidOverview(membershipType, membershipId, {
+      historyPages: parseBoundedInteger(query.historyPages, "historyPages", 1, 10, 1),
+      pgcrLimit: parseBoundedInteger(query.pgcrLimit, "pgcrLimit", 0, 200, 20)
+    });
+    await recordQuery(deps.store, request, false);
+    return ok(data, { tookMs: Date.now() - started });
+  });
+
   app.get("/api/d2/activities/:membershipType/:membershipId", async (request) => {
     const started = Date.now();
     const { membershipType, membershipId } = parseMembershipParams(request.params as Params);
@@ -98,14 +117,68 @@ export async function registerD2Routes(app: FastifyInstance, deps: D2RouteDeps):
 
   app.get("/api/d2/cards/summary.png", async (request, reply) => {
     const query = request.query as Query;
-    const bungieName = getRequiredQueryString(query, "bungieName");
+    const target = await resolveCardTarget(query, deps);
     const mode = typeof query.mode === "string" ? query.mode : "all";
-    const cacheKey = `d2:card:summary:${bungieName.toLowerCase()}:${mode}`;
+    const cacheKey = `d2:card:summary:${target.cacheKey}:${mode}`;
 
     await sendCachedPng(request, reply, deps, cacheKey, async () => {
-      const player = await deps.destinyService.searchPlayer(bungieName);
-      const summary = await deps.destinyService.getSummary(player.membershipType, player.membershipId, mode);
-      return deps.cardService.renderSummaryCard(player, summary);
+      const summary = await deps.destinyService.getSummary(target.membershipType, target.membershipId, mode);
+      return deps.cardService.renderSummaryCard(target.player, summary);
+    });
+  });
+
+  app.get("/api/d2/cards/profile.png", async (request, reply) => {
+    const query = request.query as Query;
+    const target = await resolveCardTarget(query, deps);
+    const cacheKey = `d2:card:profile:${target.cacheKey}`;
+
+    await sendCachedPng(request, reply, deps, cacheKey, async () => {
+      const profile = await deps.destinyService.getProfile(target.membershipType, target.membershipId);
+      return deps.cardService.renderProfileCard(target.player, profile);
+    });
+  });
+
+  app.get("/api/d2/cards/weapons.png", async (request, reply) => {
+    const query = request.query as Query;
+    const target = await resolveCardTarget(query, deps);
+    const cacheKey = `d2:card:weapons:${target.cacheKey}`;
+
+    await sendCachedPng(request, reply, deps, cacheKey, async () => {
+      const weapons = await deps.destinyService.getWeapons(target.membershipType, target.membershipId);
+      return deps.cardService.renderWeaponsCard(target.player, weapons);
+    });
+  });
+
+  app.get("/api/d2/cards/raids.png", async (request, reply) => {
+    const query = request.query as Query;
+    const target = await resolveCardTarget(query, deps);
+    const historyPages = parseBoundedInteger(query.historyPages, "historyPages", 1, 10, 1);
+    const pgcrLimit = parseBoundedInteger(query.pgcrLimit, "pgcrLimit", 0, 200, 20);
+    const cacheKey = `d2:card:raids:${target.cacheKey}:${historyPages}:${pgcrLimit}`;
+
+    await sendCachedPng(request, reply, deps, cacheKey, async () => {
+      const overview = await deps.destinyService.getRaidOverview(target.membershipType, target.membershipId, {
+        historyPages,
+        pgcrLimit
+      });
+      return deps.cardService.renderRaidOverviewCard(target.player, overview);
+    });
+  });
+
+  app.get("/api/d2/cards/latest-activity.png", async (request, reply) => {
+    const query = request.query as Query;
+    const target = await resolveCardTarget(query, deps);
+    const mode = typeof query.mode === "string" ? query.mode : "all";
+    const cacheKey = `d2:card:latest-activity:${target.cacheKey}:${mode}`;
+
+    await sendCachedPng(request, reply, deps, cacheKey, async () => {
+      const activities = await deps.destinyService.getActivities(target.membershipType, target.membershipId, mode, 1, 0);
+      const activity = activities[0];
+      if (!activity) {
+        throw new NotFoundError("No recent activity was found");
+      }
+      const pgcr = await deps.destinyService.getPgcr(activity.activityId);
+      return deps.cardService.renderActivityCard(pgcr);
     });
   });
 
@@ -121,6 +194,91 @@ export async function registerD2Routes(app: FastifyInstance, deps: D2RouteDeps):
   });
 }
 
+async function resolveCardTarget(query: Query, deps: D2RouteDeps): Promise<CardTarget> {
+  if (query.qq !== undefined) {
+    const qq = parseQq(query.qq);
+    const binding = await deps.store.getQqBinding(qq);
+    if (!binding) {
+      throw new NotFoundError("qq binding was not found");
+    }
+    await deps.store.touchQqBinding(qq);
+    return {
+      membershipType: binding.membershipType,
+      membershipId: binding.membershipId,
+      player: playerFromBinding(binding),
+      cacheKey: `qq:${qq}:${binding.membershipType}:${binding.membershipId}`
+    };
+  }
+
+  if (query.bungieName !== undefined) {
+    const bungieName = getRequiredQueryString(query, "bungieName");
+    const player = await deps.destinyService.searchPlayer(bungieName);
+    return {
+      membershipType: player.membershipType,
+      membershipId: player.membershipId,
+      player,
+      cacheKey: `bungie:${player.bungieName.toLowerCase()}`
+    };
+  }
+
+  if (query.membershipType !== undefined || query.membershipId !== undefined) {
+    const membershipType = parseMembershipType(query.membershipType);
+    const membershipId = parseId(query.membershipId, "membershipId");
+    return {
+      membershipType,
+      membershipId,
+      player: fallbackPlayer(membershipType, membershipId),
+      cacheKey: `membership:${membershipType}:${membershipId}`
+    };
+  }
+
+  throw new BadRequestError("Provide qq, bungieName, or membershipType and membershipId");
+}
+
+function playerFromBinding(binding: {
+  membershipType: number;
+  membershipId: string;
+  bungieName?: string;
+  displayName?: string;
+  displayNameCode?: number;
+}): PlayerSearchResult {
+  const parsed = parseBoundBungieName(binding.bungieName);
+  const displayName = binding.displayName ?? parsed.displayName ?? `ID ${binding.membershipId.slice(-8)}`;
+  const displayNameCode = binding.displayNameCode ?? parsed.displayNameCode ?? 0;
+  return {
+    bungieName: binding.bungieName ?? displayName,
+    displayName,
+    displayNameCode,
+    membershipType: binding.membershipType,
+    membershipId: binding.membershipId
+  };
+}
+
+function fallbackPlayer(membershipType: number, membershipId: string): PlayerSearchResult {
+  const displayName = `ID ${membershipId.slice(-8)}`;
+  return {
+    bungieName: displayName,
+    displayName,
+    displayNameCode: 0,
+    membershipType,
+    membershipId
+  };
+}
+
+function parseBoundBungieName(value: string | undefined): { displayName?: string; displayNameCode?: number } {
+  if (!value) {
+    return {};
+  }
+  const match = /^(.+)#([0-9]{1,4})$/u.exec(value.trim());
+  if (!match) {
+    return { displayName: value.trim() };
+  }
+  return {
+    displayName: match[1],
+    displayNameCode: Number(match[2])
+  };
+}
+
 function parseMembershipParams(params: Params): { membershipType: number; membershipId: string } {
   return {
     membershipType: parseMembershipType(params.membershipType),
@@ -134,6 +292,23 @@ function getRequiredQueryString(query: Query, key: string): string {
     throw new BadRequestError(`${key} is required`);
   }
   return value.trim();
+}
+
+function parseBoundedInteger(
+  value: unknown,
+  name: string,
+  min: number,
+  max: number,
+  defaultValue: number
+): number {
+  if (value === undefined) {
+    return defaultValue;
+  }
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < min || number > max) {
+    throw new BadRequestError(`${name} must be an integer between ${min} and ${max}`);
+  }
+  return number;
 }
 
 async function resolveBindingInput(

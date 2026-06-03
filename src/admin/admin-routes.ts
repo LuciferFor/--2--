@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { AppConfig } from "../config.js";
 import type { CacheStore } from "../cache/cache.js";
 import type { Store } from "../db/store.js";
+import type { BungieClient, BungieHttpMethod } from "../destiny/bungie-client.js";
 import type { DestinyService } from "../destiny/destiny-service.js";
 import type { ManifestService } from "../destiny/manifest-service.js";
 import { parseQq } from "../bindings/qq.js";
@@ -9,6 +10,7 @@ import { parseMembershipType, parseId } from "../destiny/validators.js";
 import { BadRequestError } from "../lib/errors.js";
 import { sha256Hex } from "../lib/hash.js";
 import { ok } from "../lib/response.js";
+import { normalizePlatformPath, parseQuery as parseBungieProxyQuery } from "../routes/bungie-proxy-routes.js";
 import {
   clearSessionCookie,
   createSessionCookie,
@@ -24,6 +26,7 @@ export interface AdminRouteDeps {
   config: AppConfig;
   cache: CacheStore;
   store: Store;
+  bungieClient: BungieClient;
   destinyService: DestinyService;
   manifestService: ManifestService;
   startedAt: number;
@@ -191,6 +194,38 @@ export async function registerAdminRoutes(app: FastifyInstance, deps: AdminRoute
       statusCode: response.statusCode,
       contentType,
       body: parseResponseBody(response.body),
+      tookMs
+    });
+  });
+
+  app.post("/api/admin/bungie/query", async (request) => {
+    const session = requireAdminSession(request, authConfig);
+    const parsed = parseAdminBungieProxyRequest(request.body);
+    const started = Date.now();
+    const response = await deps.bungieClient.rawRequest(parsed.method, parsed.path, {
+      query: parsed.query,
+      body: parsed.body,
+      headers: parsed.headers
+    });
+    const tookMs = Date.now() - started;
+
+    await audit(deps.store, request, session.username, "admin.bungie.query", `${parsed.method} ${parsed.path}`, {
+      statusCode: response.statusCode,
+      contentType: response.contentType,
+      tookMs,
+      hasBody: parsed.body !== undefined,
+      usesOAuth: parsed.usesOAuth
+    });
+
+    return ok({
+      kind: "bungie",
+      method: parsed.method,
+      path: parsed.path,
+      statusCode: response.statusCode,
+      statusText: response.statusText,
+      contentType: response.contentType,
+      headers: response.headers,
+      body: response.body,
       tookMs
     });
   });
@@ -366,15 +401,58 @@ function parseAdminD2Query(body: unknown): { method: "GET"; path: string; url: s
   };
 }
 
+function parseAdminBungieProxyRequest(body: unknown): {
+  method: BungieHttpMethod;
+  path: string;
+  query: Record<string, string | number | boolean | Array<string | number>>;
+  body?: unknown;
+  headers?: Record<string, string>;
+  usesOAuth: boolean;
+} {
+  if (!isRecord(body)) {
+    throw new BadRequestError("Request body must be an object");
+  }
+
+  const method = parseBungieProxyMethod(body.method);
+  const path = normalizePlatformPath(body.path);
+  const requestBody = body.body;
+  if ((method === "GET" || method === "DELETE") && requestBody !== undefined) {
+    throw new BadRequestError(`${method} requests must not include body`);
+  }
+
+  const oauthAccessToken = typeof body.oauthAccessToken === "string" ? body.oauthAccessToken.trim() : "";
+  return {
+    method,
+    path,
+    query: parseBungieProxyQuery(body.query),
+    body: requestBody,
+    headers: oauthAccessToken.length > 0 ? { Authorization: `Bearer ${oauthAccessToken}` } : undefined,
+    usesOAuth: oauthAccessToken.length > 0
+  };
+}
+
+function parseBungieProxyMethod(value: unknown): BungieHttpMethod {
+  const method = typeof value === "string" ? value.toUpperCase() : "GET";
+  if (["GET", "POST", "PUT", "PATCH", "DELETE"].includes(method)) {
+    return method as BungieHttpMethod;
+  }
+  throw new BadRequestError("Unsupported Bungie API method");
+}
+
 function isAllowedD2Path(path: string): boolean {
   return [
     /^\/api\/d2\/search$/,
     /^\/api\/d2\/profile\/[^/?#]+\/[^/?#]+$/,
     /^\/api\/d2\/summary\/[^/?#]+\/[^/?#]+$/,
+    /^\/api\/d2\/raids\/[^/?#]+\/[^/?#]+$/,
     /^\/api\/d2\/activities\/[^/?#]+\/[^/?#]+$/,
     /^\/api\/d2\/pgcr\/[^/?#]+$/,
     /^\/api\/d2\/weapons\/[^/?#]+\/[^/?#]+$/,
     /^\/api\/d2\/cards\/summary\.png$/,
+    /^\/api\/d2\/cards\/profile\.png$/,
+    /^\/api\/d2\/cards\/weapons\.png$/,
+    /^\/api\/d2\/cards\/raids\.png$/,
+    /^\/api\/d2\/cards\/latest-activity\.png$/,
     /^\/api\/d2\/cards\/activity\.png$/
   ].some((pattern) => pattern.test(path));
 }

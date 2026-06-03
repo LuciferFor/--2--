@@ -21,6 +21,8 @@ export interface ManifestResponse {
 }
 
 export class ManifestService {
+  private readonly definitionMaps = new Map<string, Promise<Record<string, DestinyDefinition>>>();
+
   constructor(
     private readonly client: BungieClient,
     private readonly store: Store,
@@ -95,6 +97,20 @@ export class ManifestService {
     return typeof icon === "string" && icon.length > 0 ? icon : null;
   }
 
+  async getDefinitionMap<T extends DestinyDefinition = DestinyDefinition>(
+    entityType: string
+  ): Promise<Record<string, T>> {
+    const cacheKey = `${this.config.MANIFEST_LOCALE}:${entityType}`;
+    const existing = this.definitionMaps.get(cacheKey) as Promise<Record<string, T>> | undefined;
+    if (existing) {
+      return existing;
+    }
+
+    const promise = this.downloadDefinitionMap<T>(entityType);
+    this.definitionMaps.set(cacheKey, promise);
+    return promise;
+  }
+
   private async preloadCommonDefinitions(paths: Record<string, string>): Promise<void> {
     for (const entityType of COMMON_MANIFEST_ENTITY_TYPES) {
       const path = paths[entityType];
@@ -120,5 +136,32 @@ export class ManifestService {
     for (const [hashIdentifier, definition] of Object.entries(definitions)) {
       await this.store.upsertManifestDefinition(this.config.MANIFEST_LOCALE, entityType, hashIdentifier, definition);
     }
+  }
+
+  private async downloadDefinitionMap<T extends DestinyDefinition>(entityType: string): Promise<Record<string, T>> {
+    let manifest = await this.store.getManifestVersion(this.config.MANIFEST_LOCALE);
+    if (!manifest) {
+      await this.refresh();
+      manifest = await this.store.getManifestVersion(this.config.MANIFEST_LOCALE);
+    }
+
+    const path = asString(asRecord(manifest?.jsonWorldComponentContentPaths)[entityType]);
+    if (!path) {
+      throw new UpstreamError("Manifest definition map is not available", {
+        locale: this.config.MANIFEST_LOCALE,
+        entityType
+      });
+    }
+
+    const url = new URL(path, BUNGIE_ROOT);
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new UpstreamError("Failed to download manifest definition map", {
+        entityType,
+        status: response.status
+      });
+    }
+
+    return (await response.json()) as Record<string, T>;
   }
 }

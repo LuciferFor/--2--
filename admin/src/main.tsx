@@ -6,7 +6,17 @@ type ApiEnvelope<T> =
   | { success: true; data: T; error: null; meta: Record<string, unknown> }
   | { success: false; data: null; error: { code: string; message: string }; meta: Record<string, unknown> };
 
-type Tab = "overview" | "tester" | "metrics" | "queries" | "players" | "qqBindings" | "manifest" | "config" | "audit";
+type Tab =
+  | "overview"
+  | "tester"
+  | "bungieTester"
+  | "metrics"
+  | "queries"
+  | "players"
+  | "qqBindings"
+  | "manifest"
+  | "config"
+  | "audit";
 
 interface Overview {
   service: { status: string; uptimeSeconds: number; nodeEnv: string };
@@ -85,6 +95,14 @@ interface QueryPreset {
   query: Record<string, string>;
 }
 
+interface BungiePreset {
+  label: string;
+  method: "GET" | "POST";
+  path: string;
+  query: Record<string, string>;
+  body: string;
+}
+
 type AdminD2QueryResult =
   | {
       kind: "json";
@@ -106,9 +124,22 @@ type AdminD2QueryResult =
       tookMs: number;
     };
 
+interface AdminBungieQueryResult {
+  kind: "bungie";
+  method: string;
+  path: string;
+  statusCode: number;
+  statusText: string;
+  contentType: string;
+  headers: Record<string, string>;
+  body: unknown;
+  tookMs: number;
+}
+
 const tabs: Array<{ id: Tab; label: string }> = [
   { id: "overview", label: "总览" },
   { id: "tester", label: "接口测试" },
+  { id: "bungieTester", label: "Bungie API" },
   { id: "metrics", label: "指标" },
   { id: "queries", label: "查询日志" },
   { id: "players", label: "玩家缓存" },
@@ -122,11 +153,56 @@ const queryPresets: QueryPreset[] = [
   { label: "搜索玩家", path: "/api/d2/search", query: { bungieName: "Guardian#0007" } },
   { label: "账号 Profile", path: "/api/d2/profile/3/4611686018", query: {} },
   { label: "总览战绩", path: "/api/d2/summary/3/4611686018", query: { mode: "all" } },
+  { label: "突袭总览", path: "/api/d2/raids/3/4611686018", query: { historyPages: "1", pgcrLimit: "20" } },
   { label: "最近活动", path: "/api/d2/activities/3/4611686018", query: { mode: "raid", count: "10", page: "0" } },
   { label: "PGCR 单局", path: "/api/d2/pgcr/123", query: {} },
   { label: "武器统计", path: "/api/d2/weapons/3/4611686018", query: {} },
   { label: "总览卡片", path: "/api/d2/cards/summary.png", query: { bungieName: "Guardian#0007", mode: "raid" } },
+  { label: "Profile 卡片", path: "/api/d2/cards/profile.png", query: { bungieName: "Guardian#0007" } },
+  { label: "武器卡片", path: "/api/d2/cards/weapons.png", query: { bungieName: "Guardian#0007" } },
+  { label: "突袭总览卡片", path: "/api/d2/cards/raids.png", query: { bungieName: "Guardian#0007", historyPages: "1", pgcrLimit: "20" } },
+  { label: "最近活动卡片", path: "/api/d2/cards/latest-activity.png", query: { bungieName: "Guardian#0007", mode: "raid" } },
   { label: "单局卡片", path: "/api/d2/cards/activity.png", query: { activityId: "123" } }
+];
+
+const bungiePresets: BungiePreset[] = [
+  { label: "Manifest", method: "GET", path: "/Destiny2/Manifest/", query: {}, body: "" },
+  { label: "历史统计定义", method: "GET", path: "/Destiny2/Stats/Definition/", query: {}, body: "" },
+  {
+    label: "搜索玩家",
+    method: "POST",
+    path: "/Destiny2/SearchDestinyPlayerByBungieName/-1/",
+    query: {},
+    body: JSON.stringify({ displayName: "Guardian", displayNameCode: 7 }, null, 2)
+  },
+  {
+    label: "Profile",
+    method: "GET",
+    path: "/Destiny2/3/Profile/4611686018/",
+    query: { components: "100,200" },
+    body: ""
+  },
+  {
+    label: "角色活动",
+    method: "GET",
+    path: "/Destiny2/3/Account/4611686018/Character/2305843009/Stats/Activities/",
+    query: { count: "10", page: "0" },
+    body: ""
+  },
+  {
+    label: "PGCR",
+    method: "GET",
+    path: "/Destiny2/Stats/PostGameCarnageReport/123/",
+    query: {},
+    body: ""
+  },
+  {
+    label: "里程碑",
+    method: "GET",
+    path: "/Destiny2/Milestones/",
+    query: {},
+    body: ""
+  }
 ];
 
 function App() {
@@ -208,6 +284,7 @@ function Dashboard({ username, onLogout }: { username: string; onLogout: () => v
       </nav>
       {tab === "overview" && <OverviewPanel />}
       {tab === "tester" && <TesterPanel />}
+      {tab === "bungieTester" && <BungieTesterPanel />}
       {tab === "metrics" && <MetricsPanel />}
       {tab === "queries" && <QueriesPanel />}
       {tab === "players" && <PlayersPanel />}
@@ -328,6 +405,146 @@ function QueryResultPanel({ result }: { result: AdminD2QueryResult }) {
       ) : (
         <pre>{JSON.stringify(result.body, null, 2)}</pre>
       )}
+    </div>
+  );
+}
+
+function BungieTesterPanel() {
+  const [method, setMethod] = useState<"GET" | "POST" | "PUT" | "PATCH" | "DELETE">(bungiePresets[0].method);
+  const [path, setPath] = useState(bungiePresets[0].path);
+  const [params, setParams] = useState<QueryParam[]>(queryToRows(bungiePresets[0].query));
+  const [body, setBody] = useState(bungiePresets[0].body);
+  const [oauthAccessToken, setOauthAccessToken] = useState("");
+  const [result, setResult] = useState<AdminBungieQueryResult | null>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  function applyPreset(indexText: string) {
+    const preset = bungiePresets[Number(indexText)];
+    if (!preset) return;
+    setMethod(preset.method);
+    setPath(preset.path);
+    setParams(queryToRows(preset.query));
+    setBody(preset.body);
+    setResult(null);
+    setError("");
+  }
+
+  function updateParam(id: number, field: "key" | "value", value: string) {
+    setParams((items) => items.map((item) => (item.id === id ? { ...item, [field]: value } : item)));
+  }
+
+  function removeParam(id: number) {
+    setParams((items) => (items.length > 1 ? items.filter((item) => item.id !== id) : [{ id: Date.now(), key: "", value: "" }]));
+  }
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setLoading(true);
+    setError("");
+    setResult(null);
+    try {
+      const trimmedBody = body.trim();
+      const requestBody =
+        method === "GET" || method === "DELETE" || trimmedBody.length === 0 ? undefined : JSON.parse(trimmedBody);
+      setResult(
+        await api<AdminBungieQueryResult>("/api/admin/bungie/query", {
+          method: "POST",
+          body: {
+            method,
+            path,
+            query: rowsToQuery(params),
+            ...(requestBody === undefined ? {} : { body: requestBody }),
+            ...(oauthAccessToken.trim().length === 0 ? {} : { oauthAccessToken: oauthAccessToken.trim() })
+          }
+        })
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "请求失败");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <section className="stack">
+      <form className="panel tester" onSubmit={submit}>
+        <div className="form-row">
+          <label>
+            预设
+            <select onChange={(event) => applyPreset(event.target.value)} defaultValue="0">
+              {bungiePresets.map((preset, index) => (
+                <option key={preset.label} value={index}>{preset.label}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            方法
+            <select value={method} onChange={(event) => setMethod(event.target.value as typeof method)}>
+              <option value="GET">GET</option>
+              <option value="POST">POST</option>
+              <option value="PUT">PUT</option>
+              <option value="PATCH">PATCH</option>
+              <option value="DELETE">DELETE</option>
+            </select>
+          </label>
+        </div>
+        <label>
+          Bungie Platform 路径
+          <input value={path} onChange={(event) => setPath(event.target.value)} placeholder="/Destiny2/Manifest/" />
+        </label>
+        <div className="query-editor">
+          <div className="query-editor-head">
+            <span>Query 参数</span>
+            <button type="button" onClick={() => setParams((items) => [...items, { id: Date.now(), key: "", value: "" }])}>添加参数</button>
+          </div>
+          {params.map((param) => (
+            <div className="query-row" key={param.id}>
+              <input placeholder="key" value={param.key} onChange={(event) => updateParam(param.id, "key", event.target.value)} />
+              <input placeholder="value" value={param.value} onChange={(event) => updateParam(param.id, "value", event.target.value)} />
+              <button type="button" onClick={() => removeParam(param.id)}>删除</button>
+            </div>
+          ))}
+        </div>
+        <label>
+          Body JSON
+          <textarea
+            disabled={method === "GET" || method === "DELETE"}
+            value={body}
+            onChange={(event) => setBody(event.target.value)}
+            placeholder="{ }"
+          />
+        </label>
+        <label>
+          OAuth Access Token
+          <input
+            type="password"
+            value={oauthAccessToken}
+            onChange={(event) => setOauthAccessToken(event.target.value)}
+            placeholder="需要私密接口时填写，可留空"
+          />
+        </label>
+        {error && <div className="error">{error}</div>}
+        <div className="toolbar">
+          <button disabled={loading}>{loading ? "请求中" : "发送 Bungie 请求"}</button>
+        </div>
+      </form>
+      {result && <BungieResultPanel result={result} />}
+    </section>
+  );
+}
+
+function BungieResultPanel({ result }: { result: AdminBungieQueryResult }) {
+  return (
+    <div className="panel result-panel">
+      <div className="result-meta">
+        <span>{result.method}</span>
+        <span>{result.statusCode}</span>
+        <span>{result.tookMs}ms</span>
+        <span>{result.contentType || "-"}</span>
+      </div>
+      <div className="result-url">{result.path}</div>
+      <pre>{JSON.stringify(result.body, null, 2)}</pre>
     </div>
   );
 }
