@@ -330,6 +330,50 @@ describe("d2stats core", () => {
     assert.equal(result.content[0].type, "image");
   });
 
+  it("uses the latest completed activity for latest_activity cards", async () => {
+    const result = await queryCard(
+      { target: "3:4611686018428939884", card: "latest_activity", mode: "raid" },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async (url) => {
+          if (String(url).includes("/activities/")) {
+            assert.equal(String(url), "http://d2.local/api/d2/activities/3/4611686018428939884?mode=raid&count=25&page=0");
+            return jsonResponse({
+              success: true,
+              data: [
+                {
+                  activityId: "1001",
+                  values: { completed: { basic: { value: 0 } } },
+                },
+                {
+                  activityId: "1002",
+                  values: { completed: { basic: { value: 1 } } },
+                },
+              ],
+            });
+          }
+          assert.equal(String(url), "http://d2.local/api/d2/pgcr/1002");
+          return jsonResponse({
+            success: true,
+            data: {
+              activityId: "1002",
+              activityName: "完成的突袭",
+              modeName: "突袭",
+              period: "2026-06-03T00:00:00.000Z",
+              players: [{ displayName: "Lucifer", kills: 10, deaths: 1, assists: 2, kd: 10, completed: true }],
+            },
+          });
+        },
+        renderHtmlToPng: async (html) => {
+          assert.match(html, /完成的突袭/);
+          return Buffer.from("png-bytes");
+        },
+      },
+    );
+
+    assert.equal(result.content[0].type, "image");
+  });
+
   it("returns a friendly text result for unbound QQ", async () => {
     const result = await queryCard(
       { target: "607972716", card: "summary" },

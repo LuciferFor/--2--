@@ -668,6 +668,7 @@ export class DestinyService {
   private async toPgcrPlayer(entry: Record<string, unknown>): Promise<PgcrPlayerSummary> {
     const player = asRecord(entry.player);
     const destinyUserInfo = asRecord(player.destinyUserInfo);
+    const membershipId = optionalString(destinyUserInfo.membershipId);
     const values = aggregatePgcrPlayerValues(entry.values);
     const extended = asRecord(entry.extended);
     const weapons = await Promise.all(
@@ -678,9 +679,10 @@ export class DestinyService {
       displayName:
         asString(destinyUserInfo.bungieGlobalDisplayName) ||
         asString(destinyUserInfo.displayName) ||
-        asString(player.displayName, "Unknown"),
+        asString(player.displayName) ||
+        fallbackPgcrDisplayName(membershipId),
       membershipType: optionalNumber(destinyUserInfo.membershipType),
-      membershipId: optionalString(destinyUserInfo.membershipId),
+      membershipId,
       characterId: optionalString(entry.characterId),
       emblemPath: optionalString(player.emblemPath),
       team: optionalNumber(entry.team),
@@ -1200,6 +1202,13 @@ function heatmapKeys(period: string, timezone: string): { day: string; hour: str
 
 function datePart(parts: Intl.DateTimeFormatPart[], type: Intl.DateTimeFormatPartTypes): string {
   return parts.find((part) => part.type === type)?.value ?? "";
+}
+
+function fallbackPgcrDisplayName(membershipId: string | undefined): string {
+  if (!membershipId) {
+    return "匿名玩家";
+  }
+  return `ID ${membershipId.slice(-6)}`;
 }
 
 function uniqueActivity<T extends { activityId: string }>(): (activity: T) => boolean {

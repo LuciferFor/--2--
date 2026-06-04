@@ -357,9 +357,9 @@ async function renderCardFromPublicJson(card, params, config, options) {
   }
 
   if (card === "latest_activity") {
-    const activitiesUrl = buildPublicDataUrl("activities", resolved, { ...params, count: 1, page: 0 }, config);
+    const activitiesUrl = buildPublicDataUrl("activities", resolved, { ...params, count: 25, page: 0 }, config);
     const activities = await fetchEnvelope(activitiesUrl, config, options);
-    const activity = Array.isArray(activities) ? activities[0] : undefined;
+    const activity = Array.isArray(activities) ? activities.find(activityCompleted) || activities[0] : undefined;
     if (!activity?.activityId) {
       throw new D2StatsInputError("没有找到最近活动。");
     }
@@ -1731,6 +1731,10 @@ function activityModeIcon(value) {
 
 function statValue(values, key) {
   return Number(values?.[key]?.basic?.value || 0);
+}
+
+function activityCompleted(activity) {
+  return Number(activity?.values?.completed?.basic?.value || 0) > 0;
 }
 
 function pill(label, tone = "muted") {

@@ -227,8 +227,8 @@ export async function registerD2Routes(app: FastifyInstance, deps: D2RouteDeps):
     const cacheKey = `d2:card:latest-activity:${target.cacheKey}:${mode}`;
 
     await sendCachedPng(request, reply, deps, cacheKey, async () => {
-      const activities = await deps.destinyService.getActivities(target.membershipType, target.membershipId, mode, 1, 0);
-      const activity = activities[0];
+      const activities = await deps.destinyService.getActivities(target.membershipType, target.membershipId, mode, 25, 0);
+      const activity = activities.find(isCompletedActivity) ?? activities[0];
       if (!activity) {
         throw new NotFoundError("No recent activity was found");
       }
@@ -247,6 +247,18 @@ export async function registerD2Routes(app: FastifyInstance, deps: D2RouteDeps):
       return deps.cardService.renderActivityCard(pgcr);
     });
   });
+}
+
+function isCompletedActivity(activity: { values: Record<string, unknown> }): boolean {
+  const completed = activity.values.completed;
+  if (typeof completed !== "object" || completed === null || Array.isArray(completed)) {
+    return false;
+  }
+  const basic = (completed as Record<string, unknown>).basic;
+  if (typeof basic !== "object" || basic === null || Array.isArray(basic)) {
+    return false;
+  }
+  return Number((basic as Record<string, unknown>).value ?? 0) > 0;
 }
 
 async function resolveCardTarget(query: Query, deps: D2RouteDeps): Promise<CardTarget> {
