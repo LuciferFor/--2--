@@ -294,9 +294,13 @@ export interface RaidOverviewDayOneStatus {
 
 export interface RaidOverviewActivity {
   name: string;
+  displayName?: string;
+  difficulty: string;
+  difficultyLabel: string;
   activityHashes: number[];
   pgcrImage?: string;
   clears: number;
+  fullClears: number;
   completions: number;
   wins: number;
   kills: number;
@@ -307,8 +311,18 @@ export interface RaidOverviewActivity {
   fastestActivityId?: string;
   lastClearedAt?: string;
   lastActivityId?: string;
+  scannedCompletions: number;
+  sherpaCompletions: number;
+  fireteamSizes: {
+    solo: number;
+    duo: number;
+    trio: number;
+  };
+  tags: string[];
   flawless: RaidOverviewFlawlessStatus;
   dayOne: RaidOverviewDayOneStatus;
+  releaseAt?: string;
+  sortOrder: number;
 }
 
 export interface RaidOverview {
@@ -317,6 +331,8 @@ export interface RaidOverview {
   totals: {
     raids: number;
     clears: number;
+    completions: number;
+    sherpaCompletions: number;
     kills: number;
     deaths: number;
     secondsPlayed: number;

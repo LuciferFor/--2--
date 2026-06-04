@@ -520,7 +520,7 @@ export class DestinyService {
     const raids = [...groups.values()]
       .map(finalizeRaidGroup)
       .filter((raid) => raid.clears > 0 || raid.completions > 0)
-      .sort((a, b) => b.clears - a.clears || a.name.localeCompare(b.name));
+      .sort((a, b) => b.sortOrder - a.sortOrder || difficultySort(a.difficulty) - difficultySort(b.difficulty) || a.name.localeCompare(b.name));
 
     const result: RaidOverview = {
       membershipType,
@@ -528,6 +528,8 @@ export class DestinyService {
       totals: {
         raids: raids.length,
         clears: raids.reduce((sum, raid) => sum + raid.clears, 0),
+        completions: raids.reduce((sum, raid) => sum + raid.completions, 0),
+        sherpaCompletions: raids.reduce((sum, raid) => sum + raid.sherpaCompletions, 0),
         kills: raids.reduce((sum, raid) => sum + raid.kills, 0),
         deaths: raids.reduce((sum, raid) => sum + raid.deaths, 0),
         secondsPlayed: raids.reduce((sum, raid) => sum + raid.secondsPlayed, 0)
@@ -538,7 +540,7 @@ export class DestinyService {
         pgcrLimit: options.pgcrLimit,
         recentActivitiesScanned: recentActivities.length,
         pgcrScanned,
-        note: "clears/fastest are all-time aggregate stats; flawless/dayOne are only confirmed from scanned recent PGCRs"
+        note: "fullClears/completions/fastest are all-time aggregate stats; sherpa/flawless/dayOne/solo/trio are only confirmed from scanned recent PGCRs"
       },
       updatedAt: new Date().toISOString()
     };
@@ -867,11 +869,11 @@ export class DestinyService {
       return;
     }
 
-    const name = normalizeRaidDisplayName(asString(definition.displayProperties?.name, `Raid ${activityHash}`));
-    if (isPantheonActivityName(name)) {
+    const parsed = parseRaidActivityDisplayName(asString(definition.displayProperties?.name, `Raid ${activityHash}`));
+    if (isPantheonActivityName(parsed.name)) {
       return;
     }
-    const group = getOrCreateRaidGroup(groups, name, definition);
+    const group = getOrCreateRaidGroup(groups, parsed, definition);
     const hashNumber = Number(activityHash);
     if (Number.isFinite(hashNumber)) {
       group.activityHashes.add(hashNumber);
@@ -879,7 +881,8 @@ export class DestinyService {
 
     const values = asRecord(activity.values);
     group.completions += statBasicValue(values, "activityCompletions");
-    group.wins += statBasicValue(values, "activityWins");
+    group.fullClears += statBasicValue(values, "activityWins");
+    group.wins = group.fullClears;
     group.kills += statBasicValue(values, "activityKills");
     group.deaths += statBasicValue(values, "activityDeaths");
     group.secondsPlayed += statBasicValue(values, "activitySecondsPlayed");
@@ -959,8 +962,8 @@ export class DestinyService {
       .sort((a, b) => b.period.localeCompare(a.period));
     return candidates.filter((activity) => {
       const definition = activity.referenceId === undefined ? undefined : activityDefinitions[String(activity.referenceId)];
-      const name = normalizeRaidDisplayName(asString(definition?.displayProperties?.name, activity.activityName));
-      return definition && isRaidActivityDefinition(definition) && !isPantheonActivityName(name);
+      const parsed = parseRaidActivityDisplayName(asString(definition?.displayProperties?.name, activity.activityName));
+      return definition && isRaidActivityDefinition(definition) && !isPantheonActivityName(parsed.name);
     });
   }
 
@@ -1043,11 +1046,12 @@ export class DestinyService {
     activityDefinitions: Record<string, RaidActivityDefinition>
   ): RaidOverviewGroup | null {
     const definition = referenceId === undefined ? undefined : activityDefinitions[String(referenceId)];
-    const name = normalizeRaidDisplayName(asString(definition?.displayProperties?.name, fallbackName));
-    if (isPantheonActivityName(name)) {
+    const parsed = parseRaidActivityDisplayName(asString(definition?.displayProperties?.name, fallbackName));
+    if (isPantheonActivityName(parsed.name)) {
       return null;
     }
-    return groups.get(name) ?? (definition && isRaidActivityDefinition(definition) ? getOrCreateRaidGroup(groups, name, definition) : null);
+    return groups.get(parsed.key) ??
+      (definition && isRaidActivityDefinition(definition) ? getOrCreateRaidGroup(groups, parsed, definition) : null);
   }
 
   private groupForModeActivity(
@@ -1072,6 +1076,19 @@ export class DestinyService {
       return;
     }
 
+    group.scannedCompletions += 1;
+    const completedPlayers = pgcr.players.filter((player) => player.completed);
+    const fireteamSize = completedPlayers.length || pgcr.players.length;
+    if (fireteamSize === 1) {
+      group.fireteamSizes.solo += 1;
+      group.tags.add("Solo");
+    } else if (fireteamSize === 2) {
+      group.fireteamSizes.duo += 1;
+      group.tags.add("Duo");
+    } else if (fireteamSize === 3) {
+      group.fireteamSizes.trio += 1;
+      group.tags.add("Trio");
+    }
     const personalFlawless = playerEntries.some((player) => player.completed && player.deaths === 0);
     const fireteamFlawless = pgcr.players.length > 0 && pgcr.players.every((player) => player.deaths === 0);
     if (personalFlawless) {
@@ -1106,9 +1123,14 @@ interface RaidActivityDefinition {
 }
 
 interface RaidOverviewGroup {
+  key: string;
   name: string;
+  displayName: string;
+  difficulty: string;
+  difficultyLabel: string;
   activityHashes: Set<number>;
   pgcrImage?: string;
+  fullClears: number;
   completions: number;
   wins: number;
   kills: number;
@@ -1119,8 +1141,18 @@ interface RaidOverviewGroup {
   fastestActivityId?: string;
   lastClearedAt?: string;
   lastActivityId?: string;
+  scannedCompletions: number;
+  sherpaCompletions: number;
+  fireteamSizes: {
+    solo: number;
+    duo: number;
+    trio: number;
+  };
+  tags: Set<string>;
   flawless: RaidOverviewActivity["flawless"];
   dayOne: RaidOverviewActivity["dayOne"];
+  releaseAt?: string;
+  sortOrder: number;
 }
 
 interface ActivityOverviewGroup {
@@ -1139,6 +1171,13 @@ interface ActivityOverviewGroup {
   lastActivityId?: string;
 }
 
+interface ParsedRaidActivityName {
+  key: string;
+  name: string;
+  difficulty: string;
+  difficultyLabel: string;
+}
+
 function isRaidActivityDefinition(definition: RaidActivityDefinition): boolean {
   return Array.isArray(definition.activityModeTypes) && definition.activityModeTypes.includes(RAID_MODE_TYPE);
 }
@@ -1149,25 +1188,38 @@ function isActivityDefinitionForMode(definition: RaidActivityDefinition, modeTyp
 
 function getOrCreateRaidGroup(
   groups: Map<string, RaidOverviewGroup>,
-  name: string,
+  parsed: ParsedRaidActivityName,
   definition: RaidActivityDefinition
 ): RaidOverviewGroup {
-  const existing = groups.get(name);
+  const existing = groups.get(parsed.key);
   if (existing) {
     existing.pgcrImage ??= definition.pgcrImage;
     return existing;
   }
 
-  const releaseWindow = findRaidReleaseWindow(name);
+  const releaseWindow = findRaidReleaseWindow(parsed.name);
   const group: RaidOverviewGroup = {
-    name,
+    key: parsed.key,
+    name: parsed.name,
+    displayName: `${parsed.name}：${parsed.difficultyLabel}`,
+    difficulty: parsed.difficulty,
+    difficultyLabel: parsed.difficultyLabel,
     activityHashes: new Set(),
     pgcrImage: definition.pgcrImage,
+    fullClears: 0,
     completions: 0,
     wins: 0,
     kills: 0,
     deaths: 0,
     secondsPlayed: 0,
+    scannedCompletions: 0,
+    sherpaCompletions: 0,
+    fireteamSizes: {
+      solo: 0,
+      duo: 0,
+      trio: 0
+    },
+    tags: new Set(),
     flawless: {
       status: "unknown",
       personal: false,
@@ -1177,9 +1229,11 @@ function getOrCreateRaidGroup(
       status: "unknown",
       releaseAt: releaseWindow?.releaseAt,
       windowHours: releaseWindow?.windowHours
-    }
+    },
+    releaseAt: releaseWindow?.releaseAt,
+    sortOrder: releaseWindow ? new Date(releaseWindow.releaseAt).getTime() : 0
   };
-  groups.set(name, group);
+  groups.set(parsed.key, group);
   return group;
 }
 
@@ -1216,6 +1270,74 @@ function normalizeRaidDisplayName(name: string): string {
     .trim();
 }
 
+function parseRaidActivityDisplayName(rawName: string): ParsedRaidActivityName {
+  const cleaned = rawName.replace(/\s+/gu, " ").trim();
+  const suffix = /^(.*?)(?:\s*[:：]\s*|\s*[（(]\s*)(Normal|Master|Legend|Contest|Epic|Standard|标准|大师|普通|传说|竞赛|史诗)\s*[）)]?\s*$/iu.exec(cleaned);
+  const baseName = normalizeRaidDisplayName(suffix?.[1] ? suffix[1] : cleaned);
+  const difficulty = normalizeDifficulty(suffix?.[2]);
+  const difficultyLabel = difficultyLabelFor(difficulty);
+  return {
+    key: `${normalizeRaidNameForKey(baseName)}:${difficulty}`,
+    name: baseName,
+    difficulty,
+    difficultyLabel
+  };
+}
+
+function normalizeDifficulty(value: string | undefined): string {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized || ["normal", "standard", "普通", "标准"].includes(normalized)) {
+    return "normal";
+  }
+  if (["master", "大师"].includes(normalized)) {
+    return "master";
+  }
+  if (["legend", "传说"].includes(normalized)) {
+    return "legend";
+  }
+  if (["contest", "竞赛"].includes(normalized)) {
+    return "contest";
+  }
+  if (["epic", "史诗"].includes(normalized)) {
+    return "epic";
+  }
+  return normalized.replace(/[^\p{L}\p{N}]+/gu, "-") || "normal";
+}
+
+function difficultyLabelFor(value: string): string {
+  switch (value) {
+    case "master":
+      return "大师";
+    case "legend":
+      return "传说";
+    case "contest":
+      return "竞赛";
+    case "epic":
+      return "史诗";
+    default:
+      return "普通";
+  }
+}
+
+function difficultySort(value: string): number {
+  switch (value) {
+    case "normal":
+      return 0;
+    case "master":
+      return 1;
+    case "legend":
+      return 2;
+    case "contest":
+      return 3;
+    default:
+      return 9;
+  }
+}
+
+function normalizeRaidNameForKey(value: string): string {
+  return value.toLowerCase().replaceAll("’", "'").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
 function normalizeActivityDisplayName(name: string): string {
   return normalizeRaidDisplayName(name);
 }
@@ -1245,9 +1367,13 @@ function isInsideReleaseWindow(period: string, releaseAt: string, windowHours: n
 function finalizeRaidGroup(group: RaidOverviewGroup): RaidOverviewActivity {
   return {
     name: group.name,
+    displayName: group.displayName,
+    difficulty: group.difficulty,
+    difficultyLabel: group.difficultyLabel,
     activityHashes: [...group.activityHashes].sort((a, b) => a - b),
     pgcrImage: group.pgcrImage,
-    clears: group.completions,
+    clears: group.fullClears,
+    fullClears: group.fullClears,
     completions: group.completions,
     wins: group.wins,
     kills: group.kills,
@@ -1258,8 +1384,14 @@ function finalizeRaidGroup(group: RaidOverviewGroup): RaidOverviewActivity {
     fastestActivityId: group.fastestActivityId,
     lastClearedAt: group.lastClearedAt,
     lastActivityId: group.lastActivityId,
+    scannedCompletions: group.scannedCompletions,
+    sherpaCompletions: group.sherpaCompletions,
+    fireteamSizes: group.fireteamSizes,
+    tags: [...group.tags],
     flawless: group.flawless,
-    dayOne: group.dayOne
+    dayOne: group.dayOne,
+    releaseAt: group.releaseAt,
+    sortOrder: group.sortOrder
   };
 }
 

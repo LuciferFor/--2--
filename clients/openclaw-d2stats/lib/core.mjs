@@ -147,8 +147,8 @@ export function buildPublicDataUrl(kind, target, params = {}, config = resolveCo
   }
 
   if (kind === "raids") {
-    query.set("historyPages", String(clampInteger(params.historyPages, 1, 1, 10)));
-    query.set("pgcrLimit", String(clampInteger(params.pgcrLimit, 20, 0, 200)));
+    query.set("historyPages", String(clampInteger(params.historyPages, 5, 1, 10)));
+    query.set("pgcrLimit", String(clampInteger(params.pgcrLimit, 100, 0, 200)));
     return `${config.baseUrl}/api/d2/raids/${target.membershipType}/${target.membershipId}?${query.toString()}`;
   }
 
@@ -411,7 +411,7 @@ async function renderCardFromPublicJson(card, params, config, options) {
     const overview = await fetchEnvelope(sourceUrl, config, options);
     return {
       width: CARD_WIDTH,
-      height: 720,
+      height: 2600,
       sourceUrl,
       html: await renderRaidOverviewHtml(resolved.player, overview, config, options),
     };
@@ -1067,8 +1067,11 @@ function renderActivityHtml(pgcr) {
 }
 
 async function renderRaidOverviewHtml(player, overview, config, options) {
-  const rows = Array.isArray(overview?.raids) ? overview.raids.slice(0, 10) : [];
+  const rows = Array.isArray(overview?.raids) ? overview.raids : [];
   const totals = overview?.totals || {};
+  const bestSpeed = rows
+    .filter((item) => Number(item?.fastestCompletionMs || 0) > 0)
+    .sort((a, b) => Number(a.fastestCompletionMs || Infinity) - Number(b.fastestCompletionMs || Infinity))[0];
   const rowsWithImages = await Promise.all(
     rows.map(async (item) => ({
       item,
@@ -1080,35 +1083,41 @@ async function renderRaidOverviewHtml(player, overview, config, options) {
     eyebrow: "DESTINY 2 RAID OVERVIEW",
     subtitle: `突袭总览 · ${dateOnly(overview?.updatedAt)}`,
     body: `
-      <section class="metrics metrics-4">
-        ${metric("突袭数", int(totals.raids))}
-        ${metric("通关", int(totals.clears))}
-        ${metric("击杀", int(totals.kills))}
-        ${metric("游玩时长", duration(totals.secondsPlayed))}
+      <section class="raid-rank-row">
+        <div class="raid-rank-pill teal">
+          <span>Full Clears</span>
+          <strong>${int(totals.clears)}</strong>
+          <small>${int(totals.completions)} 完成</small>
+        </div>
+        <div class="raid-rank-pill gold">
+          <span>Best Speed</span>
+          <strong>${escapeHtml(bestSpeed?.fastestCompletionDisplay || "-")}</strong>
+          <small>${escapeHtml(bestSpeed?.displayName || bestSpeed?.name || "暂无")}</small>
+        </div>
       </section>
-      <section class="raid-list">
+      <section class="raid-detail-list">
         ${rowsWithImages
           .map(
             ({ item, imageDataUrl }) => `
-              <div class="raid-card-row">
-                <div class="raid-thumb ${imageDataUrl ? "" : "empty"}">
+              <div class="raid-detail-row">
+                <div class="raid-detail-thumb ${imageDataUrl ? "" : "empty"}">
                   ${imageDataUrl ? `<img src="${escapeHtml(imageDataUrl)}" />` : `<span>${escapeHtml((item.name || "?").slice(0, 2))}</span>`}
+                  <b>${escapeHtml(item.displayName || `${item.name || "Unknown"}：${item.difficultyLabel || "普通"}`)}</b>
                 </div>
-                <div class="raid-title-block">
-                  <strong>${escapeHtml(item.name || "Unknown")}</strong>
-                  <span>${statusBadge(item.flawless?.status, "无暇")} ${statusBadge(item.dayOne?.status, "Day One")}</span>
+                <div class="raid-tag-stack">
+                  ${raidTags(item).join("")}
                 </div>
-                ${raidMetric("通关", int(item.clears), "blue")}
-                ${raidMetric("最快", item.fastestCompletionDisplay || "-", "green")}
-                ${raidMetric("时长", duration(item.secondsPlayed), "purple")}
-                ${raidMetric("击杀", int(item.kills), "red")}
+                <div class="raid-stat-pack">${raidProgressMetric("突袭全程次数", item.fullClears ?? item.clears, "blue")}</div>
+                <div class="raid-stat-pack">${raidProgressMetric("突袭完成次数", item.completions, "green")}</div>
+                <div class="raid-stat-pack">${raidProgressMetric("带队导师次数", raidSherpaDisplay(item), "purple", true)}</div>
+                <div class="raid-stat-pack">${raidProgressMetric("全程最短用时", item.fastestCompletionDisplay || "-", "pink", true)}</div>
               </div>
             `,
           )
           .join("")}
       </section>
       <footer class="card-footer">
-        扫描最近 ${int(overview?.scan?.pgcrScanned)} 场 PGCR；无暇 / Day One 未发现表示当前扫描范围内未确认。
+        全程 / 完成 / 最快来自 Bungie 全量聚合统计；Solo/Trio、无暇、Day One 只能从最近 ${int(overview?.scan?.pgcrScanned)} 场 PGCR 扫描确认；Bungie 官方公开接口不提供全量带队导师次数。
       </footer>
     `,
   });
@@ -2127,6 +2136,149 @@ function cardPage({ eyebrow, title, subtitle, body }) {
       border-radius: 4px 4px 0 0;
       background: linear-gradient(180deg, #7db3ff, #21d07a);
     }
+    .raid-rank-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 22px;
+      margin: -6px 0 20px;
+    }
+    .raid-rank-pill {
+      min-height: 88px;
+      border-radius: 12px;
+      padding: 14px 22px;
+      text-align: center;
+      color: #fff;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.14);
+    }
+    .raid-rank-pill.teal { background: linear-gradient(135deg, #11b8af, #16766c); }
+    .raid-rank-pill.gold { background: linear-gradient(135deg, #ffc84d, #b17827); }
+    .raid-rank-pill span,
+    .raid-rank-pill small {
+      display: block;
+      font-size: 17px;
+      font-weight: 850;
+      opacity: .95;
+    }
+    .raid-rank-pill strong {
+      display: block;
+      margin: 3px 0;
+      font-size: 30px;
+      font-weight: 950;
+      line-height: 1;
+    }
+    .raid-detail-list {
+      display: grid;
+      gap: 18px;
+    }
+    .raid-detail-row {
+      display: grid;
+      grid-template-columns: 230px 156px repeat(4, minmax(0, 1fr));
+      gap: 18px;
+      align-items: center;
+      min-height: 142px;
+      padding: 18px 22px;
+      border-radius: 10px;
+      background: rgba(17, 17, 17, 0.9);
+      border: 1px solid rgba(255,255,255,.035);
+    }
+    .raid-detail-thumb {
+      position: relative;
+      width: 230px;
+      height: 96px;
+      overflow: hidden;
+      border-radius: 9px;
+      background: #171717;
+    }
+    .raid-detail-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      filter: saturate(1.04) contrast(1.05);
+    }
+    .raid-detail-thumb::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(90deg, rgba(0,0,0,.56), rgba(0,0,0,.08));
+    }
+    .raid-detail-thumb b {
+      position: absolute;
+      z-index: 1;
+      left: 14px;
+      top: 12px;
+      right: 12px;
+      color: #fff;
+      font-size: 20px;
+      font-weight: 950;
+      line-height: 1.18;
+      text-shadow: 0 2px 10px rgba(0,0,0,.95);
+    }
+    .raid-detail-thumb.empty {
+      display: grid;
+      place-items: center;
+      color: #fff;
+      font-size: 26px;
+      font-weight: 950;
+    }
+    .raid-tag-stack {
+      display: flex;
+      flex-wrap: wrap;
+      align-content: center;
+      gap: 8px;
+      min-height: 70px;
+    }
+    .raid-tag {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 28px;
+      padding: 0 10px;
+      border-radius: 4px;
+      background: rgba(255,255,255,.1);
+      color: #e6edf7;
+      font-size: 16px;
+      font-weight: 950;
+      white-space: nowrap;
+    }
+    .raid-tag.dayone { background: #ba49bd; }
+    .raid-tag.flawless { background: #d14f5f; }
+    .raid-tag.solo { background: #4c69e8; }
+    .raid-tag.duo { background: #8557f1; }
+    .raid-tag.trio { background: #ff9f2f; }
+    .raid-tag.muted { background: transparent; color: #88939f; border: 1px solid rgba(255,255,255,.08); }
+    .raid-progress-metric {
+      min-width: 0;
+      text-align: right;
+    }
+    .raid-progress-metric span {
+      display: block;
+      color: #c3ccd7;
+      font-size: 16px;
+      font-weight: 850;
+      white-space: nowrap;
+    }
+    .raid-progress-metric i {
+      display: block;
+      width: 112px;
+      height: 6px;
+      margin: 8px 0 8px auto;
+      border-radius: 999px;
+      background: #6475ff;
+    }
+    .raid-progress-metric.green i { background: #42c894; }
+    .raid-progress-metric.purple i { background: #a95ad0; }
+    .raid-progress-metric.pink i { background: #ff6986; }
+    .raid-progress-metric strong {
+      display: block;
+      color: #fff;
+      font-size: 28px;
+      font-weight: 950;
+      line-height: 1.05;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
     .raid-list {
       display: grid;
       gap: 12px;
@@ -2380,6 +2532,52 @@ function raidMetric(label, value, tone) {
       <b>${escapeHtml(String(value))}</b>
     </div>
   `;
+}
+
+function raidProgressMetric(label, value, tone, raw = false) {
+  const display = raw ? String(value || "-") : int(value);
+  return `
+    <div class="raid-progress-metric ${tone}">
+      <span>${escapeHtml(label)}</span>
+      <i></i>
+      <strong>${escapeHtml(display)}</strong>
+    </div>
+  `;
+}
+
+function raidSherpaDisplay(item) {
+  const value = Number(item?.sherpaCompletions || 0);
+  return value > 0 ? int(value) : "未公开";
+}
+
+function raidTags(item) {
+  const tags = [];
+  if (item?.dayOne?.status === "confirmed") {
+    tags.push(`<span class="raid-tag dayone">DayOne</span>`);
+  }
+  if (item?.flawless?.status === "confirmed") {
+    tags.push(`<span class="raid-tag flawless">无暇</span>`);
+  }
+  const fireteamSizes = item?.fireteamSizes || {};
+  if (Number(fireteamSizes.solo || 0) > 0) {
+    tags.push(`<span class="raid-tag solo">Solo</span>`);
+  }
+  if (Number(fireteamSizes.duo || 0) > 0) {
+    tags.push(`<span class="raid-tag duo">Duo</span>`);
+  }
+  if (Number(fireteamSizes.trio || 0) > 0) {
+    tags.push(`<span class="raid-tag trio">Trio</span>`);
+  }
+  for (const tag of Array.isArray(item?.tags) ? item.tags : []) {
+    if (["Solo", "Duo", "Trio"].includes(tag)) {
+      continue;
+    }
+    tags.push(`<span class="raid-tag">${escapeHtml(tag)}</span>`);
+  }
+  if (tags.length === 0) {
+    tags.push(`<span class="raid-tag muted">-</span>`);
+  }
+  return tags;
 }
 
 function bungieAssetUrl(path) {
