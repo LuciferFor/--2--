@@ -46,7 +46,7 @@ const cardQueryParameters = {
     },
     historyPages: {
       type: "number",
-      description: "Optional raid_overview or dungeon_overview history pages to scan. Dungeon defaults to 10.",
+      description: "Optional raid_overview or dungeon_overview history pages to scan. Dungeon defaults to 5 for faster first queries.",
     },
     pgcrLimit: {
       type: "number",
@@ -209,7 +209,7 @@ export function registerD2StatsRuntime(api, options = {}) {
         return queryCard(params, config, { signal, fetchImpl: options.fetchImpl });
       },
     },
-    { optional: false },
+    { optional: false, timeoutMs: 120000 },
   );
 
   api.registerTool(

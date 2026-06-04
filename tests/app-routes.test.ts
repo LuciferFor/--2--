@@ -861,7 +861,10 @@ describe("Fastify routes", () => {
     });
     expect(callback.statusCode).toBe(200);
     expect(callback.body).toContain("选择要绑定的 Destiny 账号");
+    expect(callback.body).toContain("Steam");
+    expect(callback.body).toContain("PlayStation");
     expect(callback.body).toContain("4611686018428939884");
+    expect(callback.body).not.toContain("3:4611686018428939884");
     const confirmToken = /name="confirmToken" value="([0-9a-f]{64})"/u.exec(callback.body)?.[1];
     expect(confirmToken).toBeTruthy();
 

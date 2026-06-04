@@ -91,7 +91,7 @@ def main() -> int:
     parser.add_argument("--install-dir", type=Path)
     parser.add_argument("--config", type=Path)
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
-    parser.add_argument("--timeout-ms", type=int, default=10000)
+    parser.add_argument("--timeout-ms", type=int, default=60000)
     parser.add_argument("--default-card", default="summary")
     parser.add_argument("--default-mode", default="all")
     parser.add_argument("--default-membership-type", type=int, default=3)

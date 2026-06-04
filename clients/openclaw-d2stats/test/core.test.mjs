@@ -47,7 +47,7 @@ describe("d2stats core", () => {
     assert.equal(catalysts, "http://d2.local/api/d2/catalysts/qq/607972716");
 
     const dungeons = buildPublicDataUrl("dungeons", target, { historyPages: 3 }, resolveConfig({ baseUrl: "http://d2.local" }));
-    assert.equal(dungeons, "http://d2.local/api/d2/dungeons/3/4611686018428939884?historyPages=3&pgcrLimit=100");
+    assert.equal(dungeons, "http://d2.local/api/d2/dungeons/3/4611686018428939884?historyPages=3&pgcrLimit=50");
 
     const grandmasters = buildPublicDataUrl(
       "grandmasters",
@@ -392,7 +392,7 @@ describe("d2stats core", () => {
                   flawless: { status: "confirmed", personal: true, fireteam: true },
                 },
               ],
-              scan: { historyPages: 2, pgcrLimit: 100, pgcrScanned: 1 },
+              scan: { historyPages: 2, pgcrLimit: 50, pgcrScanned: 1 },
               updatedAt: "2026-06-03T00:00:00.000Z",
             },
           });
@@ -409,7 +409,7 @@ describe("d2stats core", () => {
 
     assert.deepEqual(calls, [
       "http://d2.local/api/d2/namecard/3/4611686018428939884",
-      "http://d2.local/api/d2/dungeons/3/4611686018428939884?historyPages=2&pgcrLimit=100",
+      "http://d2.local/api/d2/dungeons/3/4611686018428939884?historyPages=2&pgcrLimit=50",
     ]);
     assert.equal(result.content[0].type, "image");
     assert.equal(result.details.card, "dungeon_overview");
@@ -1083,7 +1083,8 @@ describe("d2stats core", () => {
       },
     );
 
-    assert.equal(result.details.status, "oauth_bind_required");
+    assert.equal(result.details.status, "ok");
+    assert.equal(result.details.kind, "oauth_bind_link");
     assert.match(result.content[0].text, /http:\/\/d2\.local\/bind/);
   });
 });

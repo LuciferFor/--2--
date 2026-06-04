@@ -71,7 +71,7 @@ export function resolveConfig(raw = {}) {
   return {
     enabled: raw.enabled !== false,
     baseUrl: String(raw.baseUrl || "http://192.168.31.11:3011").replace(/\/+$/u, ""),
-    timeoutMs: clampInteger(raw.timeoutMs, 30000, 1000, 60000),
+    timeoutMs: clampInteger(raw.timeoutMs, 60000, 1000, 120000),
     defaultCard: CARDS.has(raw.defaultCard) ? raw.defaultCard : "summary",
     defaultMode: MODES.has(raw.defaultMode) ? raw.defaultMode : "all",
     defaultMembershipType: clampInteger(raw.defaultMembershipType, 3, 1, 254),
@@ -169,8 +169,8 @@ export function buildPublicDataUrl(kind, target, params = {}, config = resolveCo
   }
 
   if (kind === "dungeons") {
-    query.set("historyPages", String(clampInteger(params.historyPages, 10, 1, 10)));
-    query.set("pgcrLimit", String(clampInteger(params.pgcrLimit, 100, 0, 200)));
+    query.set("historyPages", String(clampInteger(params.historyPages, 5, 1, 10)));
+    query.set("pgcrLimit", String(clampInteger(params.pgcrLimit, 50, 0, 200)));
     return `${config.baseUrl}/api/d2/dungeons/${target.membershipType}/${target.membershipId}?${query.toString()}`;
   }
 
@@ -776,7 +776,8 @@ async function startQqOauthBinding(qq, config, options = {}) {
   try {
     const message = await startQqOauthBindingMessage(qq, config, options);
     return textResult(message, {
-      status: "oauth_bind_required",
+      status: "ok",
+      kind: "oauth_bind_link",
       qq,
     });
   } catch (error) {

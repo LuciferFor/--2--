@@ -378,14 +378,16 @@ export function renderOAuthSelectionHtml(result: QqOAuthCallbackResult): string 
   const rows = result.memberships
     .map((membership) => {
       const label = membership.bungieName ?? membership.displayName;
+      const platform = destinyPlatformName(membership.membershipType);
       return `
         <form method="post" action="/api/d2/bindings/qq/oauth/confirm" class="account">
           <input type="hidden" name="confirmToken" value="${escapeHtml(result.confirmToken)}">
           <input type="hidden" name="membershipType" value="${membership.membershipType}">
           <input type="hidden" name="membershipId" value="${escapeHtml(membership.membershipId)}">
           <div>
-            <strong>${escapeHtml(label)}</strong>
-            <span>${membership.membershipType}:${escapeHtml(membership.membershipId)}</span>
+            <strong>${escapeHtml(platform)}</strong>
+            <span>${escapeHtml(label)}</span>
+            <span class="account-id">Destiny ID ${escapeHtml(membership.membershipId)}</span>
           </div>
           <button type="submit">绑定这个账号</button>
         </form>
@@ -479,6 +481,20 @@ function stringValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function destinyPlatformName(membershipType: number): string {
+  const names: Record<number, string> = {
+    1: "Xbox",
+    2: "PlayStation",
+    3: "Steam",
+    4: "Battle.net（旧账号）",
+    5: "Stadia（旧账号）",
+    6: "Epic Games",
+    10: "Demon",
+    254: "Bungie.net"
+  };
+  return names[membershipType] ?? `未知平台 ${membershipType}`;
+}
+
 function htmlPage(title: string, body: string): string {
   return `<!doctype html>
 <html lang="zh-CN">
@@ -495,6 +511,8 @@ function htmlPage(title: string, body: string): string {
     .account { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px; background: #181818; border: 1px solid #333; border-radius: 6px; }
     .account strong, .account span { display: block; }
     .account span { margin-top: 4px; color: #9da7b1; font-size: 13px; }
+    .account strong { font-size: 18px; }
+    .account-id { color: #6f7b86; }
     button { border: 0; border-radius: 4px; padding: 10px 14px; background: #38d996; color: #0f1411; font-weight: 700; cursor: pointer; white-space: nowrap; }
     .muted { color: #8f9ba6; font-size: 13px; }
   </style>
