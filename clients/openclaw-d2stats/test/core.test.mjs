@@ -1106,6 +1106,146 @@ describe("d2stats core", () => {
     ]);
   });
 
+  it("renders full vault inventory as a dedicated long card", async () => {
+    const seenUrls = [];
+    const result = await queryInventory(
+      { target: "607972716", view: "vault", bucket: "vault" },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async (url) => {
+          seenUrls.push(String(url));
+          if (String(url).includes("/bindings/qq/")) {
+            return jsonResponse({
+              success: true,
+              data: {
+                qq: "607972716",
+                membershipType: 3,
+                membershipId: "4611686018428939884",
+                bungieName: "Lucifer#8571",
+                displayName: "Lucifer",
+                displayNameCode: 8571,
+              },
+            });
+          }
+          if (String(url).includes("/namecard/")) {
+            return jsonResponse({
+              success: true,
+              data: {
+                membershipType: 3,
+                membershipId: "4611686018428939884",
+                profile: { characters: [] },
+              },
+            });
+          }
+          return jsonResponse({
+            success: true,
+            data: {
+              membershipType: 3,
+              membershipId: "4611686018428939884",
+              updatedAt: "2026-06-05T00:00:00.000Z",
+              totals: { items: 4, vault: 2, inventory: 1, equipped: 1 },
+              characters: [],
+              items: [
+                { itemHash: 101, itemInstanceId: "691752902764", owner: "vault", bucketName: "威能武器", name: "纪念", itemTypeDisplayName: "机枪", locked: true, canEquip: true },
+                { itemHash: 102, itemInstanceId: "691752902765", owner: "vault", bucketName: "动能武器", name: "条件终局", itemTypeDisplayName: "霰弹枪", locked: false, canEquip: true },
+                { itemHash: 103, itemInstanceId: "691752902766", owner: "inventory", bucketName: "动能武器", name: "背包物品", itemTypeDisplayName: "手炮", locked: false, canEquip: true },
+                { itemHash: 104, itemInstanceId: "691752902767", owner: "equipped", bucketName: "能量武器", name: "已装备物品", itemTypeDisplayName: "弓", locked: false, canEquip: true },
+              ],
+            },
+          });
+        },
+        renderHtmlToPng: async (html) => {
+          assert.match(html, /DESTINY 2 VAULT/);
+          assert.match(html, /仓库全量/);
+          assert.match(html, /纪念/);
+          assert.match(html, /条件终局/);
+          assert.doesNotMatch(html, /背包物品/);
+          assert.doesNotMatch(html, /已装备物品/);
+          return Buffer.from("png-bytes");
+        },
+      },
+    );
+
+    assert.equal(result.content[0].type, "image");
+    assert.equal(result.details.card, "inventory:vault");
+    assert.deepEqual(seenUrls, [
+      "http://d2.local/api/d2/bindings/qq/607972716",
+      "http://d2.local/api/d2/namecard/3/4611686018428939884",
+      "http://d2.local/api/d2/inventory/qq/607972716",
+    ]);
+  });
+
+  it("renders equipped inventory grouped by character", async () => {
+    const seenUrls = [];
+    const result = await queryInventory(
+      { target: "607972716", view: "equipped", bucket: "equipped" },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async (url) => {
+          seenUrls.push(String(url));
+          if (String(url).includes("/bindings/qq/")) {
+            return jsonResponse({
+              success: true,
+              data: {
+                qq: "607972716",
+                membershipType: 3,
+                membershipId: "4611686018428939884",
+                bungieName: "Lucifer#8571",
+                displayName: "Lucifer",
+                displayNameCode: 8571,
+              },
+            });
+          }
+          if (String(url).includes("/namecard/")) {
+            return jsonResponse({
+              success: true,
+              data: {
+                membershipType: 3,
+                membershipId: "4611686018428939884",
+                profile: { characters: [] },
+              },
+            });
+          }
+          return jsonResponse({
+            success: true,
+            data: {
+              membershipType: 3,
+              membershipId: "4611686018428939884",
+              updatedAt: "2026-06-05T00:00:00.000Z",
+              characters: [
+                { characterId: "2305843001", className: "术士", light: 13, dateLastPlayed: "2026-06-05T00:00:00.000Z" },
+                { characterId: "2305843002", className: "猎人", light: 15, dateLastPlayed: "2026-06-04T00:00:00.000Z" },
+              ],
+              items: [
+                { itemHash: 201, itemInstanceId: "691752902801", owner: "equipped", characterId: "2305843001", bucketName: "动能武器", name: "翼狼", itemTypeDisplayName: "自动步枪", locked: true, canEquip: true },
+                { itemHash: 202, itemInstanceId: "691752902802", owner: "equipped", characterId: "2305843002", bucketName: "胸甲", name: "不散恐惧", itemTypeDisplayName: "猎人护甲", energyCapacity: 10, energyUsed: 6 },
+                { itemHash: 203, itemInstanceId: "691752902803", owner: "vault", bucketName: "威能武器", name: "纪念", itemTypeDisplayName: "机枪" },
+              ],
+            },
+          });
+        },
+        renderHtmlToPng: async (html) => {
+          assert.match(html, /DESTINY 2 EQUIPPED/);
+          assert.match(html, /当前装备/);
+          assert.match(html, /术士/);
+          assert.match(html, /猎人/);
+          assert.match(html, /翼狼/);
+          assert.match(html, /不散恐惧/);
+          assert.doesNotMatch(html, /纪念/);
+          return Buffer.from("png-bytes");
+        },
+      },
+    );
+
+    assert.equal(result.content[0].type, "image");
+    assert.equal(result.details.card, "inventory:equipped");
+    assert.deepEqual(seenUrls, [
+      "http://d2.local/api/d2/bindings/qq/607972716",
+      "http://d2.local/api/d2/namecard/3/4611686018428939884",
+      "http://d2.local/api/d2/inventory/qq/607972716",
+    ]);
+  });
+
   it("requires confirmation before item actions execute", async () => {
     let called = false;
     const result = await itemAction(

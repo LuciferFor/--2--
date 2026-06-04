@@ -134,10 +134,15 @@ const inventoryQueryParameters = {
       type: "string",
       description: "Optional alias for q.",
     },
+    view: {
+      type: "string",
+      enum: ["overview", "vault", "equipped", "inventory", "search"],
+      description: "Image layout: overview, full vault, currently equipped by character, character inventory, or search results.",
+    },
     bucket: {
       type: "string",
       enum: ["all", "vault", "inventory", "equipped"],
-      description: "Optional inventory scope.",
+      description: "Optional inventory scope. Use vault with view=vault, equipped with view=equipped, inventory with view=inventory.",
     },
     characterId: {
       type: "string",
@@ -243,7 +248,7 @@ export function registerD2StatsRuntime(api, options = {}) {
     {
       name: "destiny2_inventory_query",
       description:
-        "Query the bound QQ owner's Destiny 2 private inventory/vault/equipped items and return an image card. Use for /仓库搜索, /库存, /背包. Requires QQ OAuth; if missing, returns a 3-minute Bungie OAuth binding link.",
+        "Query the bound QQ owner's Destiny 2 private inventory/vault/equipped items and return an image card. Use view=vault for /仓库, view=equipped for /装备/当前装备/身上装备, view=inventory for /背包, and view=search for /仓库搜索. Requires QQ OAuth; if missing, returns a 3-minute Bungie OAuth binding link.",
       parameters: inventoryQueryParameters,
       async execute(_toolCallId, params, signal) {
         const config = getConfig();

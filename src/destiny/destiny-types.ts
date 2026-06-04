@@ -639,6 +639,8 @@ export interface HeatmapSummary {
     pagesPerCharacter: number;
     maxPagesPerCharacter: number;
     truncated: boolean;
+    partial?: boolean;
+    errors?: string[];
     note: string;
   };
   updatedAt: string;

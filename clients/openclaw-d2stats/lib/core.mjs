@@ -209,19 +209,27 @@ export function buildPublicDataUrl(kind, target, params = {}, config = resolveCo
 function buildInventoryDataUrl(qq, params = {}, config = resolveConfig()) {
   const query = new URLSearchParams();
   const searchText = String(params.q || params.query || "").trim();
-  const bucket = normalizeInventoryBucket(params.bucket);
+  const view = normalizeInventoryView(params.view, params);
+  const explicitBucket = String(params.bucket || "").trim().length > 0;
+  const bucket = explicitBucket
+    ? normalizeInventoryBucket(params.bucket)
+    : view === "vault" || view === "inventory" || view === "equipped"
+      ? view
+      : "all";
   const characterId = String(params.characterId || "").trim();
-  if (searchText.length > 0 || bucket !== "all" || characterId.length > 0) {
-    if (searchText.length > 0) {
-      query.set("q", searchText);
-    }
-    query.set("bucket", bucket);
-    if (characterId.length > 0) {
-      query.set("characterId", characterId);
-    }
-    return `${config.baseUrl}/api/d2/inventory/qq/${encodeURIComponent(qq)}/search?${query.toString()}`;
+
+  if (searchText.length === 0 && characterId.length === 0 && view !== "search") {
+    return `${config.baseUrl}/api/d2/inventory/qq/${encodeURIComponent(qq)}`;
   }
-  return `${config.baseUrl}/api/d2/inventory/qq/${encodeURIComponent(qq)}`;
+
+  if (searchText.length > 0) {
+    query.set("q", searchText);
+  }
+  query.set("bucket", bucket);
+  if (characterId.length > 0) {
+    query.set("characterId", characterId);
+  }
+  return `${config.baseUrl}/api/d2/inventory/qq/${encodeURIComponent(qq)}/search?${query.toString()}`;
 }
 
 function buildInventoryActionUrl(qq, action, config = resolveConfig()) {
@@ -401,7 +409,7 @@ export async function queryInventory(params = {}, rawConfig = {}, options = {}) 
     const html = renderInventoryHtml(resolved.player, inventory, params);
     const png = await renderHtmlToPng(html, {
       width: HEATMAP_CARD_WIDTH,
-      height: estimateInventoryHeight(inventory),
+      height: estimateInventoryHeight(inventory, params),
       signal: options.signal,
       renderer: options.renderHtmlToPng,
     });
@@ -412,7 +420,7 @@ export async function queryInventory(params = {}, rawConfig = {}, options = {}) 
       mimeType: "image/png",
       details: {
         status: "ok",
-        card: "inventory",
+        card: `inventory:${normalizeInventoryView(params.view, params)}`,
         bytes: png.length,
         sourceUrl,
         renderedBy: "openclaw-html",
@@ -1413,30 +1421,109 @@ function renderWeaponsHtml(player, weapons) {
 }
 
 function renderInventoryHtml(player, inventory, params = {}) {
+  const view = normalizeInventoryView(params.view, params);
+  if (view === "vault") {
+    return renderVaultInventoryHtml(player, inventory, params);
+  }
+  if (view === "equipped") {
+    return renderEquippedInventoryHtml(player, inventory, params);
+  }
+  return renderInventoryListHtml(player, inventory, params, view);
+}
+
+function renderVaultInventoryHtml(player, inventory, params = {}) {
   const items = Array.isArray(inventory?.items) ? inventory.items : [];
   const query = String(params.q || params.query || inventory?.query || "").trim();
-  const limitedItems = items.slice(0, 80);
-  const groups = inventoryGroups(limitedItems);
+  const vaultItems = filterInventoryItemsForView(items, "vault");
+  const groups = inventoryBucketGroups(vaultItems);
+  return cardPage({
+    width: HEATMAP_CARD_WIDTH,
+    player,
+    title: formatPlayerName(player),
+    eyebrow: "DESTINY 2 VAULT",
+    subtitle: query ? `仓库搜索 · ${query}` : `仓库全量 · ${dateOnly(inventory?.updatedAt)}`,
+    body: `
+      <section class="metrics metrics-4">
+        ${metric("仓库物品", int(inventory?.totals?.vault ?? inventory?.total ?? vaultItems.length))}
+        ${metric("已锁定", int(vaultItems.filter((item) => item?.locked).length))}
+        ${metric("可装备", int(vaultItems.filter((item) => item?.canEquip).length))}
+        ${metric("分组", int(groups.length))}
+      </section>
+      <section class="inventory-groups">
+        ${groups.map((group) => inventoryBucketGroupHtml(group)).join("") || emptyState(query ? "仓库里没有找到匹配的物品。" : "仓库为空。")}
+      </section>
+      <footer class="card-footer">仓库全量长图按物品栏位分组；写操作仍需 itemInstanceId、characterId 和二次确认。</footer>
+      ${membershipBlock(inventory?.membershipType, inventory?.membershipId)}
+    `,
+  });
+}
+
+function renderEquippedInventoryHtml(player, inventory, params = {}) {
+  const items = Array.isArray(inventory?.items) ? inventory.items : [];
+  const equippedItems = filterInventoryItemsForView(items, "equipped");
+  const characters = normalizeInventoryCharacters(inventory, equippedItems);
+  const unknownItems = equippedItems.filter((item) => !String(item?.characterId || "").trim());
+  const characterCards = characters
+    .map((character) =>
+      equippedCharacterHtml(
+        character,
+        equippedItems.filter((item) => String(item?.characterId || "") === String(character.characterId || "")),
+      ),
+    )
+    .join("");
+  return cardPage({
+    width: HEATMAP_CARD_WIDTH,
+    player,
+    title: formatPlayerName(player),
+    eyebrow: "DESTINY 2 EQUIPPED",
+    subtitle: `当前装备 · ${dateOnly(inventory?.updatedAt)}`,
+    body: `
+      <section class="metrics metrics-4">
+        ${metric("角色", int(characters.length || 0))}
+        ${metric("已装备", int(equippedItems.length))}
+        ${metric("武器", int(equippedItems.filter(inventoryItemLooksLikeWeapon).length))}
+        ${metric("护甲", int(equippedItems.filter(inventoryItemLooksLikeArmor).length))}
+      </section>
+      <section class="inventory-equipped-grid">
+        ${characterCards}
+        ${unknownItems.length ? equippedCharacterHtml({ className: "未识别角色", characterId: "" }, unknownItems) : ""}
+        ${equippedItems.length === 0 ? emptyState("没有可显示的已装备物品。") : ""}
+      </section>
+      <footer class="card-footer">当前装备按角色分栏展示；装备/转移/锁定操作仍需要二次确认。</footer>
+      ${membershipBlock(inventory?.membershipType, inventory?.membershipId)}
+    `,
+  });
+}
+
+function renderInventoryListHtml(player, inventory, params = {}, view = "overview") {
+  const allItems = Array.isArray(inventory?.items) ? inventory.items : [];
+  const query = String(params.q || params.query || inventory?.query || "").trim();
+  const scopedItems = filterInventoryItemsForView(allItems, view);
+  const shouldLimit = view === "overview";
+  const visibleItems = shouldLimit ? scopedItems.slice(0, 80) : scopedItems;
+  const groups = view === "inventory" ? inventoryBucketGroups(visibleItems) : inventoryOwnerGroups(visibleItems);
+  const subtitle = query
+    ? `库存搜索 · ${query}`
+    : view === "inventory"
+      ? `角色背包 · ${dateOnly(inventory?.updatedAt)}`
+      : `库存管理 · ${dateOnly(inventory?.updatedAt)}`;
   return cardPage({
     width: HEATMAP_CARD_WIDTH,
     player,
     title: formatPlayerName(player),
     eyebrow: "DESTINY 2 INVENTORY",
-    subtitle: query ? `库存搜索 · ${query}` : `库存管理 · ${dateOnly(inventory?.updatedAt)}`,
+    subtitle,
     body: `
       <section class="metrics metrics-4">
-        ${metric("物品", int(inventory?.totals?.items ?? inventory?.total ?? items.length))}
-        ${metric("已装备", int(inventory?.totals?.equipped ?? groups.equipped.length))}
-        ${metric("背包", int(inventory?.totals?.inventory ?? groups.inventory.length))}
-        ${metric("仓库", int(inventory?.totals?.vault ?? groups.vault.length))}
+        ${metric("物品", int(inventory?.totals?.items ?? inventory?.total ?? allItems.length))}
+        ${metric("已装备", int(inventory?.totals?.equipped ?? allItems.filter((item) => item?.owner === "equipped").length))}
+        ${metric("背包", int(inventory?.totals?.inventory ?? allItems.filter((item) => item?.owner === "inventory").length))}
+        ${metric("仓库", int(inventory?.totals?.vault ?? allItems.filter((item) => item?.owner === "vault").length))}
       </section>
-      <section class="crafting-groups">
-        ${inventoryGroupHtml("已装备", groups.equipped, "green")}
-        ${inventoryGroupHtml("角色背包", groups.inventory, "red")}
-        ${inventoryGroupHtml("仓库", groups.vault, "green")}
-        ${limitedItems.length === 0 ? emptyState("没有找到匹配的库存物品。") : ""}
+      <section class="inventory-groups">
+        ${groups.map((group) => inventoryBucketGroupHtml(group)).join("") || emptyState("没有找到匹配的库存物品。")}
       </section>
-      ${items.length > limitedItems.length ? `<footer class="card-footer">只展示前 ${limitedItems.length} 件；请加关键词缩小搜索范围。</footer>` : ""}
+      ${scopedItems.length > visibleItems.length ? `<footer class="card-footer">总览只展示前 ${visibleItems.length} 件；用 /仓库、/背包 或关键词可以看完整分组。</footer>` : ""}
       <footer class="card-footer">写操作请先确认 itemInstanceId 和 characterId；转移/装备/锁定会要求二次确认。</footer>
       ${membershipBlock(inventory?.membershipType, inventory?.membershipId)}
     `,
@@ -1488,6 +1575,208 @@ function inventoryItemHtml(item) {
       </div>
     </div>
   `;
+}
+
+function inventoryOwnerGroups(items) {
+  const groups = inventoryGroups(items);
+  return [
+    { title: "已装备", items: groups.equipped, tone: "green" },
+    { title: "角色背包", items: groups.inventory, tone: "red" },
+    { title: "仓库", items: groups.vault, tone: "green" },
+  ].filter((group) => group.items.length > 0);
+}
+
+function inventoryBucketGroups(items) {
+  const buckets = new Map();
+  for (const item of items) {
+    const title = inventoryBucketTitle(item);
+    if (!buckets.has(title)) {
+      buckets.set(title, { title, tone: inventoryBucketTone(item), items: [] });
+    }
+    buckets.get(title).items.push(item);
+  }
+  return Array.from(buckets.values())
+    .map((group) => ({
+      ...group,
+      items: group.items.slice().sort(compareInventoryItems),
+      order: inventoryBucketOrder(group.title),
+    }))
+    .sort((left, right) => left.order - right.order || left.title.localeCompare(right.title, "zh-CN"));
+}
+
+function inventoryBucketGroupHtml(group) {
+  return `
+    <section class="inventory-group">
+      <div class="inventory-group-title ${escapeHtml(group.tone || "green")}">
+        <strong>${escapeHtml(group.title)}</strong>
+        <span>${int(group.items.length)}</span>
+      </div>
+      <div class="inventory-grid">
+        ${group.items.map(inventoryItemCardHtml).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function inventoryItemCardHtml(item) {
+  const iconUrl = item?.iconPath ? bungieAssetUrl(item.iconPath) : "";
+  const tone = item?.locked ? "green" : "red";
+  const subtitle = [item?.itemTypeDisplayName, item?.bucketName, item?.power ? `光等 ${int(item.power)}` : ""]
+    .filter(Boolean)
+    .join(" · ");
+  const meta = [
+    item?.locked ? "已锁定" : "",
+    inventoryEnergyLabel(item),
+    inventoryClassLabel(item),
+    item?.itemInstanceId ? `ID ${item.itemInstanceId}` : item?.itemHash ? `Hash ${item.itemHash}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return `
+    <div class="inventory-item ${tone}">
+      <div class="inventory-icon ${iconUrl ? "" : "empty"}">
+        ${iconUrl ? `<img src="${escapeHtml(iconUrl)}" />` : "?"}
+      </div>
+      <div class="inventory-rail"></div>
+      <div class="inventory-item-main">
+        <strong>${escapeHtml(item?.name || "Unknown Item")}</strong>
+        <span>${escapeHtml(subtitle || ownerLabel(item?.owner))}</span>
+        <b>${escapeHtml(meta || ownerLabel(item?.owner))}</b>
+      </div>
+    </div>
+  `;
+}
+
+function equippedCharacterHtml(character, items) {
+  const sortedItems = items.slice().sort(compareInventoryItems);
+  return `
+    <section class="equipped-character">
+      <div class="equipped-character-head" style="${careerImageStyle(character?.emblemBackgroundPath || character?.emblemPath)}">
+        <div>
+          <strong>${escapeHtml(displayClassName(character))}</strong>
+          <span>${escapeHtml(character?.light ? `光等 ${int(character.light)}` : "当前角色")}</span>
+        </div>
+        <small>${escapeHtml(character?.dateLastPlayed ? `最后在线 ${dateOnly(character.dateLastPlayed)}` : "")}</small>
+      </div>
+      <div class="equipped-item-list">
+        ${sortedItems.map(inventoryItemCardHtml).join("") || emptyState("这个角色没有可显示的已装备物品。")}
+      </div>
+    </section>
+  `;
+}
+
+function filterInventoryItemsForView(items, view) {
+  if (view === "vault") {
+    return items.filter((item) => item?.owner === "vault");
+  }
+  if (view === "inventory") {
+    return items.filter((item) => item?.owner === "inventory");
+  }
+  if (view === "equipped") {
+    return items.filter((item) => item?.owner === "equipped");
+  }
+  return items;
+}
+
+function normalizeInventoryCharacters(inventory, equippedItems) {
+  const characters = Array.isArray(inventory?.characters) ? inventory.characters : [];
+  const byId = new Map();
+  for (const character of characters) {
+    const id = String(character?.characterId || "");
+    if (id) {
+      byId.set(id, character);
+    }
+  }
+  for (const item of equippedItems) {
+    const id = String(item?.characterId || "");
+    if (id && !byId.has(id)) {
+      byId.set(id, { characterId: id, className: `角色 ${shortInventoryId(id)}` });
+    }
+  }
+  return Array.from(byId.values()).sort(compareInventoryCharacters);
+}
+
+function compareInventoryCharacters(left, right) {
+  const leftPlayed = Date.parse(left?.dateLastPlayed || "") || 0;
+  const rightPlayed = Date.parse(right?.dateLastPlayed || "") || 0;
+  if (leftPlayed !== rightPlayed) {
+    return rightPlayed - leftPlayed;
+  }
+  return String(left?.characterId || "").localeCompare(String(right?.characterId || ""));
+}
+
+function compareInventoryItems(left, right) {
+  const bucketDelta = inventoryBucketOrder(inventoryBucketTitle(left)) - inventoryBucketOrder(inventoryBucketTitle(right));
+  if (bucketDelta !== 0) {
+    return bucketDelta;
+  }
+  return String(left?.name || "").localeCompare(String(right?.name || ""), "zh-CN");
+}
+
+function inventoryBucketTitle(item) {
+  return String(item?.bucketName || item?.itemTypeDisplayName || ownerLabel(item?.owner) || "其他").trim();
+}
+
+function inventoryBucketTone(item) {
+  if (item?.owner === "vault") {
+    return "green";
+  }
+  return item?.locked ? "green" : "red";
+}
+
+function inventoryBucketOrder(title) {
+  const text = String(title || "").toLowerCase();
+  const rules = [
+    [/kinetic|动能|主要|primary/u, 10],
+    [/energy|能量|特殊|secondary/u, 20],
+    [/power|威能|重武器|heavy/u, 30],
+    [/武器|weapon|步枪|手炮|冲锋枪|斥候|脉冲|弓|霰弹|狙击|融合|榴弹|机枪|刀剑|火箭/u, 40],
+    [/头盔|helmet|head/u, 50],
+    [/臂铠|手套|gauntlet|arms/u, 60],
+    [/胸甲|护胸|chest/u, 70],
+    [/腿甲|护腿|leg/u, 80],
+    [/职业|class item|bond|cloak|mark/u, 90],
+    [/护甲|armor/u, 100],
+    [/机灵|ghost/u, 110],
+    [/载具|快雀|sparrow/u, 120],
+    [/飞船|ship/u, 130],
+    [/徽标|emblem/u, 140],
+  ];
+  return rules.find(([pattern]) => pattern.test(text))?.[1] ?? 999;
+}
+
+function inventoryItemLooksLikeWeapon(item) {
+  return inventoryBucketOrder(inventoryBucketTitle(item)) <= 40;
+}
+
+function inventoryItemLooksLikeArmor(item) {
+  const order = inventoryBucketOrder(inventoryBucketTitle(item));
+  return order >= 50 && order <= 100;
+}
+
+function inventoryEnergyLabel(item) {
+  const capacity = Number(item?.energyCapacity || 0);
+  const used = Number(item?.energyUsed || 0);
+  if (capacity > 0 && used > 0) {
+    return `能量 ${used}/${capacity}`;
+  }
+  if (capacity > 0) {
+    return `能量 ${capacity}`;
+  }
+  return "";
+}
+
+function inventoryClassLabel(item) {
+  const classType = Number(item?.classType);
+  if (classType === 0) return "泰坦";
+  if (classType === 1) return "猎人";
+  if (classType === 2) return "术士";
+  return "";
+}
+
+function shortInventoryId(value) {
+  const text = String(value || "");
+  return text.length > 8 ? text.slice(-8) : text;
 }
 
 function renderCraftingHtml(player, craftables) {
@@ -2054,14 +2343,36 @@ function estimateCatalystsHeight(catalysts) {
   return Math.max(760, 330 + groupHeights);
 }
 
-function estimateInventoryHeight(inventory) {
-  const items = Array.isArray(inventory?.items) ? inventory.items.slice(0, 80) : [];
-  const groups = inventoryGroups(items);
-  const groupHeights = Object.values(groups).reduce((height, group) => {
-    if (!group.length) {
+function estimateInventoryHeight(inventory, params = {}) {
+  const view = normalizeInventoryView(params.view, params);
+  const allItems = Array.isArray(inventory?.items) ? inventory.items : [];
+
+  if (view === "vault") {
+    const groups = inventoryBucketGroups(filterInventoryItemsForView(allItems, "vault"));
+    const groupHeights = groups.reduce((height, group) => height + 72 + Math.ceil(Math.max(1, group.items.length) / 3) * 98, 0);
+    return Math.max(760, 360 + groupHeights);
+  }
+
+  if (view === "equipped") {
+    const equippedItems = filterInventoryItemsForView(allItems, "equipped");
+    const characters = normalizeInventoryCharacters(inventory, equippedItems);
+    const maxItems = Math.max(
+      1,
+      ...characters.map(
+        (character) => equippedItems.filter((item) => String(item?.characterId || "") === String(character.characterId || "")).length,
+      ),
+    );
+    return Math.max(760, 390 + maxItems * 98);
+  }
+
+  const scopedItems = filterInventoryItemsForView(allItems, view);
+  const items = view === "overview" ? scopedItems.slice(0, 80) : scopedItems;
+  const groups = view === "inventory" ? inventoryBucketGroups(items) : inventoryOwnerGroups(items);
+  const groupHeights = groups.reduce((height, group) => {
+    if (!group.items.length) {
       return height;
     }
-    return height + 72 + Math.ceil(Math.max(1, group.length) / 3) * 92;
+    return height + 72 + Math.ceil(Math.max(1, group.items.length) / 3) * 98;
   }, 0);
   return Math.max(720, 340 + groupHeights);
 }
@@ -2753,6 +3064,164 @@ function cardPage({ eyebrow, title, subtitle, body, player, width = CARD_WIDTH }
       font-weight: 900;
     }
     .crafting-item.green .crafting-item-main b { color: #21d07a; }
+    .inventory-groups {
+      display: grid;
+      gap: 18px;
+    }
+    .inventory-group {
+      padding: 18px 20px 20px;
+      background: rgba(17, 17, 17, 0.88);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 8px;
+    }
+    .inventory-group-title {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      max-width: 100%;
+      margin-bottom: 16px;
+      padding: 7px 12px;
+      border-radius: 999px;
+      color: #fff;
+      font-size: 15px;
+      font-weight: 950;
+    }
+    .inventory-group-title.red { background: #d84d4d; }
+    .inventory-group-title.green { background: #21a46a; }
+    .inventory-group-title span {
+      color: rgba(255, 255, 255, 0.82);
+      font-size: 13px;
+      font-weight: 850;
+    }
+    .inventory-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px 18px;
+    }
+    .inventory-item {
+      display: grid;
+      grid-template-columns: 54px 5px minmax(0, 1fr);
+      gap: 10px;
+      align-items: center;
+      min-height: 82px;
+      min-width: 0;
+      padding: 8px;
+      border-radius: 6px;
+      background: rgba(7, 7, 7, 0.46);
+    }
+    .inventory-icon {
+      width: 54px;
+      height: 54px;
+      display: grid;
+      place-items: center;
+      position: relative;
+      border-radius: 4px;
+      overflow: hidden;
+      color: #7f8a97;
+      font-size: 22px;
+      font-weight: 950;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.07);
+    }
+    .inventory-icon img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .inventory-rail {
+      width: 5px;
+      height: 58px;
+      border-radius: 999px;
+      background: #d84d4d;
+    }
+    .inventory-item.green .inventory-rail { background: #21d07a; }
+    .inventory-item-main {
+      min-width: 0;
+      display: grid;
+      gap: 3px;
+    }
+    .inventory-item-main strong {
+      color: #ffffff;
+      font-size: 15px;
+      line-height: 1.15;
+      font-weight: 950;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    .inventory-item-main span,
+    .inventory-item-main b {
+      display: block;
+      min-width: 0;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    .inventory-item-main span {
+      color: #aab4bf;
+      font-size: 12px;
+      line-height: 1.2;
+      font-weight: 800;
+    }
+    .inventory-item-main b {
+      color: #ff6b63;
+      font-size: 12px;
+      line-height: 1.2;
+      font-weight: 900;
+    }
+    .inventory-item.green .inventory-item-main b { color: #21d07a; }
+    .inventory-equipped-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 18px;
+      align-items: start;
+    }
+    .equipped-character {
+      min-width: 0;
+      padding: 16px;
+      border-radius: 8px;
+      background: rgba(17, 17, 17, 0.88);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .equipped-character-head {
+      min-height: 104px;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 14px;
+      margin-bottom: 12px;
+      border-radius: 7px;
+      background-color: rgba(255, 255, 255, 0.07);
+      background-size: cover;
+      background-position: center;
+      box-shadow: inset 0 -80px 80px rgba(0, 0, 0, 0.65);
+    }
+    .equipped-character-head strong,
+    .equipped-character-head span,
+    .equipped-character-head small {
+      display: block;
+      text-shadow: 0 1px 8px rgba(0, 0, 0, 0.86);
+    }
+    .equipped-character-head strong {
+      font-size: 24px;
+      line-height: 1.05;
+      font-weight: 950;
+    }
+    .equipped-character-head span {
+      margin-top: 3px;
+      color: #dfe6ee;
+      font-size: 15px;
+      font-weight: 850;
+    }
+    .equipped-character-head small {
+      color: #aab4bf;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .equipped-item-list {
+      display: grid;
+      gap: 10px;
+    }
     .catalyst-groups {
       display: grid;
       gap: 18px;
@@ -4382,6 +4851,26 @@ function normalizeInventoryBucket(value) {
     return bucket;
   }
   throw new D2StatsInputError("库存 bucket 只支持 all、vault、inventory、equipped。");
+}
+
+function normalizeInventoryView(value, params = {}) {
+  const view = String(value || "").trim();
+  if (view === "overview" || view === "vault" || view === "equipped" || view === "inventory" || view === "search") {
+    return view;
+  }
+  if (view) {
+    throw new D2StatsInputError("库存 view 只支持 overview、vault、equipped、inventory、search。");
+  }
+
+  const searchText = String(params.q || params.query || "").trim();
+  if (searchText) {
+    return "search";
+  }
+  const bucket = normalizeInventoryBucket(params.bucket);
+  if (bucket === "vault" || bucket === "equipped" || bucket === "inventory") {
+    return bucket;
+  }
+  return "overview";
 }
 
 function normalizeItemAction(value) {

@@ -614,7 +614,13 @@ export class DestinyService {
           mode,
           maxPagesPerCharacter,
           options.range
-        )
+        ).catch((error: unknown) => ({
+          activities: [],
+          pagesScanned: 0,
+          truncated: false,
+          partial: true,
+          error: heatmapErrorMessage(error)
+        }))
       )
     );
     const activities = perCharacter
@@ -638,6 +644,9 @@ export class DestinyService {
     const hours = [...hourBuckets.values()].sort((a, b) => Number(a.key) - Number(b.key));
     const pageCounts = perCharacter.map((result) => result.pagesScanned);
     const truncated = options.range !== "recent" && perCharacter.some((result) => result.truncated);
+    const partialErrors = perCharacter
+      .filter((result) => result.partial && result.error)
+      .map((result) => result.error as string);
 
     const result: HeatmapSummary = {
       membershipType,
@@ -656,12 +665,16 @@ export class DestinyService {
         pagesPerCharacter: pageCounts.length > 0 ? Math.max(...pageCounts) : 0,
         maxPagesPerCharacter,
         truncated,
+        partial: partialErrors.length > 0,
+        ...(partialErrors.length > 0 ? { errors: [...new Set(partialErrors)].slice(0, 5) } : {}),
         note:
           options.range === "recent"
             ? `最近 ${options.pages} 页公开活动历史`
-            : truncated
-              ? `已达到每角色 ${HEATMAP_FULL_HISTORY_MAX_PAGES} 页扫描上限，结果可能不完整`
-              : "已扫描到公开活动历史空页"
+            : partialErrors.length > 0
+              ? "Bungie 活动历史扫描部分失败，已返回成功扫描到的公开活动"
+              : truncated
+                ? `已达到每角色 ${HEATMAP_FULL_HISTORY_MAX_PAGES} 页扫描上限，结果可能不完整`
+                : "已扫描到公开活动历史空页"
       },
       updatedAt: new Date().toISOString()
     };
@@ -1410,31 +1423,49 @@ export class DestinyService {
     mode: ModeInfo,
     maxPages: number,
     range: HeatmapRange
-  ): Promise<{ activities: ActivitySummary[]; pagesScanned: number; truncated: boolean }> {
+  ): Promise<{ activities: ActivitySummary[]; pagesScanned: number; truncated: boolean; partial?: boolean; error?: string }> {
     if (range === "recent") {
-      const pages = await Promise.all(
+      const settledPages = await Promise.allSettled(
         Array.from({ length: maxPages }, (_, page) =>
           this.getCharacterActivities(membershipType, membershipId, characterId, mode, RAID_HISTORY_PAGE_SIZE, page)
         )
       );
+      const pages = settledPages
+        .filter((result): result is PromiseFulfilledResult<ActivitySummary[]> => result.status === "fulfilled")
+        .map((result) => result.value);
+      const errors = settledPages
+        .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+        .map((result) => heatmapErrorMessage(result.reason));
       return {
         activities: pages.flat(),
         pagesScanned: maxPages,
-        truncated: false
+        truncated: false,
+        ...(errors.length > 0 ? { partial: true, error: [...new Set(errors)].join("; ") } : {})
       };
     }
 
     const activities: ActivitySummary[] = [];
     let pagesScanned = 0;
     for (let page = 0; page < maxPages; page += 1) {
-      const pageActivities = await this.getCharacterActivities(
-        membershipType,
-        membershipId,
-        characterId,
-        mode,
-        RAID_HISTORY_PAGE_SIZE,
-        page
-      );
+      let pageActivities: ActivitySummary[];
+      try {
+        pageActivities = await this.getCharacterActivities(
+          membershipType,
+          membershipId,
+          characterId,
+          mode,
+          RAID_HISTORY_PAGE_SIZE,
+          page
+        );
+      } catch (error) {
+        return {
+          activities,
+          pagesScanned,
+          truncated: false,
+          partial: true,
+          error: heatmapErrorMessage(error)
+        };
+      }
       pagesScanned += 1;
       if (pageActivities.length === 0) {
         return { activities, pagesScanned, truncated: false };
@@ -3082,6 +3113,13 @@ function activityMatchesHeatmapRange(period: string, timezone: string, range: He
     return true;
   }
   return Number(heatmapKeys(period, timezone).day.slice(0, 4)) === year;
+}
+
+function heatmapErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return String(error || "unknown heatmap scan error");
 }
 
 function buildHeatmapCalendar(days: HeatmapBucket[], range: HeatmapRange, targetYear: number | undefined): HeatmapCalendarYear[] {

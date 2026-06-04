@@ -4,7 +4,7 @@ Adds OpenClaw tools:
 
 - `destiny2_card_query`: fetches Destiny 2 JSON data, renders an HTML card inside OpenClaw, then returns it as a PNG image tool result. It supports `help`, `summary`, `career`, `profile`, `namecard`, `pvp`, `weapons`, `crafting`, `catalysts`, `grandmasters`, `raid_overview`, `dungeon_overview`, `heatmap`, `activities`, `latest_activity`, and `activity`.
 - `destiny2_bind_qq`: creates a QQ -> Bungie membership binding. If no Bungie target is provided, it returns a 3-minute Bungie OAuth binding link.
-- `destiny2_inventory_query`: queries the QQ OAuth owner's inventory/vault/equipped items and returns an image card.
+- `destiny2_inventory_query`: queries the QQ OAuth owner's inventory/vault/equipped items and returns an image card. It supports `view=vault`, `view=equipped`, `view=inventory`, `view=overview`, and `view=search`.
 - `destiny2_item_action`: safely transfers, equips, bulk-equips, locks/unlocks, or equips an in-game loadout after explicit confirmation.
 
 Default backend:
@@ -54,9 +54,11 @@ with a QQ number; direct `BungieName#1234` and `membershipType:membershipId`
 targets are rejected because catalyst progress comes from private Bungie
 `Records` / `Collectibles` components.
 
-Inventory and equipment operations are also QQ OAuth only. Use `/仓库搜索` or
-`/库存` first to identify itemInstanceId/characterId, then run `/装备`, `/转移`,
-`/锁定`, `/解锁`, or `/套装`; write operations must be confirmed before execution.
+Inventory and equipment operations are also QQ OAuth only. Use `/仓库` for a full
+vault long image, `/装备` or `/当前装备` for the currently equipped gear by
+character, `/背包` for carried inventory, and `/仓库搜索` to identify
+itemInstanceId/characterId. Write operations such as `/转移`, `/锁定`, `/解锁`,
+`/套装`, or equipping a specific item must be confirmed before execution.
 
 Card rendering does not call backend `/api/d2/cards/*.png` endpoints. The plugin
 uses `/api/d2/profile`, `/summary`, `/career`, `/pvp`, `/raids`,
