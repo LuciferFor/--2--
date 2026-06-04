@@ -10,6 +10,7 @@ const CARDS = new Set([
   "pvp",
   "weapons",
   "crafting",
+  "catalysts",
   "raid_overview",
   "dungeon_overview",
   "heatmap",
@@ -143,6 +144,14 @@ export function buildPublicDataUrl(kind, target, params = {}, config = resolveCo
 
   if (kind === "craftables") {
     return `${config.baseUrl}/api/d2/craftables/${target.membershipType}/${target.membershipId}`;
+  }
+
+  if (kind === "catalysts") {
+    const qq = String(target?.qq || params.qq || "").trim();
+    if (!/^[0-9]{5,15}$/u.test(qq)) {
+      throw new D2StatsInputError("催化进度需要 QQ OAuth 授权，请用已绑定 QQ 查询。");
+    }
+    return `${config.baseUrl}/api/d2/catalysts/qq/${encodeURIComponent(qq)}`;
   }
 
   if (kind === "activities") {
@@ -320,6 +329,30 @@ async function renderCardFromPublicJson(card, params, config, options) {
       height: 650,
       sourceUrl,
       html: renderActivityHtml(pgcr),
+    };
+  }
+
+  if (card === "catalysts") {
+    const target = parseTarget(params.target, config);
+    if (target.kind !== "qq") {
+      throw new D2StatsInputError("催化进度需要 QQ OAuth 授权，请用已绑定 QQ 查询。");
+    }
+    const resolved = await withCardIdentity(await resolveTargetMembership(params.target, config, options), config, options);
+    const sourceUrl = buildPublicDataUrl("catalysts", target, params, config);
+    let catalysts;
+    try {
+      catalysts = await fetchEnvelope(sourceUrl, config, options);
+    } catch (error) {
+      if (error instanceof D2StatsBackendError && (error.status === 401 || error.status === 403)) {
+        throw new D2StatsInputError(await startQqOauthBindingMessage(target.qq, config, options));
+      }
+      throw error;
+    }
+    return {
+      width: HEATMAP_CARD_WIDTH,
+      height: estimateCatalystsHeight(catalysts),
+      sourceUrl,
+      html: renderCatalystsHtml(resolved.player, catalysts),
     };
   }
 
@@ -1200,6 +1233,88 @@ function craftingIconHtml(item) {
   `;
 }
 
+function renderCatalystsHtml(player, catalysts) {
+  const groups = Array.isArray(catalysts?.groups) ? catalysts.groups : [];
+  return cardPage({
+    width: HEATMAP_CARD_WIDTH,
+    player,
+    title: formatPlayerName(player),
+    eyebrow: "DESTINY 2 CATALYSTS",
+    subtitle: `催化进度 · ${dateOnly(catalysts?.updatedAt)}`,
+    body: `
+      <section class="metrics metrics-4">
+        ${metric("催化", int(catalysts?.totals?.catalysts))}
+        ${metric("已完成", int(catalysts?.totals?.completed))}
+        ${metric("未完成", int(catalysts?.totals?.incomplete))}
+        ${metric("完成率", catalystsRate(catalysts))}
+      </section>
+      <section class="catalyst-groups">
+        ${groups.map((group) => renderCatalystGroup(group)).join("") || emptyState("没有可显示的催化进度。")}
+      </section>
+      <footer class="card-footer">${escapeHtml(catalysts?.scan?.note || "催化进度需要 QQ OAuth 授权读取 Bungie Records/Collectibles。")}</footer>
+      ${membershipBlock(catalysts?.membershipType, catalysts?.membershipId)}
+    `,
+  });
+}
+
+function renderCatalystGroup(group) {
+  const items = Array.isArray(group?.items) ? group.items : [];
+  return `
+    <section class="catalyst-group">
+      <div class="catalyst-group-title">
+        <strong>${escapeHtml(group?.name || "催化武器")}</strong>
+        <span>${int(group?.completed)} / ${int(group?.total)} 已完成</span>
+      </div>
+      <div class="catalyst-grid">
+        ${items.map((item) => renderCatalystItem(item)).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderCatalystItem(item) {
+  const completed = Boolean(item?.completed);
+  const percentValue = Math.max(0, Math.min(100, Number(item?.percent || 0)));
+  const progressText =
+    Number(item?.completionValue || 0) > 0
+      ? `${int(item?.progress)} / ${int(item?.completionValue)}`
+      : completed
+        ? "已完成"
+        : "未完成";
+  return `
+    <div class="catalyst-item ${completed ? "complete" : "incomplete"}">
+      ${catalystIconHtml(item)}
+      <div class="catalyst-main">
+        <div class="catalyst-title-row">
+          <strong>${escapeHtml(item?.name || "Unknown")}</strong>
+          ${completed ? badge("完成", "ok") : badge("进行中", "")}
+        </div>
+        <span>${escapeHtml(item?.itemTypeDisplayName || item?.slotLabel || "催化")}</span>
+        <p>${escapeHtml(shortText(item?.description || "催化进度记录", 52))}</p>
+        <div class="catalyst-progress">
+          <div><b style="width:${percentValue}%"></b></div>
+          <em>${escapeHtml(progressText)} · ${fixed(percentValue, 1)}%</em>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function catalystIconHtml(item) {
+  const iconUrl = item?.iconPath ? bungieAssetUrl(item.iconPath) : "";
+  return `
+    <div class="catalyst-icon ${iconUrl ? "" : "empty"}">
+      ${iconUrl ? `<img src="${escapeHtml(iconUrl)}" />` : "◇"}
+    </div>
+  `;
+}
+
+function catalystsRate(catalysts) {
+  const total = Number(catalysts?.totals?.catalysts || 0);
+  const completed = Number(catalysts?.totals?.completed || 0);
+  return total > 0 ? `${fixed((completed / total) * 100, 1)}%` : "0%";
+}
+
 function renderActivityHtml(pgcr, player) {
   const players = Array.isArray(pgcr?.players) ? pgcr.players.slice(0, 8) : [];
   return cardPage({
@@ -1477,6 +1592,15 @@ function estimateCraftingHeight(craftables) {
     return height + 72 + Math.ceil(Math.max(1, itemCount) / 3) * 92;
   }, 0);
   return Math.max(720, 330 + groupHeights);
+}
+
+function estimateCatalystsHeight(catalysts) {
+  const groups = Array.isArray(catalysts?.groups) ? catalysts.groups : [];
+  const groupHeights = groups.reduce((height, group) => {
+    const itemCount = Array.isArray(group?.items) ? group.items.length : 0;
+    return height + 78 + Math.ceil(Math.max(1, itemCount) / 3) * 148;
+  }, 0);
+  return Math.max(760, 330 + groupHeights);
 }
 
 function sumClientHeatmapBuckets(buckets) {
@@ -2151,6 +2275,147 @@ function cardPage({ eyebrow, title, subtitle, body, player, width = CARD_WIDTH }
       font-weight: 900;
     }
     .crafting-item.green .crafting-item-main b { color: #21d07a; }
+    .catalyst-groups {
+      display: grid;
+      gap: 18px;
+    }
+    .catalyst-group {
+      padding: 18px 20px 20px;
+      background: rgba(17, 17, 17, 0.88);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 8px;
+    }
+    .catalyst-group-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 16px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .catalyst-group-title strong {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: #ffffff;
+      font-size: 22px;
+      font-weight: 950;
+    }
+    .catalyst-group-title span {
+      flex: 0 0 auto;
+      color: #21d07a;
+      font-size: 15px;
+      font-weight: 900;
+    }
+    .catalyst-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .catalyst-item {
+      min-width: 0;
+      min-height: 132px;
+      display: grid;
+      grid-template-columns: 58px minmax(0, 1fr);
+      gap: 12px;
+      padding: 12px;
+      border-radius: 7px;
+      background: rgba(6, 6, 6, 0.48);
+      border: 1px solid rgba(255, 255, 255, 0.035);
+    }
+    .catalyst-item.complete {
+      border-color: rgba(33, 208, 122, 0.18);
+    }
+    .catalyst-icon {
+      width: 58px;
+      height: 58px;
+      display: grid;
+      place-items: center;
+      border-radius: 5px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, 0.07);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: #8895a3;
+      font-size: 28px;
+      font-weight: 900;
+    }
+    .catalyst-icon img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .catalyst-main {
+      min-width: 0;
+      display: grid;
+      gap: 4px;
+      align-content: start;
+    }
+    .catalyst-title-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 6px;
+    }
+    .catalyst-title-row strong,
+    .catalyst-main span,
+    .catalyst-main p,
+    .catalyst-progress em {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .catalyst-title-row strong {
+      color: #ffffff;
+      font-size: 15px;
+      line-height: 1.15;
+      font-weight: 950;
+      white-space: nowrap;
+    }
+    .catalyst-main span {
+      color: #aab4bf;
+      font-size: 12px;
+      line-height: 1.15;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    .catalyst-main p {
+      height: 34px;
+      margin: 0;
+      color: #858d96;
+      font-size: 11px;
+      line-height: 1.45;
+    }
+    .catalyst-progress {
+      display: grid;
+      gap: 5px;
+      margin-top: 2px;
+    }
+    .catalyst-progress div {
+      height: 7px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.08);
+    }
+    .catalyst-progress b {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: #ff6b63;
+    }
+    .catalyst-item.complete .catalyst-progress b {
+      background: #21d07a;
+    }
+    .catalyst-progress em {
+      color: #d6dde6;
+      font-size: 12px;
+      line-height: 1.1;
+      font-style: normal;
+      font-weight: 850;
+      white-space: nowrap;
+    }
     .career-hero-strip,
     .career-season-panel,
     .career-breakdown-panel,
@@ -3330,6 +3595,9 @@ function inferCardFromCommand(value) {
   if (/锻造|图纸|craft|pattern/u.test(command)) {
     return "crafting";
   }
+  if (/催化|catalyst/u.test(command)) {
+    return "catalysts";
+  }
   if (/raid|突袭|无暇|day\s*one|dayone/u.test(command)) {
     return "raid_overview";
   }
@@ -3541,6 +3809,14 @@ function dateOnly(value) {
     return String(value).slice(0, 10);
   }
   return date.toISOString().slice(0, 10);
+}
+
+function shortText(value, maxLength) {
+  const text = String(value || "").replace(/\s+/gu, " ").trim();
+  if (text.length <= maxLength) {
+    return text;
+  }
+  return `${text.slice(0, Math.max(0, maxLength - 1))}…`;
 }
 
 function escapeHtml(value) {

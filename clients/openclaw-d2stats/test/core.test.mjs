@@ -43,6 +43,9 @@ describe("d2stats core", () => {
     const crafting = buildPublicDataUrl("craftables", target, {}, resolveConfig({ baseUrl: "http://d2.local" }));
     assert.equal(crafting, "http://d2.local/api/d2/craftables/3/4611686018428939884");
 
+    const catalysts = buildPublicDataUrl("catalysts", { qq: "607972716" }, {}, resolveConfig({ baseUrl: "http://d2.local" }));
+    assert.equal(catalysts, "http://d2.local/api/d2/catalysts/qq/607972716");
+
     const dungeons = buildPublicDataUrl("dungeons", target, { historyPages: 3 }, resolveConfig({ baseUrl: "http://d2.local" }));
     assert.equal(dungeons, "http://d2.local/api/d2/dungeons/3/4611686018428939884?historyPages=3");
 
@@ -522,6 +525,140 @@ describe("d2stats core", () => {
     ]);
     assert.equal(result.content[0].type, "image");
     assert.equal(result.details.card, "crafting");
+  });
+
+  it("renders catalyst cards for QQ OAuth targets", async () => {
+    const calls = [];
+    const result = await queryCard(
+      { target: "607972716", command: "/催化" },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async (url) => {
+          calls.push(String(url));
+          if (String(url).includes("/bindings/qq/")) {
+            return jsonResponse({
+              success: true,
+              data: {
+                qq: "607972716",
+                membershipType: 3,
+                membershipId: "4611686018428939884",
+                bungieName: "Lucifer#8571",
+                displayName: "Lucifer",
+                displayNameCode: 8571,
+              },
+            });
+          }
+          if (String(url).includes("/namecard/")) {
+            return jsonResponse({
+              success: true,
+              data: {
+                membershipType: 3,
+                membershipId: "4611686018428939884",
+                profile: {
+                  bungieName: "Lucifer#8571",
+                  displayName: "Lucifer",
+                  displayNameCode: 8571,
+                  characters: [
+                    {
+                      className: "Warlock",
+                      light: 2020,
+                      dateLastPlayed: "2026-06-03T00:00:00.000Z",
+                      emblemPath: "/common/destiny2_content/icons/current-icon.jpg",
+                      emblemBackgroundPath: "/common/destiny2_content/icons/current-card.jpg",
+                    },
+                  ],
+                },
+              },
+            });
+          }
+          assert.equal(String(url), "http://d2.local/api/d2/catalysts/qq/607972716");
+          return jsonResponse({
+            success: true,
+            data: {
+              membershipType: 3,
+              membershipId: "4611686018428939884",
+              totals: { groups: 1, catalysts: 2, completed: 1, incomplete: 1, visible: 2 },
+              groups: [
+                {
+                  key: "power",
+                  name: "威能武器",
+                  total: 2,
+                  completed: 1,
+                  incomplete: 1,
+                  items: [
+                    {
+                      recordHash: "700",
+                      weaponHash: "201",
+                      name: "纪念",
+                      iconPath: "/icon1.jpg",
+                      itemTypeDisplayName: "机枪",
+                      slot: "power",
+                      slotLabel: "威能武器",
+                      completed: false,
+                      redeemed: false,
+                      visible: true,
+                      percent: 50,
+                      progress: 50,
+                      completionValue: 100,
+                      objectives: [{ objectiveHash: "9001", progress: 50, completionValue: 100, complete: false }],
+                    },
+                    {
+                      recordHash: "701",
+                      name: "赴险者",
+                      itemTypeDisplayName: "微型冲锋枪",
+                      slot: "energy",
+                      slotLabel: "能量武器",
+                      completed: true,
+                      redeemed: true,
+                      visible: true,
+                      percent: 100,
+                      progress: 100,
+                      completionValue: 100,
+                      objectives: [{ objectiveHash: "9002", progress: 100, completionValue: 100, complete: true }],
+                    },
+                  ],
+                },
+              ],
+              scan: { note: "催化进度来自 Bungie OAuth Profile Records/Collectibles。" },
+              updatedAt: "2026-06-03T00:00:00.000Z",
+            },
+          });
+        },
+        renderHtmlToPng: async (html) => {
+          assert.match(html, /DESTINY 2 CATALYSTS/);
+          assert.match(html, /Lucifer#8571/);
+          assert.match(html, /催化进度/);
+          assert.match(html, /纪念/);
+          assert.match(html, /赴险者/);
+          assert.match(html, /50 \/ 100/);
+          return Buffer.from("png-bytes");
+        },
+      },
+    );
+
+    assert.deepEqual(calls, [
+      "http://d2.local/api/d2/bindings/qq/607972716",
+      "http://d2.local/api/d2/namecard/3/4611686018428939884",
+      "http://d2.local/api/d2/catalysts/qq/607972716",
+    ]);
+    assert.equal(result.content[0].type, "image");
+    assert.equal(result.details.card, "catalysts");
+  });
+
+  it("does not query catalysts by public Bungie membership targets", async () => {
+    const result = await queryCard(
+      { target: "3:4611686018428939884", card: "catalysts" },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async () => {
+          throw new Error("catalyst query should reject before backend fetch");
+        },
+        renderHtmlToPng: async () => Buffer.from("should-not-render"),
+      },
+    );
+
+    assert.equal(result.content[0].type, "text");
+    assert.match(result.content[0].text, /催化进度需要 QQ OAuth 授权/);
   });
 
   it("supports direct activity PGCR rendering", async () => {

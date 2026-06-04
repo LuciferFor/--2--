@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import { MemoryCacheStore } from "../src/cache/cache.js";
 import { makeTestConfig } from "../src/config.js";
@@ -354,6 +354,48 @@ const fakeDestinyService = {
       scan: { characterCount: 1, rootNodeHash: "123", note: "test" },
       updatedAt: "2026-06-03T00:00:00.000Z"
     };
+  },
+  async getCatalysts() {
+    return {
+      membershipType: 3,
+      membershipId: "4611686018",
+      totals: { groups: 1, catalysts: 1, completed: 0, incomplete: 1, visible: 1 },
+      groups: [
+        {
+          key: "power",
+          name: "威能武器",
+          total: 1,
+          completed: 0,
+          incomplete: 1,
+          items: [
+            {
+              recordHash: "700",
+              weaponHash: "201",
+              name: "纪念",
+              itemTypeDisplayName: "机枪",
+              slot: "power",
+              slotLabel: "威能武器",
+              completed: false,
+              redeemed: false,
+              visible: true,
+              percent: 50,
+              progress: 50,
+              completionValue: 100,
+              objectives: [{ objectiveHash: "9001", progress: 50, completionValue: 100, complete: false }]
+            }
+          ]
+        }
+      ],
+      scan: {
+        recordDefinitions: 1,
+        candidateRecords: 1,
+        recordsReturned: 1,
+        collectiblesReturned: 1,
+        catalystPresentationRecords: 1,
+        note: "test"
+      },
+      updatedAt: "2026-06-03T00:00:00.000Z"
+    };
   }
 };
 
@@ -627,6 +669,83 @@ describe("Fastify routes", () => {
     const token = await store.getQqOAuthToken("607972716");
     expect(token?.accessTokenEncrypted).not.toContain("access-token");
     expect(token?.refreshTokenEncrypted).not.toContain("refresh-token");
+    await app.close();
+  });
+
+  it("returns catalyst progress only for the QQ OAuth bound membership", async () => {
+    const store = new NullStore();
+    await store.createQqBinding({
+      qq: "607972716",
+      membershipType: 3,
+      membershipId: "4611686018",
+      bungieName: "Guardian#0007",
+      displayName: "Guardian",
+      displayNameCode: 7
+    });
+    await store.upsertQqOAuthToken({
+      qq: "607972716",
+      bungieMembershipId: "4352344",
+      membershipType: 3,
+      membershipId: "4611686018",
+      accessTokenEncrypted: "encrypted-access",
+      accessExpiresAt: new Date(Date.now() + 3600_000).toISOString()
+    });
+    const qqOAuthService = {
+      getValidAccessTokenForQq: vi.fn(async () => "access-token")
+    };
+    const app = await buildApp({
+      config: makeTestConfig(),
+      cache: new MemoryCacheStore(),
+      store,
+      destinyService: fakeDestinyService as never,
+      cardService: fakeCardService as never,
+      qqOAuthService: qqOAuthService as never
+    });
+
+    const response = await app.inject({ method: "GET", url: "/api/d2/catalysts/qq/607972716" });
+    expect(response.statusCode).toBe(200);
+    expect(qqOAuthService.getValidAccessTokenForQq).toHaveBeenCalledWith("607972716");
+    expect(response.json()).toMatchObject({
+      success: true,
+      data: {
+        totals: { catalysts: 1 },
+        groups: [{ key: "power", items: [{ name: "纪念", percent: 50 }] }]
+      }
+    });
+    await app.close();
+  });
+
+  it("rejects catalyst progress when QQ OAuth token membership differs from binding", async () => {
+    const store = new NullStore();
+    await store.createQqBinding({
+      qq: "607972716",
+      membershipType: 3,
+      membershipId: "4611686018"
+    });
+    await store.upsertQqOAuthToken({
+      qq: "607972716",
+      bungieMembershipId: "4352344",
+      membershipType: 3,
+      membershipId: "4611686019",
+      accessTokenEncrypted: "encrypted-access",
+      accessExpiresAt: new Date(Date.now() + 3600_000).toISOString()
+    });
+    const qqOAuthService = {
+      getValidAccessTokenForQq: vi.fn(async () => "access-token")
+    };
+    const app = await buildApp({
+      config: makeTestConfig(),
+      cache: new MemoryCacheStore(),
+      store,
+      destinyService: fakeDestinyService as never,
+      cardService: fakeCardService as never,
+      qqOAuthService: qqOAuthService as never
+    });
+
+    const response = await app.inject({ method: "GET", url: "/api/d2/catalysts/qq/607972716" });
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toMatchObject({ success: false, error: { code: "OAUTH_REQUIRED" } });
+    expect(qqOAuthService.getValidAccessTokenForQq).not.toHaveBeenCalled();
     await app.close();
   });
 

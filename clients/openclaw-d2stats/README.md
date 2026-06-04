@@ -2,7 +2,7 @@
 
 Adds two OpenClaw tools:
 
-- `destiny2_card_query`: fetches public Destiny 2 JSON data, renders an HTML card inside OpenClaw, then returns it as a PNG image tool result. It supports `help`, `summary`, `career`, `profile`, `namecard`, `pvp`, `weapons`, `crafting`, `raid_overview`, `dungeon_overview`, `heatmap`, `activities`, `latest_activity`, and `activity`.
+- `destiny2_card_query`: fetches Destiny 2 JSON data, renders an HTML card inside OpenClaw, then returns it as a PNG image tool result. It supports `help`, `summary`, `career`, `profile`, `namecard`, `pvp`, `weapons`, `crafting`, `catalysts`, `raid_overview`, `dungeon_overview`, `heatmap`, `activities`, `latest_activity`, and `activity`.
 - `destiny2_bind_qq`: creates a QQ -> Bungie membership binding. If no Bungie target is provided, it returns a 3-minute Bungie OAuth binding link.
 
 Default backend:
@@ -27,9 +27,14 @@ endpoint and returns the binding link text instead of asking the user to provide
 JSON or backend details.
 
 It also accepts command aliases such as `/帮助`, `/战绩`, `/生涯`, `/pvp`,
-`/raid`, `/地牢`, `/热力图`, `/名片`, `/最近`, `/活动`, `/武器`, `/锻造`, and `/资料`.
+`/raid`, `/地牢`, `/热力图`, `/名片`, `/最近`, `/活动`, `/武器`, `/锻造`, `/催化`, and `/资料`.
+
+Catalyst progress is intentionally QQ OAuth only. Use `card=catalysts` or `/催化`
+with a QQ number; direct `BungieName#1234` and `membershipType:membershipId`
+targets are rejected because catalyst progress comes from private Bungie
+`Records` / `Collectibles` components.
 
 Card rendering does not call backend `/api/d2/cards/*.png` endpoints. The plugin
 uses `/api/d2/profile`, `/summary`, `/career`, `/pvp`, `/raids`,
-`/dungeons`, `/heatmap`, `/namecard`, `/activities`, `/pgcr`, `/weapons`, and `/craftables`,
+`/dungeons`, `/heatmap`, `/namecard`, `/activities`, `/pgcr`, `/weapons`, `/craftables`, and `/catalysts/qq`,
 then owns the HTML/CSS layout itself.

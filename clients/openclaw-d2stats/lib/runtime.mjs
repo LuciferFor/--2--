@@ -23,6 +23,7 @@ const cardQueryParameters = {
         "pvp",
         "weapons",
         "crafting",
+        "catalysts",
         "raid_overview",
         "dungeon_overview",
         "heatmap",
@@ -31,7 +32,7 @@ const cardQueryParameters = {
         "activity",
       ],
       description:
-        "HTML-rendered image card type. Use help for command menu, career for all-mode career stats, crafting for craftable weapon patterns, pvp for crucible/trials, dungeon_overview for per-dungeon clears/fastest, heatmap for activity distribution, activities for recent activity list, raid_overview for per-raid clears/fastest/flawless/day-one overview, latest_activity for one recent PGCR, activity for a known PGCR activityId.",
+        "HTML-rendered image card type. Use help for command menu, career for all-mode career stats, crafting for craftable weapon patterns, catalysts for QQ OAuth catalyst progress, pvp for crucible/trials, dungeon_overview for per-dungeon clears/fastest, heatmap for activity distribution, activities for recent activity list, raid_overview for per-raid clears/fastest/flawless/day-one overview, latest_activity for one recent PGCR, activity for a known PGCR activityId.",
     },
     mode: {
       type: "string",
@@ -107,8 +108,7 @@ export function registerD2StatsRuntime(api, options = {}) {
     {
       name: "destiny2_card_query",
       description:
-        "Return Destiny 2 public stat data as an OpenClaw-rendered HTML PNG card. Use card=help for the menu, card=career for career overview, card=pvp for PvP/trials, card=dungeon_overview for dungeon stats, card=heatmap for activity heatmap, card=activities for recent activity history, and card=raid_overview when the user asks for raid overview, per-raid clears, day-one, or flawless raid stats. Prefer this tool for Destiny 2 stats, PvP, trials, weapons, profile, or recent activity. If a QQ number is unbound, the tool returns a 3-minute Bungie OAuth binding link.",
-        "Return Destiny 2 public stat data as an OpenClaw-rendered HTML PNG card. Use card=help for the menu, card=career for career overview, card=crafting for craftable weapon patterns/锻造, card=pvp for PvP/trials, card=dungeon_overview for dungeon stats, card=heatmap for activity heatmap, card=activities for recent activity history, and card=raid_overview when the user asks for raid overview, per-raid clears, day-one, or flawless raid stats. Prefer this tool for Destiny 2 stats, PvP, trials, weapons, crafting, profile, or recent activity. If a QQ number is unbound, the tool returns a 3-minute Bungie OAuth binding link.",
+        "Return Destiny 2 stat data as an OpenClaw-rendered HTML PNG card. Use card=help for the menu, card=career for career overview, card=crafting for craftable weapon patterns/锻造, card=catalysts for QQ OAuth catalyst progress/催化, card=pvp for PvP/trials, card=dungeon_overview for dungeon stats, card=heatmap for activity heatmap, card=activities for recent activity history, and card=raid_overview when the user asks for raid overview, per-raid clears, day-one, or flawless raid stats. Prefer this tool for Destiny 2 stats, PvP, trials, weapons, catalysts, crafting, profile, or recent activity. If a QQ number is unbound or lacks OAuth, the tool returns a 3-minute Bungie OAuth binding link.",
       parameters: cardQueryParameters,
       async execute(_toolCallId, params, signal) {
         const config = getConfig();

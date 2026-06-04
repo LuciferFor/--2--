@@ -471,6 +471,7 @@ function isAllowedD2Path(path: string): boolean {
     /^\/api\/d2\/vault\/[^/?#]+\/[^/?#]+\/search$/,
     /^\/api\/d2\/inventory\/[^/?#]+\/[^/?#]+\/weapons$/,
     /^\/api\/d2\/catalysts\/[^/?#]+\/[^/?#]+$/,
+    /^\/api\/d2\/catalysts\/qq\/[^/?#]+$/,
     /^\/api\/d2\/titles\/[^/?#]+\/[^/?#]+$/,
     /^\/api\/d2\/skins\/[^/?#]+\/[^/?#]+$/,
     /^\/api\/d2\/cards\/summary\.png$/,

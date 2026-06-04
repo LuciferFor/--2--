@@ -2,7 +2,7 @@ import type { CacheStore } from "../cache/cache.js";
 import type { Store } from "../db/store.js";
 import { BadRequestError, NotFoundError } from "../lib/errors.js";
 import { asArray, asBoolean, asNumber, asRecord, asString, numberFrom, optionalNumber, optionalString } from "../lib/json.js";
-import { CACHE_TTL, CRAFTABLES_COMPONENTS, PROFILE_COMPONENTS } from "./constants.js";
+import { CACHE_TTL, CATALYST_COMPONENTS, CRAFTABLES_COMPONENTS, PROFILE_COMPONENTS } from "./constants.js";
 import { parseBungieName } from "./bungie-name.js";
 import type { BungieClient } from "./bungie-client.js";
 import type {
@@ -12,6 +12,11 @@ import type {
   ActivitySummary,
   CareerModeSummary,
   CareerSummary,
+  CatalystObjectiveSummary,
+  CatalystSlot,
+  CatalystWeaponGroup,
+  CatalystWeaponSummary,
+  CatalystsSummary,
   CharacterSummary,
   CraftableWeaponGroup,
   CraftableWeaponSummary,
@@ -50,6 +55,16 @@ import {
 const RAID_MODE_TYPE = 4;
 const RAID_HISTORY_PAGE_SIZE = 250;
 const HEATMAP_FULL_HISTORY_MAX_PAGES = 100;
+const KINETIC_BUCKET_HASHES = new Set([1498876634]);
+const ENERGY_BUCKET_HASHES = new Set([2465295065]);
+const POWER_BUCKET_HASHES = new Set([953998645]);
+const CATALYST_SLOT_ORDER: CatalystSlot[] = ["kinetic", "energy", "power", "unknown"];
+const CATALYST_SLOT_LABELS: Record<CatalystSlot, string> = {
+  kinetic: "动能武器",
+  energy: "能量武器",
+  power: "威能武器",
+  unknown: "未知武器"
+};
 
 export class DestinyService {
   constructor(
@@ -533,6 +548,87 @@ export class DestinyService {
     };
 
     await this.cache.setJson(cacheKey, result, CACHE_TTL.craftables);
+    return result;
+  }
+
+  async getCatalysts(membershipType: number, membershipId: string, accessToken: string): Promise<CatalystsSummary> {
+    const cacheKey = `d2:catalysts:${membershipType}:${membershipId}`;
+    const cached = await this.cache.getJson<CatalystsSummary>(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const response = await this.client.get<unknown>(`/Destiny2/${membershipType}/Profile/${membershipId}/`, {
+      query: {
+        components: [...CATALYST_COMPONENTS]
+      },
+      headers: {
+        Authorization: `Bearer ${accessToken}`
+      }
+    });
+    const profileResponse = asRecord(response);
+    const recordComponents = mergeProfileRecordComponents(profileResponse);
+    const collectibleCount = countProfileCollectibles(profileResponse);
+    const recordDefinitions = await this.manifest.getDefinitionMap<RecordDefinition>("DestinyRecordDefinition");
+    const catalystPresentationRecords = await this.getCatalystPresentationRecordHashes();
+    const candidateHashes = await this.getCatalystRecordCandidates(recordDefinitions, catalystPresentationRecords);
+    const inventoryDefinitions = await this.safeInventoryDefinitions();
+    const groups = new Map<CatalystSlot, CatalystWeaponGroup>();
+
+    for (const recordHash of candidateHashes) {
+      const definition = recordDefinitions[recordHash];
+      if (!definition) {
+        continue;
+      }
+      const item = this.toCatalystWeapon(recordHash, definition, recordComponents.get(recordHash), inventoryDefinitions);
+      const group = groups.get(item.slot) ?? {
+        key: item.slot,
+        name: item.slotLabel,
+        total: 0,
+        completed: 0,
+        incomplete: 0,
+        items: []
+      };
+      group.total += 1;
+      if (item.completed) {
+        group.completed += 1;
+      } else {
+        group.incomplete += 1;
+      }
+      group.items.push(item);
+      groups.set(item.slot, group);
+    }
+
+    const orderedGroups = CATALYST_SLOT_ORDER.map((slot) => groups.get(slot))
+      .filter((group): group is CatalystWeaponGroup => Boolean(group))
+      .map((group) => ({
+        ...group,
+        items: group.items.sort(compareCatalysts)
+      }));
+
+    const result: CatalystsSummary = {
+      membershipType,
+      membershipId,
+      totals: {
+        groups: orderedGroups.length,
+        catalysts: orderedGroups.reduce((sum, group) => sum + group.total, 0),
+        completed: orderedGroups.reduce((sum, group) => sum + group.completed, 0),
+        incomplete: orderedGroups.reduce((sum, group) => sum + group.incomplete, 0),
+        visible: orderedGroups.reduce((sum, group) => sum + group.items.filter((item) => item.visible).length, 0)
+      },
+      groups: orderedGroups,
+      scan: {
+        recordDefinitions: Object.keys(recordDefinitions).length,
+        candidateRecords: candidateHashes.length,
+        recordsReturned: recordComponents.size,
+        collectiblesReturned: collectibleCount,
+        catalystPresentationRecords: catalystPresentationRecords.size,
+        note: "催化进度来自 Bungie OAuth Profile Records/Collectibles；武器归属优先使用记录奖励物品，缺失时按名称匹配。"
+      },
+      updatedAt: new Date().toISOString()
+    };
+
+    await this.cache.setJson(cacheKey, result, CACHE_TTL.catalysts);
     return result;
   }
 
@@ -1053,6 +1149,112 @@ export class DestinyService {
       failedRequirementIndexes,
       requirementCount,
       socketCount
+    };
+  }
+
+  private async getCatalystPresentationRecordHashes(): Promise<Set<string>> {
+    const result = new Set<string>();
+    try {
+      const definitions = await this.manifest.getDefinitionMap<PresentationNodeDefinition>("DestinyPresentationNodeDefinition");
+      const catalystRoots = Object.entries(definitions)
+        .filter(([, definition]) => isCatalystText(definition.displayProperties?.name, definition.displayProperties?.description))
+        .map(([hash]) => hash);
+
+      const visit = (hashIdentifier: string, seen = new Set<string>()) => {
+        if (seen.has(hashIdentifier)) {
+          return;
+        }
+        seen.add(hashIdentifier);
+        const definition = definitions[hashIdentifier];
+        if (!definition) {
+          return;
+        }
+        for (const record of asArray(definition.children?.records)) {
+          const recordHash = optionalNumber(asRecord(record).recordHash) ?? optionalString(asRecord(record).recordHash);
+          if (recordHash !== undefined) {
+            result.add(String(recordHash));
+          }
+        }
+        for (const child of asArray(definition.children?.presentationNodes)) {
+          const childHash = optionalNumber(asRecord(child).presentationNodeHash) ?? optionalString(asRecord(child).presentationNodeHash);
+          if (childHash !== undefined) {
+            visit(String(childHash), new Set(seen));
+          }
+        }
+      };
+
+      for (const root of catalystRoots) {
+        visit(root);
+      }
+    } catch {
+      return result;
+    }
+    return result;
+  }
+
+  private async getCatalystRecordCandidates(
+    recordDefinitions: Record<string, RecordDefinition>,
+    presentationRecordHashes: Set<string>
+  ): Promise<string[]> {
+    const candidates = new Set<string>(presentationRecordHashes);
+    for (const [recordHash, definition] of Object.entries(recordDefinitions)) {
+      if (
+        presentationRecordHashes.has(recordHash) ||
+        isCatalystText(definition.displayProperties?.name, definition.displayProperties?.description) ||
+        isCatalystText(definition.loreHash, definition.recordTypeName)
+      ) {
+        candidates.add(recordHash);
+      }
+    }
+    return [...candidates].sort((left, right) => {
+      const leftName = catalystDisplayName(recordDefinitions[left]);
+      const rightName = catalystDisplayName(recordDefinitions[right]);
+      return leftName.localeCompare(rightName);
+    });
+  }
+
+  private async safeInventoryDefinitions(): Promise<Record<string, InventoryItemDefinition>> {
+    try {
+      return await this.manifest.getDefinitionMap<InventoryItemDefinition>("DestinyInventoryItemDefinition");
+    } catch {
+      return {};
+    }
+  }
+
+  private toCatalystWeapon(
+    recordHash: string,
+    definition: RecordDefinition,
+    component: Record<string, unknown> | undefined,
+    inventoryDefinitions: Record<string, InventoryItemDefinition>
+  ): CatalystWeaponSummary {
+    const recordName = catalystDisplayName(definition, `Catalyst ${recordHash}`);
+    const weaponHash = findCatalystWeaponHash(definition, recordName, inventoryDefinitions);
+    const weaponDefinition = weaponHash ? inventoryDefinitions[weaponHash] : undefined;
+    const objectives = toCatalystObjectives(component, definition);
+    const progress = objectives.reduce((sum, objective) => sum + objective.progress, 0);
+    const completionValue = objectives.reduce((sum, objective) => sum + objective.completionValue, 0);
+    const redeemed = hasRecordState(asRecord(component).state, 1);
+    const visible = !hasRecordState(asRecord(component).state, 8) && !hasRecordState(asRecord(component).state, 16);
+    const completed = redeemed || (objectives.length > 0 && objectives.every((objective) => objective.complete));
+    const percent = completionValue > 0 ? round((Math.min(progress, completionValue) / completionValue) * 100) : completed ? 100 : 0;
+    const slot = catalystSlotFromItem(weaponDefinition);
+    const fallbackName = stripCatalystWords(recordName) || recordName;
+    return {
+      recordHash,
+      weaponHash,
+      name: asString(weaponDefinition?.displayProperties?.name, fallbackName),
+      description: optionalString(definition.displayProperties?.description),
+      iconPath: optionalString(weaponDefinition?.displayProperties?.icon) ?? optionalString(definition.displayProperties?.icon),
+      itemTypeDisplayName: optionalString(weaponDefinition?.itemTypeDisplayName),
+      slot,
+      slotLabel: CATALYST_SLOT_LABELS[slot],
+      completed,
+      redeemed,
+      visible,
+      percent,
+      progress,
+      completionValue,
+      objectives
     };
   }
 
@@ -2023,6 +2225,209 @@ function compareCraftables(a: CraftableWeaponSummary, b: CraftableWeaponSummary)
   return a.name.localeCompare(b.name);
 }
 
+function mergeProfileRecordComponents(profileResponse: Record<string, unknown>): Map<string, Record<string, unknown>> {
+  const merged = new Map<string, Record<string, unknown>>();
+  const addRecords = (records: Record<string, unknown>) => {
+    for (const [recordHash, value] of Object.entries(records)) {
+      const current = asRecord(value);
+      const existing = merged.get(recordHash);
+      if (!existing || catalystRecordComponentScore(current) > catalystRecordComponentScore(existing)) {
+        merged.set(recordHash, current);
+      }
+    }
+  };
+
+  addRecords(asRecord(asRecord(asRecord(profileResponse.profileRecords).data).records));
+  for (const characterRecord of Object.values(asRecord(asRecord(profileResponse.characterRecords).data))) {
+    addRecords(asRecord(asRecord(characterRecord).records));
+  }
+  return merged;
+}
+
+function countProfileCollectibles(profileResponse: Record<string, unknown>): number {
+  let count = Object.keys(asRecord(asRecord(asRecord(profileResponse.profileCollectibles).data).collectibles)).length;
+  for (const characterCollectible of Object.values(asRecord(asRecord(profileResponse.characterCollectibles).data))) {
+    count += Object.keys(asRecord(asRecord(characterCollectible).collectibles)).length;
+  }
+  return count;
+}
+
+function catalystRecordComponentScore(component: Record<string, unknown>): number {
+  const objectives = asArray(component.objectives).map((objective) => asRecord(objective));
+  const objectiveScore = objectives.reduce(
+    (sum, objective) =>
+      sum +
+      (asBoolean(objective.complete) ? 100000 : 0) +
+      numberFrom(objective.progress) +
+      numberFrom(objective.completionValue),
+    0
+  );
+  return (hasRecordState(component.state, 1) ? 1000000 : 0) + objectiveScore;
+}
+
+function isCatalystText(...values: unknown[]): boolean {
+  return values.some((value) => /催化|catalyst/iu.test(String(value ?? "")));
+}
+
+function catalystDisplayName(definition: RecordDefinition | undefined, fallback = "Unknown Catalyst"): string {
+  return asString(definition?.displayProperties?.name, fallback);
+}
+
+function stripCatalystWords(value: string): string {
+  return value
+    .replace(/^\s*catalyst\s*[:：-]?\s*/iu, "")
+    .replace(/\s*catalyst\s*$/iu, "")
+    .replace(/催化剂/gu, "")
+    .replace(/催化/gu, "")
+    .replace(/[：:·\-|]+$/gu, "")
+    .trim();
+}
+
+function normalizeCatalystMatchName(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[\s'’"“”《》:：·\-|/\\()[\]{}]+/gu, "")
+    .trim();
+}
+
+function findCatalystWeaponHash(
+  definition: RecordDefinition,
+  recordName: string,
+  inventoryDefinitions: Record<string, InventoryItemDefinition>
+): string | undefined {
+  const rewardHashes = extractItemHashes(definition);
+  for (const hash of rewardHashes) {
+    const item = inventoryDefinitions[hash];
+    if (item && isLikelyWeaponItem(item)) {
+      return hash;
+    }
+  }
+
+  const fallbackHash = rewardHashes.find((hash) => inventoryDefinitions[hash]);
+  const cleanName = normalizeCatalystMatchName(stripCatalystWords(recordName));
+  if (cleanName.length >= 2) {
+    for (const [hash, item] of Object.entries(inventoryDefinitions)) {
+      const itemName = normalizeCatalystMatchName(asString(item.displayProperties?.name));
+      if (itemName === cleanName && isLikelyWeaponItem(item)) {
+        return hash;
+      }
+    }
+  }
+
+  return fallbackHash;
+}
+
+function extractItemHashes(value: unknown, depth = 0): string[] {
+  if (depth > 4) {
+    return [];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => extractItemHashes(entry, depth + 1));
+  }
+  const record = asRecord(value);
+  const hashes: string[] = [];
+  for (const [key, entry] of Object.entries(record)) {
+    if (/itemhash$/iu.test(key) || key === "displayItemHash") {
+      const hash = optionalNumber(entry) ?? optionalString(entry);
+      if (hash !== undefined) {
+        hashes.push(String(hash));
+      }
+    }
+    if (typeof entry === "object" && entry !== null) {
+      hashes.push(...extractItemHashes(entry, depth + 1));
+    }
+  }
+  return [...new Set(hashes)];
+}
+
+function isLikelyWeaponItem(item: InventoryItemDefinition): boolean {
+  const bucketHash = optionalNumber(item.inventory?.bucketTypeHash) ?? numberFrom(item.inventory?.bucketTypeHash, Number.NaN);
+  if (KINETIC_BUCKET_HASHES.has(bucketHash) || ENERGY_BUCKET_HASHES.has(bucketHash) || POWER_BUCKET_HASHES.has(bucketHash)) {
+    return true;
+  }
+  const typeName = asString(item.itemTypeDisplayName).toLowerCase();
+  return /步枪|手炮|弓|榴弹|霰弹|狙击|机枪|火箭|融合|剑|sidearm|rifle|cannon|bow|launcher|shotgun|sniper|machine|rocket|fusion|sword|glaive|smg|trace|grenade/iu.test(
+    typeName
+  );
+}
+
+function toCatalystObjectives(
+  component: Record<string, unknown> | undefined,
+  definition: RecordDefinition
+): CatalystObjectiveSummary[] {
+  const componentObjectives = asArray(asRecord(component).objectives)
+    .map((objective, index) => toCatalystObjective(asRecord(objective), String(index)))
+    .filter((objective) => objective.objectiveHash.length > 0);
+  if (componentObjectives.length > 0) {
+    return componentObjectives;
+  }
+
+  return asArray(definition.objectiveHashes)
+    .map((hash, index) => {
+      const objectiveHash = optionalNumber(hash) ?? optionalString(hash);
+      return {
+        objectiveHash: objectiveHash === undefined ? String(index) : String(objectiveHash),
+        progress: 0,
+        completionValue: 0,
+        complete: false
+      };
+    })
+    .filter((objective) => objective.objectiveHash.length > 0);
+}
+
+function toCatalystObjective(objective: Record<string, unknown>, fallbackHash: string): CatalystObjectiveSummary {
+  const objectiveHash = optionalNumber(objective.objectiveHash) ?? optionalString(objective.objectiveHash) ?? fallbackHash;
+  const progress = Math.max(0, numberFrom(objective.progress));
+  const completionValue = Math.max(0, numberFrom(objective.completionValue));
+  const complete = asBoolean(objective.complete, completionValue > 0 && progress >= completionValue);
+  return {
+    objectiveHash: String(objectiveHash),
+    progress,
+    completionValue,
+    complete,
+    progressDescription: optionalString(objective.progressDescription)
+  };
+}
+
+function hasRecordState(value: unknown, flag: number): boolean {
+  const state = numberFrom(value, 0);
+  return (state & flag) === flag;
+}
+
+function catalystSlotFromItem(item: InventoryItemDefinition | undefined): CatalystSlot {
+  const bucketHash = optionalNumber(item?.inventory?.bucketTypeHash) ?? numberFrom(item?.inventory?.bucketTypeHash, Number.NaN);
+  if (KINETIC_BUCKET_HASHES.has(bucketHash)) {
+    return "kinetic";
+  }
+  if (ENERGY_BUCKET_HASHES.has(bucketHash)) {
+    return "energy";
+  }
+  if (POWER_BUCKET_HASHES.has(bucketHash)) {
+    return "power";
+  }
+  const bucketName = asString(item?.inventory?.bucketTypeName).toLowerCase();
+  if (/动能|kinetic/u.test(bucketName)) {
+    return "kinetic";
+  }
+  if (/能量|energy/u.test(bucketName)) {
+    return "energy";
+  }
+  if (/威能|重武器|power|heavy/u.test(bucketName)) {
+    return "power";
+  }
+  return "unknown";
+}
+
+function compareCatalysts(a: CatalystWeaponSummary, b: CatalystWeaponSummary): number {
+  if (a.completed !== b.completed) {
+    return a.completed ? 1 : -1;
+  }
+  if (a.visible !== b.visible) {
+    return a.visible ? -1 : 1;
+  }
+  return a.name.localeCompare(b.name);
+}
+
 function firstDefined<T>(values: Array<T | undefined>): T | undefined {
   return values.find((value) => value !== undefined);
 }
@@ -2068,10 +2473,12 @@ interface SeasonDefinition {
 interface PresentationNodeDefinition {
   displayProperties?: {
     name?: string;
+    description?: string;
   };
   children?: {
     presentationNodes?: unknown[];
     craftables?: unknown[];
+    records?: unknown[];
   };
   [key: string]: unknown;
 }
@@ -2083,6 +2490,8 @@ interface InventoryItemDefinition {
   };
   itemTypeDisplayName?: string;
   inventory?: {
+    bucketTypeHash?: string | number;
+    bucketTypeName?: string;
     tierTypeName?: string;
   };
   quality?: {
@@ -2090,6 +2499,19 @@ interface InventoryItemDefinition {
   };
   iconWatermark?: string;
   iconWatermarkShelved?: string;
+  [key: string]: unknown;
+}
+
+interface RecordDefinition {
+  displayProperties?: {
+    name?: string;
+    description?: string;
+    icon?: string;
+  };
+  objectiveHashes?: unknown[];
+  rewardItems?: unknown[];
+  loreHash?: unknown;
+  recordTypeName?: unknown;
   [key: string]: unknown;
 }
 

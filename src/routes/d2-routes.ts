@@ -233,6 +233,22 @@ export async function registerD2Routes(app: FastifyInstance, deps: D2RouteDeps):
   app.get("/api/d2/titles/:membershipType/:membershipId", oauthRequired("Triumph seal and title progress"));
   app.get("/api/d2/skins/:membershipType/:membershipId", oauthRequired("Collection and ornament ownership"));
 
+  app.get("/api/d2/catalysts/qq/:qq", async (request) => {
+    const started = Date.now();
+    const qq = parseQq((request.params as Params).qq);
+    const binding = await deps.store.getQqBinding(qq);
+    if (!binding) {
+      throw new NotFoundError("qq binding was not found");
+    }
+    await assertQqOAuthMatchesBinding(deps.store, qq, binding.membershipType, binding.membershipId);
+    const accessToken = await deps.qqOAuthService.getValidAccessTokenForQq(qq);
+    await assertQqOAuthMatchesBinding(deps.store, qq, binding.membershipType, binding.membershipId);
+    const data = await deps.destinyService.getCatalysts(binding.membershipType, binding.membershipId, accessToken);
+    await deps.store.touchQqBinding(qq);
+    await recordQuery(deps.store, request, false);
+    return ok(data, { tookMs: Date.now() - started });
+  });
+
   app.get("/api/d2/weapons/:membershipType/:membershipId", async (request) => {
     const started = Date.now();
     const { membershipType, membershipId } = parseMembershipParams(request.params as Params);
@@ -530,6 +546,27 @@ function oauthRequired(feature: string): (request: FastifyRequest) => Promise<ne
       nextStep: "Add OAuth login and request the required Destiny components before enabling this route."
     });
   };
+}
+
+async function assertQqOAuthMatchesBinding(
+  store: Store,
+  qq: string,
+  membershipType: number,
+  membershipId: string
+): Promise<void> {
+  const token = await store.getQqOAuthToken(qq);
+  if (!token || token.revokedAt) {
+    throw new OAuthRequiredError("QQ binding does not have active Bungie OAuth authorization", {
+      feature: "Catalyst progress",
+      reason: "Catalyst progress is account-private and requires the bound QQ owner to authorize Bungie OAuth."
+    });
+  }
+  if (token.membershipType !== membershipType || token.membershipId !== membershipId) {
+    throw new OAuthRequiredError("QQ OAuth authorization does not match the bound Destiny membership", {
+      feature: "Catalyst progress",
+      reason: "The saved OAuth token belongs to a different Destiny membership; bind again before querying catalysts."
+    });
+  }
 }
 
 async function resolveBindingInput(

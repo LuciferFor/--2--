@@ -143,6 +143,65 @@ export interface CraftablesSummary {
   updatedAt: string;
 }
 
+export type CatalystSlot = "kinetic" | "energy" | "power" | "unknown";
+
+export interface CatalystObjectiveSummary {
+  objectiveHash: string;
+  progress: number;
+  completionValue: number;
+  complete: boolean;
+  progressDescription?: string;
+}
+
+export interface CatalystWeaponSummary {
+  recordHash: string;
+  weaponHash?: string;
+  name: string;
+  description?: string;
+  iconPath?: string;
+  itemTypeDisplayName?: string;
+  slot: CatalystSlot;
+  slotLabel: string;
+  completed: boolean;
+  redeemed: boolean;
+  visible: boolean;
+  percent: number;
+  progress: number;
+  completionValue: number;
+  objectives: CatalystObjectiveSummary[];
+}
+
+export interface CatalystWeaponGroup {
+  key: CatalystSlot;
+  name: string;
+  total: number;
+  completed: number;
+  incomplete: number;
+  items: CatalystWeaponSummary[];
+}
+
+export interface CatalystsSummary {
+  membershipType: number;
+  membershipId: string;
+  totals: {
+    groups: number;
+    catalysts: number;
+    completed: number;
+    incomplete: number;
+    visible: number;
+  };
+  groups: CatalystWeaponGroup[];
+  scan: {
+    recordDefinitions: number;
+    candidateRecords: number;
+    recordsReturned: number;
+    collectiblesReturned: number;
+    catalystPresentationRecords: number;
+    note: string;
+  };
+  updatedAt: string;
+}
+
 export interface CareerSummary {
   membershipType: number;
   membershipId: string;

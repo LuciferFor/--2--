@@ -38,6 +38,35 @@ const fakeManifest = {
         "901": {
           displayProperties: { name: "突袭" },
           children: { craftables: [{ craftableItemHash: 101 }, { craftableItemHash: 102 }] }
+        },
+        "990": {
+          displayProperties: { name: "催化" },
+          children: { records: [{ recordHash: 700 }] }
+        }
+      };
+    }
+    if (entityType === "DestinyRecordDefinition") {
+      return {
+        "700": {
+          displayProperties: {
+            name: "纪念催化",
+            description: "使用此武器击败目标以完成催化。",
+            icon: "/common/destiny2_content/icons/catalyst.jpg"
+          },
+          rewardItems: [{ itemHash: 201 }],
+          objectiveHashes: [9001]
+        },
+        "701": {
+          displayProperties: { name: "普通记录" }
+        }
+      };
+    }
+    if (entityType === "DestinyInventoryItemDefinition") {
+      return {
+        "201": {
+          displayProperties: { name: "纪念", icon: "/common/destiny2_content/icons/memorial.jpg" },
+          itemTypeDisplayName: "机枪",
+          inventory: { bucketTypeHash: 953998645, tierTypeName: "传说" }
         }
       };
     }
@@ -59,6 +88,40 @@ class FakeBungieClient {
 
   async get(path: string, options?: { query?: Record<string, unknown> }) {
     if (path.includes("/Profile/")) {
+      if (String(options?.query?.components || "").includes("Records")) {
+        return {
+          profile: {
+            data: {
+              userInfo: {
+                bungieGlobalDisplayName: "Guardian",
+                bungieGlobalDisplayNameCode: 7
+              },
+              characterIds: ["2305843009"],
+              minutesPlayedTotal: "120"
+            }
+          },
+          characters: { data: {} },
+          profileRecords: {
+            data: {
+              records: {
+                "700": {
+                  state: 4,
+                  objectives: [{ objectiveHash: 9001, progress: 50, completionValue: 100, complete: false }]
+                }
+              }
+            }
+          },
+          profileCollectibles: {
+            data: {
+              collectibles: {
+                "8001": { state: 0 }
+              }
+            }
+          },
+          characterRecords: { data: {} },
+          characterCollectibles: { data: {} }
+        };
+      }
       if (String(options?.query?.components || "").includes("Craftables")) {
         return {
           profile: {
@@ -255,6 +318,27 @@ describe("DestinyService", () => {
           ]
         }
       ]
+    });
+    await expect(service.getCatalysts(3, "4611686018", "access-token")).resolves.toMatchObject({
+      totals: { catalysts: 1, completed: 0, incomplete: 1 },
+      groups: [
+        {
+          key: "power",
+          name: "威能武器",
+          items: [
+            {
+              recordHash: "700",
+              weaponHash: "201",
+              name: "纪念",
+              itemTypeDisplayName: "机枪",
+              percent: 50,
+              progress: 50,
+              completionValue: 100
+            }
+          ]
+        }
+      ],
+      scan: { candidateRecords: 1, recordsReturned: 1, collectiblesReturned: 1 }
     });
   });
 
