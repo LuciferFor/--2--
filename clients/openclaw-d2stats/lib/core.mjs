@@ -67,7 +67,7 @@ export function resolveConfig(raw = {}) {
   return {
     enabled: raw.enabled !== false,
     baseUrl: String(raw.baseUrl || "http://192.168.31.11:3011").replace(/\/+$/u, ""),
-    timeoutMs: clampInteger(raw.timeoutMs, 10000, 1000, 60000),
+    timeoutMs: clampInteger(raw.timeoutMs, 30000, 1000, 60000),
     defaultCard: CARDS.has(raw.defaultCard) ? raw.defaultCard : "summary",
     defaultMode: MODES.has(raw.defaultMode) ? raw.defaultMode : "all",
     defaultMembershipType: clampInteger(raw.defaultMembershipType, 3, 1, 254),
@@ -328,7 +328,7 @@ async function renderCardFromPublicJson(card, params, config, options) {
     const career = await fetchEnvelope(sourceUrl, config, options);
     return {
       width: CARD_WIDTH,
-      height: 700,
+      height: 1900,
       sourceUrl,
       html: renderCareerHtml(resolved.player, career),
     };
@@ -553,41 +553,158 @@ function renderSummaryHtml(player, summary) {
 
 function renderCareerHtml(player, career) {
   const rows = Array.isArray(career?.modes) ? career.modes : [];
+  const seasons = Array.isArray(career?.seasons) ? career.seasons.slice(-21) : [];
+  const characters = Array.isArray(career?.characters)
+    ? career.characters
+    : Array.isArray(career?.profile?.characters)
+      ? career.profile.characters
+      : [];
   const all = rows.find((item) => item.mode === "all")?.stats || rows[0]?.stats || {};
+  const topModes = rows.filter((item) => item.mode !== "all" && Number(item?.stats?.secondsPlayed || 0) > 0).slice(0, 14);
+  const primaryCharacter = characters[0] || {};
   return cardPage({
     title: formatPlayerName(player),
     eyebrow: "DESTINY 2 CAREER",
     subtitle: `生涯数据 · ${dateOnly(career?.updatedAt)}`,
     body: `
-      <section class="metrics metrics-4">
-        ${metric("总场次", int(all.activitiesEntered))}
-        ${metric("胜率", percent(all.winRate))}
-        ${metric("KD", fixed(all.kd))}
-        ${metric("游玩时长", duration(all.secondsPlayed))}
-      </section>
-      <section class="table career-table">
-        <div class="table-head career-grid">
-          <div>模式</div><div>场次</div><div>胜率</div><div>KD</div><div>KDA</div><div>时长</div>
+      <section class="career-hero-strip">
+        <div class="career-emblem" style="${careerImageStyle(primaryCharacter?.emblemBackgroundPath || primaryCharacter?.emblemPath)}"></div>
+        <div class="career-hero-stats">
+          <span>守护者生涯</span>
+          <strong>${duration(all.secondsPlayed)}</strong>
+          <small>${int(all.activitiesEntered)} 场活动 · ${int(all.kills)} 击杀 · ${characters.length || career?.profile?.profile?.characterIds?.length || 0} 个角色</small>
         </div>
-        ${rows
-          .map((item) => {
-            const stats = item?.stats || {};
-            return `
-              <div class="table-row career-grid">
-                <div class="name">${escapeHtml(item?.modeLabel || item?.mode || "-")}</div>
-                <div>${int(stats.activitiesEntered)}</div>
-                <div>${percent(stats.winRate)}</div>
-                <div>${fixed(stats.kd)}</div>
-                <div>${fixed(stats.kda)}</div>
-                <div>${duration(stats.secondsPlayed)}</div>
-              </div>
-            `;
-          })
-          .join("")}
       </section>
+
+      <section class="career-season-panel">
+        <div class="career-section-title">赛季档案</div>
+        <div class="career-season-grid">
+          ${seasons
+            .map(
+              (season) => `
+                <div class="career-season-card ${season?.future ? "future" : ""} ${season?.active ? "active" : ""}">
+                  <div class="season-art" style="${careerImageStyle(season?.backgroundImagePath || season?.iconPath)}"></div>
+                  <div class="season-meta">
+                    <strong>${escapeHtml(season?.name || "未知赛季")}</strong>
+                    <span>${season?.durationDays ? `[${int(season.durationDays)}天] ` : ""}${dateOnly(season?.startDate)}${season?.seasonNumber ? ` · S${int(season.seasonNumber)}` : ""}</span>
+                  </div>
+                  <div class="season-state">${season?.active ? "进行中" : season?.future ? "未开放" : "已归档"}</div>
+                </div>
+              `,
+            )
+            .join("")}
+        </div>
+      </section>
+
+      <section class="career-breakdown-panel">
+        <div class="career-account-row">
+          <div class="career-character-card total">
+            <div class="character-banner" style="${careerImageStyle(primaryCharacter?.emblemBackgroundPath || primaryCharacter?.emblemPath)}"></div>
+            <div class="character-summary">
+              <strong>总计</strong>
+              <span>游玩时长 ${duration(all.secondsPlayed)}</span>
+              <span>胜率 ${percent(all.winRate)} · KD ${fixed(all.kd)}</span>
+            </div>
+          </div>
+          <div class="career-chip-grid">
+            ${topModes.map((mode) => careerModeChip(mode)).join("")}
+          </div>
+        </div>
+
+        <div class="career-character-list">
+          ${characters
+            .slice(0, 3)
+            .map((character) => {
+              const modeSummaries = Array.isArray(character?.modeSummaries) ? character.modeSummaries : [];
+              return `
+                <div class="career-account-row character">
+                  <div class="career-character-card">
+                    <div class="character-banner" style="${careerImageStyle(character?.emblemBackgroundPath || character?.emblemPath)}"></div>
+                    <div class="character-summary">
+                      <strong>${escapeHtml(displayClassName(character))}</strong>
+                      <span>游玩时长 ${duration(character?.totalSecondsPlayed || character?.minutesPlayedTotal * 60)}</span>
+                      <span>最后在线 ${dateOnly(character?.dateLastPlayed)}</span>
+                    </div>
+                  </div>
+                  <div class="career-chip-grid">
+                    ${modeSummaries
+                      .filter((mode) => Number(mode?.stats?.secondsPlayed || 0) > 0)
+                      .slice(0, 10)
+                      .map((mode) => careerModeChip(mode))
+                      .join("")}
+                  </div>
+                </div>
+              `;
+            })
+            .join("")}
+        </div>
+      </section>
+
+      <section class="career-table-panel">
+        <div class="career-section-title">模式总览</div>
+        <div class="career-mode-table">
+          ${rows
+            .filter((item) => item.mode !== "all")
+            .slice(0, 14)
+            .map((item) => {
+              const stats = item?.stats || {};
+              return `
+                <div class="career-mode-row">
+                  ${careerModeIcon(item?.icon)}
+                  <strong>${escapeHtml(item?.modeLabel || item?.mode || "-")}</strong>
+                  <span>${compactDuration(stats.secondsPlayed)}</span>
+                  <span>${int(stats.activitiesEntered)} 场</span>
+                  <span>${compactNumber(stats.kills)} 击杀</span>
+                </div>
+              `;
+            })
+            .join("")}
+        </div>
+      </section>
+
+      <footer class="card-footer">赛季档案来自 Bungie Manifest；公开接口不提供每赛季精确时长，模式和角色时长来自公开 Historical Stats。</footer>
       ${membershipBlock(career?.membershipType, career?.membershipId)}
     `,
   });
+}
+
+function careerModeChip(mode) {
+  const stats = mode?.stats || {};
+  return `
+    <div class="career-mode-chip ${escapeHtml(mode?.tone || "neutral")}">
+      ${careerModeIcon(mode?.icon)}
+      <div>
+        <strong>${escapeHtml(mode?.modeLabel || mode?.mode || "-")}</strong>
+        <span>${compactDuration(stats.secondsPlayed)}</span>
+      </div>
+    </div>
+  `;
+}
+
+function careerModeIcon(icon) {
+  const value = {
+    hex: "⬢",
+    eye: "◎",
+    shield: "▣",
+    star: "✦",
+    gate: "▥",
+    compass: "⌂",
+    cross: "×",
+    banner: "▰",
+    diamond: "◇",
+    swirl: "◌",
+    spark: "✧",
+    moon: "◑",
+  }[icon] || "◆";
+  return `<span class="career-mode-icon">${escapeHtml(value)}</span>`;
+}
+
+function careerImageStyle(path) {
+  const url = path ? bungieAssetUrl(path) : "";
+  if (!url) {
+    return "";
+  }
+  return `background-image:linear-gradient(90deg, rgba(0,0,0,.18), rgba(0,0,0,.48)), url('${escapeHtml(url)}')`;
 }
 
 function renderPvpHtml(player, pvp) {
@@ -1550,6 +1667,229 @@ function cardPage({ eyebrow, title, subtitle, body }) {
     .weapon-grid { grid-template-columns: minmax(420px, 1fr) 145px 145px 180px; }
     .activity-grid { grid-template-columns: minmax(340px, 1fr) 110px 110px 110px 110px 130px; }
     .career-grid { grid-template-columns: minmax(220px, 1fr) 120px 120px 110px 110px 150px; }
+    .career-hero-strip,
+    .career-season-panel,
+    .career-breakdown-panel,
+    .career-table-panel {
+      margin-top: 18px;
+      background: rgba(18, 18, 18, 0.9);
+      border: 1px solid rgba(255, 255, 255, 0.04);
+      border-radius: 8px;
+      padding: 22px;
+    }
+    .career-hero-strip {
+      display: grid;
+      grid-template-columns: 420px 1fr;
+      gap: 24px;
+      align-items: center;
+      min-height: 132px;
+    }
+    .career-emblem,
+    .character-banner,
+    .season-art {
+      background-color: #191919;
+      background-position: center;
+      background-size: cover;
+    }
+    .career-emblem {
+      height: 96px;
+      border-radius: 6px;
+    }
+    .career-hero-stats span,
+    .career-hero-stats small {
+      display: block;
+      color: #aebdcb;
+      font-weight: 800;
+    }
+    .career-hero-stats strong {
+      display: block;
+      margin: 2px 0;
+      color: #ffffff;
+      font-size: 52px;
+      line-height: 1;
+      font-weight: 950;
+    }
+    .career-hero-stats small { font-size: 22px; }
+    .career-section-title {
+      margin-bottom: 16px;
+      color: #d8e0ea;
+      font-size: 28px;
+      font-weight: 950;
+      text-align: center;
+    }
+    .career-season-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .career-season-card {
+      position: relative;
+      min-height: 138px;
+      overflow: hidden;
+      border-radius: 8px;
+      background: #101010;
+      border: 1px solid rgba(255, 255, 255, 0.04);
+    }
+    .career-season-card.future { opacity: 0.48; }
+    .career-season-card.active {
+      border-color: rgba(49, 211, 135, 0.72);
+      box-shadow: inset 0 0 0 1px rgba(49, 211, 135, 0.26);
+    }
+    .season-art {
+      position: absolute;
+      inset: 0;
+      opacity: 0.76;
+      filter: saturate(0.9) contrast(1.05);
+    }
+    .season-meta,
+    .season-state {
+      position: relative;
+      z-index: 1;
+    }
+    .season-meta {
+      padding: 18px 18px 0;
+      text-shadow: 0 2px 12px rgba(0, 0, 0, 0.9);
+    }
+    .season-meta strong {
+      display: block;
+      overflow: hidden;
+      color: #fff;
+      font-size: 24px;
+      font-weight: 950;
+      line-height: 1.15;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .season-meta span {
+      display: block;
+      margin-top: 6px;
+      color: #d3d8df;
+      font-size: 17px;
+      font-weight: 850;
+    }
+    .season-state {
+      position: absolute;
+      right: 12px;
+      bottom: 12px;
+      padding: 5px 10px;
+      border-radius: 4px;
+      background: rgba(0, 0, 0, 0.5);
+      color: #cfd7e2;
+      font-size: 16px;
+      font-weight: 900;
+    }
+    .career-account-row {
+      display: grid;
+      grid-template-columns: 420px 1fr;
+      gap: 24px;
+      align-items: stretch;
+      padding: 18px;
+      border-radius: 8px;
+      background: rgba(9, 9, 9, 0.66);
+    }
+    .career-account-row + .career-account-row { margin-top: 16px; }
+    .career-character-card {
+      display: grid;
+      grid-template-rows: 92px 1fr;
+      min-height: 174px;
+      border-radius: 8px;
+      overflow: hidden;
+      background: rgba(12, 12, 12, 0.92);
+    }
+    .character-banner { min-height: 92px; }
+    .character-summary {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px 14px;
+      padding: 16px 18px;
+      align-items: center;
+    }
+    .character-summary strong {
+      grid-row: span 2;
+      color: #fff;
+      font-size: 28px;
+      font-weight: 950;
+      align-self: center;
+    }
+    .character-summary span {
+      color: #d0d8e2;
+      font-size: 20px;
+      font-weight: 850;
+      white-space: nowrap;
+    }
+    .career-chip-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      align-content: center;
+    }
+    .career-mode-chip {
+      display: grid;
+      grid-template-columns: 36px minmax(0, 1fr);
+      gap: 9px;
+      align-items: center;
+      min-height: 54px;
+      padding: 8px 10px;
+      border-radius: 5px;
+      background: rgba(35, 35, 35, 0.92);
+      color: #fff;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.035);
+    }
+    .career-mode-chip strong,
+    .career-mode-chip span {
+      display: block;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .career-mode-chip strong { font-size: 17px; font-weight: 950; }
+    .career-mode-chip span { color: #eef5ff; font-size: 17px; font-weight: 900; }
+    .career-mode-chip.purple { background: linear-gradient(135deg, #4f2d78, #22172c); }
+    .career-mode-chip.blue { background: linear-gradient(135deg, #254b86, #172133); }
+    .career-mode-chip.teal { background: linear-gradient(135deg, #167b78, #152f31); }
+    .career-mode-chip.slate { background: linear-gradient(135deg, #566171, #20242a); }
+    .career-mode-chip.gold { background: linear-gradient(135deg, #b07822, #342715); }
+    .career-mode-chip.green { background: linear-gradient(135deg, #1d6f4e, #132d22); }
+    .career-mode-chip.red { background: linear-gradient(135deg, #963b3b, #351919); }
+    .career-mode-chip.gray { background: linear-gradient(135deg, #606060, #242424); }
+    .career-mode-chip.dark { background: linear-gradient(135deg, #313131, #151515); }
+    .career-mode-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      color: #f6f8fb;
+      font-size: 26px;
+      font-weight: 900;
+      line-height: 1;
+    }
+    .career-mode-table {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .career-mode-row {
+      display: grid;
+      grid-template-columns: 38px minmax(0, 1fr) 96px 82px 120px;
+      align-items: center;
+      gap: 8px;
+      min-height: 48px;
+      padding: 8px 12px;
+      border-radius: 5px;
+      background: rgba(8, 8, 8, 0.7);
+      color: #d9e2ec;
+      font-size: 18px;
+      font-weight: 850;
+    }
+    .career-mode-row strong,
+    .career-mode-row span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .career-mode-row strong { color: #fff; font-size: 20px; font-weight: 950; }
     .list { display: grid; gap: 12px; }
     .list-row {
       display: grid;
@@ -2136,6 +2476,14 @@ function classLabel(classType) {
   return "角色";
 }
 
+function displayClassName(character) {
+  const raw = String(character?.className || "").trim().toLowerCase();
+  if (raw === "titan") return "泰坦";
+  if (raw === "hunter") return "猎人";
+  if (raw === "warlock") return "术士";
+  return character?.className || classLabel(character?.classType);
+}
+
 function inferCardFromCommand(value) {
   const command = String(value || "").trim().toLowerCase();
   if (!command) {
@@ -2305,6 +2653,20 @@ function int(value) {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(Number.isFinite(number) ? number : 0);
 }
 
+function compactNumber(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) {
+    return "0";
+  }
+  if (Math.abs(number) >= 1000000) {
+    return `${fixed(number / 1000000, 1)}M`;
+  }
+  if (Math.abs(number) >= 10000) {
+    return `${fixed(number / 1000, 1)}K`;
+  }
+  return int(number);
+}
+
 function fixed(value, digits = 2) {
   const number = Number(value || 0);
   return (Number.isFinite(number) ? number : 0).toFixed(digits).replace(/\.00$/u, "");
@@ -2322,6 +2684,18 @@ function duration(seconds) {
     return `${minutes}m`;
   }
   return `${hours}h ${minutes}m`;
+}
+
+function compactDuration(seconds) {
+  const total = Math.max(0, Math.floor(Number(seconds || 0)));
+  const hours = total / 3600;
+  if (hours >= 100) {
+    return `${fixed(hours, 1)}h`;
+  }
+  if (hours >= 10) {
+    return `${fixed(hours, 1)}h`;
+  }
+  return duration(total);
 }
 
 function dateOnly(value) {

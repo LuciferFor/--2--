@@ -10,6 +10,7 @@ import type {
   ActivityModeOverview,
   ActivityModeOverviewActivity,
   ActivitySummary,
+  CareerModeSummary,
   CareerSummary,
   CharacterSummary,
   HeatmapBucket,
@@ -33,7 +34,13 @@ import type {
 import type { ManifestService } from "./manifest-service.js";
 import { parsePublicMode, type ModeInfo, type PublicMode } from "./modes.js";
 import { findRaidReleaseWindow } from "./raid-release-windows.js";
-import { aggregatePgcrPlayerValues, round, statBasicValue, summarizeHistoricalStats } from "./stat-utils.js";
+import {
+  EMPTY_HISTORICAL_SUMMARY,
+  aggregatePgcrPlayerValues,
+  round,
+  statBasicValue,
+  summarizeHistoricalStats
+} from "./stat-utils.js";
 
 const RAID_MODE_TYPE = 4;
 const RAID_HISTORY_PAGE_SIZE = 250;
@@ -132,25 +139,7 @@ export class DestinyService {
       return cached;
     }
 
-    const response = await this.client.get<unknown>(
-      `/Destiny2/${membershipType}/Account/${membershipId}/Character/0/Stats/`,
-      {
-        query: {
-          periodType: "AllTime",
-          groups: "General",
-          ...(mode.bungieMode === undefined ? {} : { modes: mode.bungieMode })
-        }
-      }
-    );
-
-    const result: AccountSummary = {
-      membershipType,
-      membershipId,
-      mode: mode.publicMode,
-      modeLabel: mode.label,
-      stats: summarizeHistoricalStats(response),
-      updatedAt: new Date().toISOString()
-    };
+    const result = await this.getHistoricalStatsSummary(membershipType, membershipId, "0", mode);
 
     await this.cache.setJson(cacheKey, result, CACHE_TTL.summary);
     return result;
@@ -163,11 +152,29 @@ export class DestinyService {
       return cached;
     }
 
-    const modes: PublicMode[] = ["all", "pvp", "trials", "raid", "dungeon", "gambit"];
+    const [profile, modes, seasons] = await Promise.all([
+      this.getProfile(membershipType, membershipId),
+      mapLimit(CAREER_MODES, 4, (mode) => this.getSafeHistoricalStatsSummary(membershipType, membershipId, "0", mode)),
+      this.getCareerSeasons()
+    ]);
+    const characters = await mapLimit(profile.characters, 2, async (character) => ({
+      ...character,
+      totalSecondsPlayed: character.minutesPlayedTotal * 60,
+      modeSummaries: await mapLimit(CHARACTER_CAREER_MODES, 4, (mode) =>
+        this.getSafeHistoricalStatsSummary(membershipType, membershipId, character.characterId, mode)
+      )
+    }));
+
     const result: CareerSummary = {
       membershipType,
       membershipId,
-      modes: await Promise.all(modes.map((mode) => this.getSummary(membershipType, membershipId, mode))),
+      modes,
+      profile: {
+        ...profile,
+        characters
+      },
+      seasons,
+      characters,
       updatedAt: new Date().toISOString()
     };
 
@@ -671,6 +678,62 @@ export class DestinyService {
       dateLastPlayed: optionalString(character.dateLastPlayed),
       minutesPlayedTotal: numberFrom(character.minutesPlayedTotal)
     };
+  }
+
+  private async getHistoricalStatsSummary(
+    membershipType: number,
+    membershipId: string,
+    characterId: string,
+    mode: CareerModeInfo | ModeInfo
+  ): Promise<CareerModeSummary> {
+    const response = await this.client.get<unknown>(
+      `/Destiny2/${membershipType}/Account/${membershipId}/Character/${characterId}/Stats/`,
+      {
+        query: {
+          periodType: "AllTime",
+          groups: "General",
+          ...(mode.bungieMode === undefined ? {} : { modes: mode.bungieMode })
+        }
+      }
+    );
+
+    return {
+      membershipType,
+      membershipId,
+      mode: "mode" in mode ? mode.mode : mode.publicMode,
+      modeLabel: mode.label,
+      icon: "icon" in mode ? mode.icon : undefined,
+      tone: "tone" in mode ? mode.tone : undefined,
+      stats: summarizeHistoricalStats(response),
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  private async getSafeHistoricalStatsSummary(
+    membershipType: number,
+    membershipId: string,
+    characterId: string,
+    mode: CareerModeInfo
+  ): Promise<CareerModeSummary> {
+    try {
+      return await this.getHistoricalStatsSummary(membershipType, membershipId, characterId, mode);
+    } catch {
+      return emptyCareerModeSummary(membershipType, membershipId, mode);
+    }
+  }
+
+  private async getCareerSeasons(): Promise<CareerSummary["seasons"]> {
+    try {
+      const definitions = await this.manifest.getDefinitionMap<SeasonDefinition>("DestinySeasonDefinition");
+      const now = Date.now();
+      return Object.entries(definitions)
+        .map(([hashIdentifier, definition]) => toCareerSeason(hashIdentifier, definition, now))
+        .filter((season): season is NonNullable<ReturnType<typeof toCareerSeason>> => season !== null)
+        .sort(compareCareerSeasons)
+        .slice(-24);
+    } catch {
+      return [];
+    }
   }
 
   private async toActivitySummary(characterId: string, activity: Record<string, unknown>): Promise<ActivitySummary> {
@@ -1457,6 +1520,110 @@ function normalizeActivityModeName(modeName: string | undefined, modeNumber: num
     return fallbackActivityModeName(Number(match[1])) ?? text;
   }
   return text;
+}
+
+interface CareerModeInfo {
+  mode: string;
+  label: string;
+  bungieMode?: number;
+  icon: string;
+  tone: string;
+}
+
+interface SeasonDefinition {
+  displayProperties?: {
+    name?: string;
+    description?: string;
+    icon?: string;
+  };
+  seasonNumber?: number;
+  startDate?: string;
+  endDate?: string;
+  backgroundImagePath?: string;
+  [key: string]: unknown;
+}
+
+const CAREER_MODES: CareerModeInfo[] = [
+  { mode: "all", label: "总计", icon: "hex", tone: "neutral" },
+  { mode: "story", label: "剧情", bungieMode: 2, icon: "eye", tone: "gold" },
+  { mode: "strike", label: "打击任务", bungieMode: 3, icon: "shield", tone: "blue" },
+  { mode: "raid", label: "突袭", bungieMode: 4, icon: "star", tone: "purple" },
+  { mode: "dungeon", label: "地牢", bungieMode: 82, icon: "gate", tone: "slate" },
+  { mode: "patrol", label: "探索", bungieMode: 6, icon: "compass", tone: "gray" },
+  { mode: "pvp", label: "熔炉", bungieMode: 5, icon: "cross", tone: "red" },
+  { mode: "trials", label: "奥西里斯试炼", bungieMode: 84, icon: "eye", tone: "gold" },
+  { mode: "iron_banner", label: "铁旗", bungieMode: 19, icon: "banner", tone: "green" },
+  { mode: "quickplay", label: "快速游戏PVP", bungieMode: 70, icon: "cross", tone: "red" },
+  { mode: "competitive", label: "竞技模式", bungieMode: 69, icon: "diamond", tone: "red" },
+  { mode: "gambit", label: "智谋", bungieMode: 63, icon: "swirl", tone: "green" },
+  { mode: "dares", label: "永恒挑战", bungieMode: 85, icon: "spark", tone: "teal" },
+  { mode: "nightmare", label: "梦魇狩猎", bungieMode: 79, icon: "moon", tone: "dark" }
+];
+
+const CHARACTER_CAREER_MODES = CAREER_MODES.filter((mode) =>
+  ["raid", "strike", "pvp", "trials", "dungeon", "gambit", "story", "patrol"].includes(mode.mode)
+);
+
+function emptyCareerModeSummary(
+  membershipType: number,
+  membershipId: string,
+  mode: CareerModeInfo
+): CareerModeSummary {
+  return {
+    membershipType,
+    membershipId,
+    mode: mode.mode,
+    modeLabel: mode.label,
+    icon: mode.icon,
+    tone: mode.tone,
+    stats: { ...EMPTY_HISTORICAL_SUMMARY },
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function toCareerSeason(
+  hashIdentifier: string,
+  definition: SeasonDefinition,
+  now: number
+): NonNullable<CareerSummary["seasons"]>[number] | null {
+  const name = asString(definition.displayProperties?.name);
+  if (!name || /^Season$/iu.test(name)) {
+    return null;
+  }
+  const startMs = dateMs(definition.startDate);
+  const endMs = dateMs(definition.endDate);
+  return {
+    hashIdentifier,
+    seasonNumber: optionalNumber(definition.seasonNumber),
+    name,
+    startDate: optionalString(definition.startDate),
+    endDate: optionalString(definition.endDate),
+    durationDays: startMs && endMs && endMs > startMs ? Math.round((endMs - startMs) / 86400000) : undefined,
+    iconPath: optionalString(definition.displayProperties?.icon),
+    backgroundImagePath: optionalString(definition.backgroundImagePath),
+    active: Boolean(startMs && endMs && now >= startMs && now <= endMs),
+    future: Boolean(startMs && now < startMs)
+  };
+}
+
+function compareCareerSeasons(
+  a: NonNullable<CareerSummary["seasons"]>[number],
+  b: NonNullable<CareerSummary["seasons"]>[number]
+): number {
+  const aNumber = a.seasonNumber ?? 0;
+  const bNumber = b.seasonNumber ?? 0;
+  if (aNumber !== bNumber) {
+    return aNumber - bNumber;
+  }
+  return (dateMs(a.startDate) ?? 0) - (dateMs(b.startDate) ?? 0);
+}
+
+function dateMs(value: string | undefined): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? ms : undefined;
 }
 
 const ACTIVITY_MODE_LABELS = new Map<number, string>([

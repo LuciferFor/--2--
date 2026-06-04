@@ -100,8 +100,34 @@ export interface WeaponsSummary {
 export interface CareerSummary {
   membershipType: number;
   membershipId: string;
-  modes: AccountSummary[];
+  modes: CareerModeSummary[];
+  profile?: ProfileSummary;
+  seasons?: CareerSeasonSummary[];
+  characters?: CareerCharacterSummary[];
   updatedAt: string;
+}
+
+export interface CareerModeSummary extends AccountSummary {
+  icon?: string;
+  tone?: string;
+}
+
+export interface CareerSeasonSummary {
+  hashIdentifier: string;
+  seasonNumber?: number;
+  name: string;
+  startDate?: string;
+  endDate?: string;
+  durationDays?: number;
+  iconPath?: string;
+  backgroundImagePath?: string;
+  active: boolean;
+  future: boolean;
+}
+
+export interface CareerCharacterSummary extends CharacterSummary {
+  totalSecondsPlayed: number;
+  modeSummaries: CareerModeSummary[];
 }
 
 export interface PvpOverview {
