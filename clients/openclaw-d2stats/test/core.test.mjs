@@ -40,6 +40,9 @@ describe("d2stats core", () => {
     const pvp = buildPublicDataUrl("pvp", target, { count: 12 }, resolveConfig({ baseUrl: "http://d2.local" }));
     assert.equal(pvp, "http://d2.local/api/d2/pvp/3/4611686018428939884?count=12");
 
+    const crafting = buildPublicDataUrl("craftables", target, {}, resolveConfig({ baseUrl: "http://d2.local" }));
+    assert.equal(crafting, "http://d2.local/api/d2/craftables/3/4611686018428939884");
+
     const dungeons = buildPublicDataUrl("dungeons", target, { historyPages: 3 }, resolveConfig({ baseUrl: "http://d2.local" }));
     assert.equal(dungeons, "http://d2.local/api/d2/dungeons/3/4611686018428939884?historyPages=3");
 
@@ -444,6 +447,81 @@ describe("d2stats core", () => {
     ]);
     assert.equal(result.content[0].type, "image");
     assert.equal(result.details.card, "heatmap");
+  });
+
+  it("renders crafting cards from public JSON", async () => {
+    const calls = [];
+    const result = await queryCard(
+      { target: "3:4611686018428939884", command: "/锻造" },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async (url) => {
+          calls.push(String(url));
+          if (String(url).includes("/namecard/")) {
+            return jsonResponse({
+              success: true,
+              data: {
+                membershipType: 3,
+                membershipId: "4611686018428939884",
+                profile: {
+                  bungieName: "Lucifer#8571",
+                  displayName: "Lucifer",
+                  displayNameCode: 8571,
+                  characters: [
+                    {
+                      className: "Warlock",
+                      light: 2020,
+                      dateLastPlayed: "2026-06-03T00:00:00.000Z",
+                      emblemPath: "/common/destiny2_content/icons/current-icon.jpg",
+                      emblemBackgroundPath: "/common/destiny2_content/icons/current-card.jpg",
+                    },
+                  ],
+                },
+              },
+            });
+          }
+          assert.equal(String(url), "http://d2.local/api/d2/craftables/3/4611686018428939884");
+          return jsonResponse({
+            success: true,
+            data: {
+              membershipType: 3,
+              membershipId: "4611686018428939884",
+              totals: { groups: 1, weapons: 2, unlocked: 1, locked: 1 },
+              groups: [
+                {
+                  key: "突袭",
+                  name: "突袭",
+                  total: 2,
+                  unlocked: 1,
+                  locked: 1,
+                  items: [
+                    { itemHash: "101", name: "纪念", iconPath: "/icon1.jpg", itemTypeDisplayName: "机枪", groupName: "突袭", visible: true, unlocked: true, failedRequirementIndexes: [], requirementCount: 0, socketCount: 8 },
+                    { itemHash: "102", name: "信任", iconPath: "/icon2.jpg", itemTypeDisplayName: "手炮", groupName: "突袭", visible: true, unlocked: false, failedRequirementIndexes: [0], requirementCount: 1, socketCount: 8 },
+                  ],
+                },
+              ],
+              scan: { characterCount: 1, rootNodeHash: "900", note: "分组来自 Bungie 锻造 PresentationNode" },
+              updatedAt: "2026-06-03T00:00:00.000Z",
+            },
+          });
+        },
+        renderHtmlToPng: async (html) => {
+          assert.match(html, /DESTINY 2 CRAFTING/);
+          assert.match(html, /Lucifer#8571/);
+          assert.match(html, /纪念/);
+          assert.match(html, /信任/);
+          assert.match(html, /可锻造/);
+          return Buffer.from("png-bytes");
+        },
+      },
+    );
+
+    assert.deepEqual(calls, [
+      "http://d2.local/api/d2/namecard/3/4611686018428939884",
+      "http://d2.local/api/d2/craftables/3/4611686018428939884",
+    ]);
+    assert.equal(result.content[0].type, "image");
+    assert.equal(result.details.card, "crafting");
   });
 
   it("supports direct activity PGCR rendering", async () => {

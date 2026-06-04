@@ -312,6 +312,48 @@ const fakeDestinyService = {
       weapons: [],
       updatedAt: "2026-06-03T00:00:00.000Z"
     };
+  },
+  async getCraftables() {
+    return {
+      membershipType: 3,
+      membershipId: "4611686018",
+      totals: { groups: 1, weapons: 2, unlocked: 1, locked: 1 },
+      groups: [
+        {
+          key: "突袭",
+          name: "突袭",
+          total: 2,
+          unlocked: 1,
+          locked: 1,
+          items: [
+            {
+              itemHash: "1",
+              name: "纪念",
+              itemTypeDisplayName: "机枪",
+              groupName: "突袭",
+              visible: true,
+              unlocked: true,
+              failedRequirementIndexes: [],
+              requirementCount: 0,
+              socketCount: 8
+            },
+            {
+              itemHash: "2",
+              name: "信任",
+              itemTypeDisplayName: "手炮",
+              groupName: "突袭",
+              visible: true,
+              unlocked: false,
+              failedRequirementIndexes: [0],
+              requirementCount: 1,
+              socketCount: 8
+            }
+          ]
+        }
+      ],
+      scan: { characterCount: 1, rootNodeHash: "123", note: "test" },
+      updatedAt: "2026-06-03T00:00:00.000Z"
+    };
   }
 };
 
@@ -684,6 +726,7 @@ describe("Fastify routes", () => {
       url: "/api/d2/heatmap/3/4611686018?mode=all&range=all&timezone=Asia%2FShanghai"
     });
     const namecard = await app.inject({ method: "GET", url: "/api/d2/namecard/3/4611686018" });
+    const craftables = await app.inject({ method: "GET", url: "/api/d2/craftables/3/4611686018" });
 
     expect(career.statusCode).toBe(200);
     expect(career.json()).toMatchObject({ success: true, data: { modes: [{ mode: "all" }] } });
@@ -702,6 +745,8 @@ describe("Fastify routes", () => {
     expect(heatmap.json()).toMatchObject({ success: true, data: { timezone: "Asia/Shanghai", range: "all", calendar: [{ year: 2026 }] } });
     expect(namecard.statusCode).toBe(200);
     expect(namecard.json()).toMatchObject({ success: true, data: { membershipId: "4611686018" } });
+    expect(craftables.statusCode).toBe(200);
+    expect(craftables.json()).toMatchObject({ success: true, data: { totals: { weapons: 2 }, groups: [{ name: "突袭" }] } });
     await app.close();
   });
 

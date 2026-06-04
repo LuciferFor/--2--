@@ -9,6 +9,39 @@ const fakeManifest = {
   },
   async getIconPath() {
     return null;
+  },
+  async getDefinition(entityType: string, hash: unknown) {
+    if (entityType === "DestinyInventoryItemDefinition" && String(hash) === "101") {
+      return {
+        displayProperties: { name: "纪念", icon: "/common/destiny2_content/icons/memorial.jpg" },
+        itemTypeDisplayName: "机枪",
+        inventory: { tierTypeName: "传说" },
+        iconWatermark: "/common/destiny2_content/icons/watermark.png"
+      };
+    }
+    if (entityType === "DestinyInventoryItemDefinition" && String(hash) === "102") {
+      return {
+        displayProperties: { name: "信任", icon: "/common/destiny2_content/icons/trust.jpg" },
+        itemTypeDisplayName: "手炮",
+        inventory: { tierTypeName: "传说" }
+      };
+    }
+    return null;
+  },
+  async getDefinitionMap(entityType: string) {
+    if (entityType === "DestinyPresentationNodeDefinition") {
+      return {
+        "900": {
+          displayProperties: { name: "锻造" },
+          children: { presentationNodes: [{ presentationNodeHash: 901 }] }
+        },
+        "901": {
+          displayProperties: { name: "突袭" },
+          children: { craftables: [{ craftableItemHash: 101 }, { craftableItemHash: 102 }] }
+        }
+      };
+    }
+    return {};
   }
 };
 
@@ -24,8 +57,34 @@ class FakeBungieClient {
     ];
   }
 
-  async get(path: string) {
+  async get(path: string, options?: { query?: Record<string, unknown> }) {
     if (path.includes("/Profile/")) {
+      if (String(options?.query?.components || "").includes("Craftables")) {
+        return {
+          profile: {
+            data: {
+              userInfo: {
+                bungieGlobalDisplayName: "Guardian",
+                bungieGlobalDisplayNameCode: 7
+              },
+              characterIds: ["2305843009"],
+              minutesPlayedTotal: "120"
+            }
+          },
+          characters: { data: {} },
+          characterCraftables: {
+            data: {
+              "2305843009": {
+                craftingRootNodeHash: 900,
+                craftables: {
+                  "101": { visible: true, failedRequirementIndexes: [], sockets: [{}, {}] },
+                  "102": { visible: true, failedRequirementIndexes: [0], sockets: [{}] }
+                }
+              }
+            }
+          }
+        };
+      }
       return {
         profile: {
           data: {
@@ -184,6 +243,18 @@ describe("DestinyService", () => {
     });
     await expect(service.getWeapons(3, "4611686018")).resolves.toMatchObject({
       weapons: [{ referenceId: "99", kills: 15 }]
+    });
+    await expect(service.getCraftables(3, "4611686018")).resolves.toMatchObject({
+      totals: { weapons: 2, unlocked: 1, locked: 1 },
+      groups: [
+        {
+          name: "突袭",
+          items: [
+            { itemHash: "101", name: "纪念", unlocked: true },
+            { itemHash: "102", name: "信任", unlocked: false }
+          ]
+        }
+      ]
     });
   });
 

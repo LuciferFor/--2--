@@ -3,6 +3,7 @@ export const BUNGIE_ROOT = "https://www.bungie.net";
 export const VALID_MEMBERSHIP_TYPES = new Set([1, 2, 3, 4, 5, 6, 10, 20, 254]);
 
 export const PROFILE_COMPONENTS = ["Profiles", "Characters"] as const;
+export const CRAFTABLES_COMPONENTS = ["Profiles", "Characters", "Craftables"] as const;
 
 export const CACHE_TTL = {
   playerSearch: 24 * 60 * 60,
@@ -16,6 +17,7 @@ export const CACHE_TTL = {
   heatmapLong: 24 * 60 * 60,
   raidOverview: 30 * 60,
   weapons: 30 * 60,
+  craftables: 30 * 60,
   manifestDefinition: 30 * 24 * 60 * 60
 } as const;
 

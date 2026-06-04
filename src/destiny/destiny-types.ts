@@ -101,6 +101,48 @@ export interface WeaponsSummary {
   updatedAt: string;
 }
 
+export interface CraftableWeaponSummary {
+  itemHash: string;
+  name: string;
+  iconPath?: string;
+  itemTypeDisplayName?: string;
+  tierTypeName?: string;
+  watermarkIconPath?: string;
+  groupName: string;
+  visible: boolean;
+  unlocked: boolean;
+  failedRequirementIndexes: number[];
+  requirementCount: number;
+  socketCount: number;
+}
+
+export interface CraftableWeaponGroup {
+  key: string;
+  name: string;
+  total: number;
+  unlocked: number;
+  locked: number;
+  items: CraftableWeaponSummary[];
+}
+
+export interface CraftablesSummary {
+  membershipType: number;
+  membershipId: string;
+  totals: {
+    groups: number;
+    weapons: number;
+    unlocked: number;
+    locked: number;
+  };
+  groups: CraftableWeaponGroup[];
+  scan: {
+    characterCount: number;
+    rootNodeHash?: string;
+    note: string;
+  };
+  updatedAt: string;
+}
+
 export interface CareerSummary {
   membershipType: number;
   membershipId: string;

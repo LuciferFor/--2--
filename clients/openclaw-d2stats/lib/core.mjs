@@ -9,6 +9,7 @@ const CARDS = new Set([
   "namecard",
   "pvp",
   "weapons",
+  "crafting",
   "raid_overview",
   "dungeon_overview",
   "heatmap",
@@ -138,6 +139,10 @@ export function buildPublicDataUrl(kind, target, params = {}, config = resolveCo
 
   if (kind === "weapons") {
     return `${config.baseUrl}/api/d2/weapons/${target.membershipType}/${target.membershipId}`;
+  }
+
+  if (kind === "craftables") {
+    return `${config.baseUrl}/api/d2/craftables/${target.membershipType}/${target.membershipId}`;
   }
 
   if (kind === "activities") {
@@ -383,6 +388,17 @@ async function renderCardFromPublicJson(card, params, config, options) {
       height: 720,
       sourceUrl,
       html: renderWeaponsHtml(resolved.player, weapons),
+    };
+  }
+
+  if (card === "crafting") {
+    const sourceUrl = buildPublicDataUrl("craftables", resolved, params, config);
+    const craftables = await fetchEnvelope(sourceUrl, config, options);
+    return {
+      width: HEATMAP_CARD_WIDTH,
+      height: estimateCraftingHeight(craftables),
+      sourceUrl,
+      html: renderCraftingHtml(resolved.player, craftables),
     };
   }
 
@@ -963,6 +979,7 @@ function renderHelpHtml() {
         ["/最近", "最近一场活动 PGCR"],
         ["/战绩 activityId", "指定 PGCR 单局详情"],
         ["/武器", "玩家生涯武器击杀统计"],
+        ["/锻造", "锻造图纸 / 可锻造武器状态"],
         ["/资料", "角色、光等、在线时间"],
         ["/名片", "名片资料：角色 + 生涯核心数据"],
         ["/绑定", "QQ -> Bungie ID 自助绑定"],
@@ -1113,6 +1130,74 @@ function renderWeaponsHtml(player, weapons) {
       ${membershipBlock(weapons?.membershipType, weapons?.membershipId)}
     `,
   });
+}
+
+function renderCraftingHtml(player, craftables) {
+  const groups = Array.isArray(craftables?.groups) ? craftables.groups : [];
+  return cardPage({
+    width: HEATMAP_CARD_WIDTH,
+    player,
+    title: formatPlayerName(player),
+    eyebrow: "DESTINY 2 CRAFTING",
+    subtitle: `锻造图纸 · ${dateOnly(craftables?.updatedAt)}`,
+    body: `
+      <section class="metrics metrics-4">
+        ${metric("分组", int(craftables?.totals?.groups))}
+        ${metric("武器", int(craftables?.totals?.weapons))}
+        ${metric("可锻造", int(craftables?.totals?.unlocked))}
+        ${metric("未解锁", int(craftables?.totals?.locked))}
+      </section>
+      <section class="crafting-groups">
+        ${groups.map((group) => renderCraftingGroup(group)).join("") || emptyState("没有可显示的锻造图纸。")}
+      </section>
+      <footer class="card-footer">${escapeHtml(craftables?.scan?.note || "锻造状态来自 Bungie Craftables 公开组件。")}</footer>
+      ${membershipBlock(craftables?.membershipType, craftables?.membershipId)}
+    `,
+  });
+}
+
+function renderCraftingGroup(group) {
+  const items = Array.isArray(group?.items) ? group.items : [];
+  const tone = Number(group?.locked || 0) > 0 ? "red" : "green";
+  return `
+    <section class="crafting-group">
+      <div class="crafting-group-title ${tone}">
+        <strong>${escapeHtml(group?.name || "锻造武器")}</strong>
+        <span>${int(group?.unlocked)} / ${int(group?.total)} 已解锁</span>
+      </div>
+      <div class="crafting-grid">
+        ${items.map((item) => renderCraftingItem(item)).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderCraftingItem(item) {
+  const status = item?.unlocked ? "可锻造" : "未解锁";
+  const tone = item?.unlocked ? "green" : "red";
+  const requirementText = item?.unlocked ? "图纸已完成" : `${int(item?.requirementCount || item?.failedRequirementIndexes?.length)} 项要求`;
+  return `
+    <div class="crafting-item ${tone}">
+      ${craftingIconHtml(item)}
+      <div class="crafting-rail"></div>
+      <div class="crafting-item-main">
+        <strong>${escapeHtml(item?.name || "Unknown")}</strong>
+        <span>${escapeHtml(item?.itemTypeDisplayName || item?.tierTypeName || "锻造武器")}</span>
+        <b>${escapeHtml(status)} · ${escapeHtml(requirementText)}</b>
+      </div>
+    </div>
+  `;
+}
+
+function craftingIconHtml(item) {
+  const iconUrl = item?.iconPath ? bungieAssetUrl(item.iconPath) : "";
+  const watermarkUrl = item?.watermarkIconPath ? bungieAssetUrl(item.watermarkIconPath) : "";
+  return `
+    <div class="crafting-icon ${iconUrl ? "" : "empty"}">
+      ${iconUrl ? `<img src="${escapeHtml(iconUrl)}" />` : ""}
+      ${watermarkUrl ? `<img class="crafting-watermark" src="${escapeHtml(watermarkUrl)}" />` : ""}
+    </div>
+  `;
 }
 
 function renderActivityHtml(pgcr, player) {
@@ -1383,6 +1468,15 @@ function estimateHeatmapHeight(heatmap) {
   const calendar = normalizeHeatmapCalendar(heatmap);
   const yearPanels = calendar.reduce((height, year) => height + 78 + Math.ceil(Math.max(1, year.months.length) / 4) * 214, 0);
   return Math.max(720, 300 + yearPanels);
+}
+
+function estimateCraftingHeight(craftables) {
+  const groups = Array.isArray(craftables?.groups) ? craftables.groups : [];
+  const groupHeights = groups.reduce((height, group) => {
+    const itemCount = Array.isArray(group?.items) ? group.items.length : 0;
+    return height + 72 + Math.ceil(Math.max(1, itemCount) / 3) * 92;
+  }, 0);
+  return Math.max(720, 330 + groupHeights);
 }
 
 function sumClientHeatmapBuckets(buckets) {
@@ -1944,6 +2038,119 @@ function cardPage({ eyebrow, title, subtitle, body, player, width = CARD_WIDTH }
     .weapon-grid { grid-template-columns: minmax(420px, 1fr) 145px 145px 180px; }
     .activity-grid { grid-template-columns: minmax(340px, 1fr) 110px 110px 110px 110px 130px; }
     .career-grid { grid-template-columns: minmax(220px, 1fr) 120px 120px 110px 110px 150px; }
+    .crafting-groups {
+      display: grid;
+      gap: 18px;
+    }
+    .crafting-group {
+      padding: 18px 20px 20px;
+      background: rgba(17, 17, 17, 0.88);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 8px;
+    }
+    .crafting-group-title {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      max-width: 100%;
+      margin-bottom: 16px;
+      padding: 7px 12px;
+      border-radius: 999px;
+      color: #fff;
+      font-size: 15px;
+      font-weight: 950;
+    }
+    .crafting-group-title.red { background: #d84d4d; }
+    .crafting-group-title.green { background: #21a46a; }
+    .crafting-group-title strong,
+    .crafting-group-title span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .crafting-group-title span {
+      color: rgba(255, 255, 255, 0.82);
+      font-size: 13px;
+      font-weight: 850;
+    }
+    .crafting-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px 18px;
+    }
+    .crafting-item {
+      display: grid;
+      grid-template-columns: 54px 5px minmax(0, 1fr);
+      gap: 10px;
+      align-items: center;
+      min-height: 76px;
+      min-width: 0;
+      padding: 8px;
+      border-radius: 6px;
+      background: rgba(7, 7, 7, 0.46);
+    }
+    .crafting-icon {
+      width: 54px;
+      height: 54px;
+      position: relative;
+      border-radius: 4px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.07);
+    }
+    .crafting-icon img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .crafting-watermark {
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      width: 24px !important;
+      height: 24px !important;
+      opacity: 0.9;
+    }
+    .crafting-rail {
+      width: 5px;
+      height: 56px;
+      border-radius: 999px;
+      background: #d84d4d;
+    }
+    .crafting-item.green .crafting-rail { background: #21d07a; }
+    .crafting-item-main {
+      min-width: 0;
+      display: grid;
+      gap: 3px;
+    }
+    .crafting-item-main strong,
+    .crafting-item-main span,
+    .crafting-item-main b {
+      display: block;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .crafting-item-main strong {
+      color: #ffffff;
+      font-size: 15px;
+      line-height: 1.15;
+      font-weight: 950;
+    }
+    .crafting-item-main span {
+      color: #aab4bf;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .crafting-item-main b {
+      color: #ff6b63;
+      font-size: 12px;
+      font-weight: 900;
+    }
+    .crafting-item.green .crafting-item-main b { color: #21d07a; }
     .career-hero-strip,
     .career-season-panel,
     .career-breakdown-panel,
@@ -3119,6 +3326,9 @@ function inferCardFromCommand(value) {
   }
   if (/pvp|试炼|trials|熔炉/u.test(command)) {
     return "pvp";
+  }
+  if (/锻造|图纸|craft|pattern/u.test(command)) {
+    return "crafting";
   }
   if (/raid|突袭|无暇|day\s*one|dayone/u.test(command)) {
     return "raid_overview";

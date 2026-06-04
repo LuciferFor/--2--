@@ -241,6 +241,14 @@ export async function registerD2Routes(app: FastifyInstance, deps: D2RouteDeps):
     return ok(data, { tookMs: Date.now() - started });
   });
 
+  app.get("/api/d2/craftables/:membershipType/:membershipId", async (request) => {
+    const started = Date.now();
+    const { membershipType, membershipId } = parseMembershipParams(request.params as Params);
+    const data = await deps.destinyService.getCraftables(membershipType, membershipId);
+    await recordQuery(deps.store, request, false);
+    return ok(data, { tookMs: Date.now() - started });
+  });
+
   app.get("/api/d2/cards/summary.png", async (request, reply) => {
     const query = request.query as Query;
     const target = await resolveCardTarget(query, deps);

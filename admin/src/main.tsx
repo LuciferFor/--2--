@@ -170,6 +170,7 @@ const queryPresets: QueryPreset[] = [
   { label: "名片资料", path: "/api/d2/namecard/3/4611686018", query: {} },
   { label: "PGCR 单局", path: "/api/d2/pgcr/123", query: {} },
   { label: "武器统计", path: "/api/d2/weapons/3/4611686018", query: {} },
+  { label: "锻造查询", path: "/api/d2/craftables/3/4611686018", query: {} },
   { label: "仓库搜索(OAuth)", path: "/api/d2/vault/3/4611686018/search", query: { q: "fatebringer" } },
   { label: "总览卡片", path: "/api/d2/cards/summary.png", query: { bungieName: "Guardian#0007", mode: "raid" } },
   { label: "Profile 卡片", path: "/api/d2/cards/profile.png", query: { bungieName: "Guardian#0007" } },

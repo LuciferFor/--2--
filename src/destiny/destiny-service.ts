@@ -1,8 +1,8 @@
 import type { CacheStore } from "../cache/cache.js";
 import type { Store } from "../db/store.js";
 import { BadRequestError, NotFoundError } from "../lib/errors.js";
-import { asArray, asNumber, asRecord, asString, numberFrom, optionalNumber, optionalString } from "../lib/json.js";
-import { CACHE_TTL, PROFILE_COMPONENTS } from "./constants.js";
+import { asArray, asBoolean, asNumber, asRecord, asString, numberFrom, optionalNumber, optionalString } from "../lib/json.js";
+import { CACHE_TTL, CRAFTABLES_COMPONENTS, PROFILE_COMPONENTS } from "./constants.js";
 import { parseBungieName } from "./bungie-name.js";
 import type { BungieClient } from "./bungie-client.js";
 import type {
@@ -13,6 +13,9 @@ import type {
   CareerModeSummary,
   CareerSummary,
   CharacterSummary,
+  CraftableWeaponGroup,
+  CraftableWeaponSummary,
+  CraftablesSummary,
   HeatmapBucket,
   HeatmapCalendarYear,
   HeatmapRange,
@@ -465,6 +468,74 @@ export class DestinyService {
     return result;
   }
 
+  async getCraftables(membershipType: number, membershipId: string): Promise<CraftablesSummary> {
+    const cacheKey = `d2:craftables:${membershipType}:${membershipId}`;
+    const cached = await this.cache.getJson<CraftablesSummary>(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const response = await this.client.get<unknown>(`/Destiny2/${membershipType}/Profile/${membershipId}/`, {
+      query: {
+        components: [...CRAFTABLES_COMPONENTS]
+      }
+    });
+    const profileResponse = asRecord(response);
+    const characterCraftables = asRecord(asRecord(profileResponse.characterCraftables).data);
+    const allCraftables = mergeCharacterCraftables(characterCraftables);
+    const rootNodeHash = findCraftingRootNodeHash(characterCraftables);
+    const presentationGroups = await this.getCraftablePresentationGroups(rootNodeHash);
+    const groups = new Map<string, CraftableWeaponGroup>();
+
+    for (const [itemHash, craftable] of allCraftables.entries()) {
+      const item = await this.toCraftableWeapon(itemHash, craftable, presentationGroups.get(itemHash));
+      const key = item.groupName || "锻造武器";
+      const group = groups.get(key) ?? {
+        key,
+        name: key,
+        total: 0,
+        unlocked: 0,
+        locked: 0,
+        items: []
+      };
+      group.total += 1;
+      if (item.unlocked) {
+        group.unlocked += 1;
+      } else {
+        group.locked += 1;
+      }
+      group.items.push(item);
+      groups.set(key, group);
+    }
+
+    const sortedGroups = [...groups.values()]
+      .map((group) => ({
+        ...group,
+        items: group.items.sort(compareCraftables)
+      }))
+      .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
+    const result: CraftablesSummary = {
+      membershipType,
+      membershipId,
+      totals: {
+        groups: sortedGroups.length,
+        weapons: sortedGroups.reduce((sum, group) => sum + group.total, 0),
+        unlocked: sortedGroups.reduce((sum, group) => sum + group.unlocked, 0),
+        locked: sortedGroups.reduce((sum, group) => sum + group.locked, 0)
+      },
+      groups: sortedGroups,
+      scan: {
+        characterCount: Object.keys(characterCraftables).length,
+        rootNodeHash,
+        note: rootNodeHash ? "分组来自 Bungie 锻造 PresentationNode" : "未返回锻造根节点，使用默认分组"
+      },
+      updatedAt: new Date().toISOString()
+    };
+
+    await this.cache.setJson(cacheKey, result, CACHE_TTL.craftables);
+    return result;
+  }
+
   async getRaidOverview(
     membershipType: number,
     membershipId: string,
@@ -912,6 +983,76 @@ export class DestinyService {
       kills: statBasicValue(values, "uniqueWeaponKills") || statBasicValue(values, "kills"),
       precisionKills: statBasicValue(values, "uniqueWeaponPrecisionKills") || statBasicValue(values, "precisionKills"),
       secondsUsed: statBasicValue(values, "secondsUsed") || statBasicValue(values, "activityDurationSeconds")
+    };
+  }
+
+  private async getCraftablePresentationGroups(rootNodeHash: string | undefined): Promise<Map<string, string>> {
+    const groups = new Map<string, string>();
+    if (!rootNodeHash) {
+      return groups;
+    }
+    try {
+      const definitions = await this.manifest.getDefinitionMap<PresentationNodeDefinition>("DestinyPresentationNodeDefinition");
+      const visit = (hashIdentifier: string, inheritedName: string | undefined, seen = new Set<string>()) => {
+        if (seen.has(hashIdentifier)) {
+          return;
+        }
+        seen.add(hashIdentifier);
+        const definition = definitions[hashIdentifier];
+        if (!definition) {
+          return;
+        }
+        const name = optionalString(definition.displayProperties?.name) ?? inheritedName;
+        for (const craftable of asArray(definition.children?.craftables)) {
+          const craftableRecord = asRecord(craftable);
+          const itemHash = optionalNumber(craftableRecord.craftableItemHash) ?? optionalString(craftableRecord.craftableItemHash);
+          if (itemHash !== undefined && name) {
+            groups.set(String(itemHash), name);
+          }
+        }
+        for (const child of asArray(definition.children?.presentationNodes)) {
+          const childRecord = asRecord(child);
+          const childHash = optionalNumber(childRecord.presentationNodeHash) ?? optionalString(childRecord.presentationNodeHash);
+          if (childHash !== undefined) {
+            visit(String(childHash), name, new Set(seen));
+          }
+        }
+      };
+      visit(rootNodeHash, undefined);
+    } catch {
+      return groups;
+    }
+    return groups;
+  }
+
+  private async toCraftableWeapon(
+    itemHash: string,
+    craftable: Record<string, unknown>,
+    groupName: string | undefined
+  ): Promise<CraftableWeaponSummary> {
+    const definition = await this.manifest.getDefinition<InventoryItemDefinition>("DestinyInventoryItemDefinition", itemHash);
+    const failedRequirementIndexes = asArray(craftable.failedRequirementIndexes)
+      .map(Number)
+      .filter((value) => Number.isInteger(value));
+    const visible = asBoolean(craftable.visible, true);
+    const socketCount = asArray(craftable.sockets).length;
+    const requirementCount = failedRequirementIndexes.length;
+    return {
+      itemHash,
+      name: asString(definition?.displayProperties?.name, `Weapon ${itemHash}`),
+      iconPath: optionalString(definition?.displayProperties?.icon),
+      itemTypeDisplayName: optionalString(definition?.itemTypeDisplayName),
+      tierTypeName: optionalString(definition?.inventory?.tierTypeName),
+      watermarkIconPath:
+        optionalString(definition?.iconWatermark) ??
+        optionalString(definition?.iconWatermarkShelved) ??
+        optionalString(definition?.quality?.displayVersionWatermarkIcons?.[0]),
+      groupName: groupName ?? "锻造武器",
+      visible,
+      unlocked: visible && failedRequirementIndexes.length === 0,
+      failedRequirementIndexes,
+      requirementCount,
+      socketCount
     };
   }
 
@@ -1845,6 +1986,43 @@ function teamIdFromRecord(team: Record<string, unknown>): number {
   return Number.isFinite(teamId) ? teamId : numberFrom(team.team, Number.NaN);
 }
 
+function mergeCharacterCraftables(characterCraftables: Record<string, unknown>): Map<string, Record<string, unknown>> {
+  const merged = new Map<string, Record<string, unknown>>();
+  for (const value of Object.values(characterCraftables)) {
+    const craftables = asRecord(asRecord(value).craftables);
+    for (const [itemHash, craftable] of Object.entries(craftables)) {
+      const existing = merged.get(itemHash);
+      const current = asRecord(craftable);
+      if (!existing || craftableScore(current) > craftableScore(existing)) {
+        merged.set(itemHash, current);
+      }
+    }
+  }
+  return merged;
+}
+
+function findCraftingRootNodeHash(characterCraftables: Record<string, unknown>): string | undefined {
+  for (const value of Object.values(characterCraftables)) {
+    const hash = optionalNumber(asRecord(value).craftingRootNodeHash) ?? optionalString(asRecord(value).craftingRootNodeHash);
+    if (hash !== undefined) {
+      return String(hash);
+    }
+  }
+  return undefined;
+}
+
+function craftableScore(craftable: Record<string, unknown>): number {
+  const failed = asArray(craftable.failedRequirementIndexes).length;
+  return (asBoolean(craftable.visible, true) ? 100 : 0) - failed;
+}
+
+function compareCraftables(a: CraftableWeaponSummary, b: CraftableWeaponSummary): number {
+  if (a.unlocked !== b.unlocked) {
+    return a.unlocked ? -1 : 1;
+  }
+  return a.name.localeCompare(b.name);
+}
+
 function firstDefined<T>(values: Array<T | undefined>): T | undefined {
   return values.find((value) => value !== undefined);
 }
@@ -1884,6 +2062,34 @@ interface SeasonDefinition {
   startDate?: string;
   endDate?: string;
   backgroundImagePath?: string;
+  [key: string]: unknown;
+}
+
+interface PresentationNodeDefinition {
+  displayProperties?: {
+    name?: string;
+  };
+  children?: {
+    presentationNodes?: unknown[];
+    craftables?: unknown[];
+  };
+  [key: string]: unknown;
+}
+
+interface InventoryItemDefinition {
+  displayProperties?: {
+    name?: string;
+    icon?: string;
+  };
+  itemTypeDisplayName?: string;
+  inventory?: {
+    tierTypeName?: string;
+  };
+  quality?: {
+    displayVersionWatermarkIcons?: string[];
+  };
+  iconWatermark?: string;
+  iconWatermarkShelved?: string;
   [key: string]: unknown;
 }
 

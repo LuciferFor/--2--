@@ -330,10 +330,10 @@ function parseOptionalBoolean(value: unknown): boolean | undefined {
   throw new BadRequestError("cacheHit must be true or false");
 }
 
-function parseCacheScope(value: unknown): "player" | "summary" | "activities" | "pgcr" | "weapons" | "all" {
+function parseCacheScope(value: unknown): "player" | "summary" | "activities" | "pgcr" | "weapons" | "craftables" | "all" {
   const scope = typeof value === "string" ? value : "all";
-  if (["player", "summary", "activities", "pgcr", "weapons", "all"].includes(scope)) {
-    return scope as "player" | "summary" | "activities" | "pgcr" | "weapons" | "all";
+  if (["player", "summary", "activities", "pgcr", "weapons", "craftables", "all"].includes(scope)) {
+    return scope as "player" | "summary" | "activities" | "pgcr" | "weapons" | "craftables" | "all";
   }
   throw new BadRequestError("Unsupported cache scope");
 }
@@ -348,7 +348,8 @@ async function clearPlayerCache(cache: CacheStore, membershipType: number, membe
     `d2:activity-overview:dungeon:${membershipType}:${membershipId}`,
     `d2:heatmap:${membershipType}:${membershipId}`,
     `d2:namecard:${membershipType}:${membershipId}`,
-    `d2:weapons:${membershipType}:${membershipId}`
+    `d2:weapons:${membershipType}:${membershipId}`,
+    `d2:craftables:${membershipType}:${membershipId}`
   ];
   const deleted = await Promise.all(prefixes.map((prefix) => cache.deleteByPrefix(prefix)));
   return deleted.reduce((sum, value) => sum + value, 0);
@@ -466,6 +467,7 @@ function isAllowedD2Path(path: string): boolean {
     /^\/api\/d2\/namecard\/[^/?#]+\/[^/?#]+$/,
     /^\/api\/d2\/pgcr\/[^/?#]+$/,
     /^\/api\/d2\/weapons\/[^/?#]+\/[^/?#]+$/,
+    /^\/api\/d2\/craftables\/[^/?#]+\/[^/?#]+$/,
     /^\/api\/d2\/vault\/[^/?#]+\/[^/?#]+\/search$/,
     /^\/api\/d2\/inventory\/[^/?#]+\/[^/?#]+\/weapons$/,
     /^\/api\/d2\/catalysts\/[^/?#]+\/[^/?#]+$/,
