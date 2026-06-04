@@ -4,17 +4,20 @@ import type { CardService } from "../cards/card-service.js";
 import type { Store } from "../db/store.js";
 import type { DestinyService } from "../destiny/destiny-service.js";
 import type { PlayerSearchResult } from "../destiny/destiny-types.js";
+import type { QqOAuthService } from "../oauth/qq-oauth-service.js";
 import { parseQq } from "../bindings/qq.js";
 import { parseCount, parseId, parseMembershipType, parsePage } from "../destiny/validators.js";
-import { BadRequestError, NotFoundError, OAuthRequiredError } from "../lib/errors.js";
+import { BadRequestError, NotFoundError, OAuthRequiredError, toAppError } from "../lib/errors.js";
 import { sha256Hex } from "../lib/hash.js";
 import { ok } from "../lib/response.js";
+import { renderOAuthResultHtml, renderOAuthSelectionHtml } from "../oauth/qq-oauth-service.js";
 
 export interface D2RouteDeps {
   destinyService: DestinyService;
   cardService: CardService;
   cache: CacheStore;
   store: Store;
+  qqOAuthService: QqOAuthService;
   cardCacheTtlSeconds: number;
 }
 
@@ -47,6 +50,68 @@ export async function registerD2Routes(app: FastifyInstance, deps: D2RouteDeps):
     return ok(created, { tookMs: Date.now() - started });
   });
 
+  app.post("/api/d2/bindings/qq/oauth/start", async (request) => {
+    const started = Date.now();
+    const body = request.body as Record<string, unknown>;
+    const data = await deps.qqOAuthService.startQqBinding(body?.qq);
+    await recordQuery(deps.store, request, false);
+    return ok(data, { tookMs: Date.now() - started });
+  });
+
+  app.get("/api/d2/bindings/qq/oauth/authorize", async (request, reply) => {
+    try {
+      const query = request.query as Query;
+      const state = await deps.qqOAuthService.assertStartState(query.state);
+      return reply.redirect(deps.qqOAuthService.buildAuthorizeUrl(state));
+    } catch (error) {
+      const appError = toAppError(error);
+      return reply
+        .status(appError.statusCode)
+        .type("text/html; charset=utf-8")
+        .send(renderOAuthResultHtml("绑定链接不可用", appError.message));
+    }
+  });
+
+  app.get("/api/d2/bindings/qq/oauth/callback", async (request, reply) => {
+    try {
+      const query = request.query as Query;
+      if (typeof query.error === "string" && query.error.length > 0) {
+        throw new BadRequestError(`Bungie authorization failed: ${query.error}`);
+      }
+      const result = await deps.qqOAuthService.completeCallback(query.code, query.state);
+      await recordQuery(deps.store, request, false);
+      return reply.type("text/html; charset=utf-8").send(renderOAuthSelectionHtml(result));
+    } catch (error) {
+      const appError = toAppError(error);
+      return reply
+        .status(appError.statusCode)
+        .type("text/html; charset=utf-8")
+        .send(renderOAuthResultHtml("绑定失败", appError.message));
+    }
+  });
+
+  app.post("/api/d2/bindings/qq/oauth/confirm", async (request, reply) => {
+    try {
+      const body = request.body as Record<string, unknown>;
+      const saved = await deps.qqOAuthService.confirmSelection(body.confirmToken, body.membershipType, body.membershipId);
+      await recordQuery(deps.store, request, false);
+      return reply
+        .type("text/html; charset=utf-8")
+        .send(
+          renderOAuthResultHtml(
+            "绑定成功",
+            `QQ ${saved.qq} 已绑定到 ${saved.bungieName ?? `${saved.membershipType}:${saved.membershipId}`}，可以回 QQ 查询命运2战绩了。`
+          )
+        );
+    } catch (error) {
+      const appError = toAppError(error);
+      return reply
+        .status(appError.statusCode)
+        .type("text/html; charset=utf-8")
+        .send(renderOAuthResultHtml("绑定失败", appError.message));
+    }
+  });
+
   app.get("/api/d2/bindings/qq/:qq", async (request) => {
     const started = Date.now();
     const qq = parseQq((request.params as Params).qq);
@@ -56,7 +121,9 @@ export async function registerD2Routes(app: FastifyInstance, deps: D2RouteDeps):
     }
     await deps.store.touchQqBinding(qq);
     await recordQuery(deps.store, request, false);
-    return ok({ ...binding, lastResolvedAt: new Date().toISOString() }, { tookMs: Date.now() - started });
+    return ok(publicQqBinding({ ...binding, lastResolvedAt: new Date().toISOString() }), {
+      tookMs: Date.now() - started
+    });
   });
 
   app.get("/api/d2/profile/:membershipType/:membershipId", async (request) => {
@@ -344,6 +411,11 @@ function parseBoundBungieName(value: string | undefined): { displayName?: string
     displayName: match[1],
     displayNameCode: Number(match[2])
   };
+}
+
+function publicQqBinding<T extends { oauth?: unknown }>(binding: T): Omit<T, "oauth"> {
+  const { oauth: _oauth, ...publicBinding } = binding;
+  return publicBinding;
 }
 
 function parseMembershipParams(params: Params): { membershipType: number; membershipId: string } {

@@ -50,9 +50,37 @@ export interface QqBindingRecord {
   notes?: string;
 }
 
+export interface QqOAuthStatus {
+  authorized: boolean;
+  bungieMembershipId?: string;
+  accessExpiresAt?: string;
+  refreshExpiresAt?: string;
+  revokedAt?: string;
+  updatedAt?: string;
+}
+
 export interface QqBindingRow extends QqBindingRecord {
   id: number;
   lastResolvedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  oauth?: QqOAuthStatus;
+}
+
+export interface QqOAuthTokenRecord {
+  qq: string;
+  bungieMembershipId: string;
+  membershipType: number;
+  membershipId: string;
+  accessTokenEncrypted: string;
+  refreshTokenEncrypted?: string;
+  accessExpiresAt: string;
+  refreshExpiresAt?: string;
+}
+
+export interface QqOAuthTokenRow extends QqOAuthTokenRecord {
+  id: number;
+  revokedAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -100,6 +128,9 @@ export interface Store {
   listQqBindings(query: string | undefined, options: PageOptions): Promise<PaginatedResult<QqBindingRow>>;
   deleteQqBinding(qq: string): Promise<boolean>;
   touchQqBinding(qq: string): Promise<void>;
+  upsertQqOAuthToken(token: QqOAuthTokenRecord): Promise<QqOAuthTokenRow>;
+  getQqOAuthToken(qq: string): Promise<QqOAuthTokenRow | null>;
+  revokeQqOAuthToken(qq: string): Promise<boolean>;
   listQueryLogs(
     filters: { route?: string; cacheHit?: boolean },
     options: PageOptions
@@ -133,6 +164,7 @@ export class NullStore implements Store {
   private readonly players: PlayerRow[] = [];
   private readonly queryLogs: QueryLogRow[] = [];
   private readonly qqBindings: QqBindingRow[] = [];
+  private readonly qqOAuthTokens: QqOAuthTokenRow[] = [];
   private readonly auditLogs: AdminAuditLogRow[] = [];
 
   async upsertPlayer(player: PlayerCacheRecord): Promise<void> {
@@ -199,7 +231,8 @@ export class NullStore implements Store {
   }
 
   async getQqBinding(qq: string): Promise<QqBindingRow | null> {
-    return this.qqBindings.find((row) => row.qq === qq) ?? null;
+    const binding = this.qqBindings.find((row) => row.qq === qq);
+    return binding ? this.withQqOAuthStatus(binding) : null;
   }
 
   async listQqBindings(query: string | undefined, options: PageOptions): Promise<PaginatedResult<QqBindingRow>> {
@@ -214,7 +247,7 @@ export class NullStore implements Store {
           );
         })
       : this.qqBindings;
-    return paginate([...rows].reverse(), options);
+    return paginate([...rows].reverse().map((row) => this.withQqOAuthStatus(row)), options);
   }
 
   async deleteQqBinding(qq: string): Promise<boolean> {
@@ -223,6 +256,10 @@ export class NullStore implements Store {
       return false;
     }
     this.qqBindings.splice(index, 1);
+    const tokenIndex = this.qqOAuthTokens.findIndex((row) => row.qq === qq);
+    if (tokenIndex >= 0) {
+      this.qqOAuthTokens.splice(tokenIndex, 1);
+    }
     return true;
   }
 
@@ -231,6 +268,42 @@ export class NullStore implements Store {
     if (existing) {
       existing.lastResolvedAt = new Date().toISOString();
     }
+  }
+
+  async upsertQqOAuthToken(token: QqOAuthTokenRecord): Promise<QqOAuthTokenRow> {
+    const existing = this.qqOAuthTokens.find((row) => row.qq === token.qq);
+    const now = new Date().toISOString();
+    if (existing) {
+      Object.assign(existing, token, {
+        revokedAt: undefined,
+        updatedAt: now
+      });
+      return existing;
+    }
+    const row: QqOAuthTokenRow = {
+      id: this.qqOAuthTokens.length + 1,
+      ...token,
+      revokedAt: undefined,
+      createdAt: now,
+      updatedAt: now
+    };
+    this.qqOAuthTokens.push(row);
+    return row;
+  }
+
+  async getQqOAuthToken(qq: string): Promise<QqOAuthTokenRow | null> {
+    return this.qqOAuthTokens.find((row) => row.qq === qq) ?? null;
+  }
+
+  async revokeQqOAuthToken(qq: string): Promise<boolean> {
+    const existing = this.qqOAuthTokens.find((row) => row.qq === qq);
+    if (!existing || existing.revokedAt) {
+      return false;
+    }
+    const now = new Date().toISOString();
+    existing.revokedAt = now;
+    existing.updatedAt = now;
+    return true;
   }
 
   async listQueryLogs(
@@ -321,6 +394,7 @@ export class NullStore implements Store {
     this.players.length = 0;
     this.queryLogs.length = 0;
     this.qqBindings.length = 0;
+    this.qqOAuthTokens.length = 0;
     this.auditLogs.length = 0;
   }
 
@@ -331,6 +405,24 @@ export class NullStore implements Store {
       ...binding,
       createdAt: now,
       updatedAt: now
+    };
+  }
+
+  private withQqOAuthStatus(binding: QqBindingRow): QqBindingRow {
+    const token = this.qqOAuthTokens.find((row) => row.qq === binding.qq);
+    if (!token) {
+      return { ...binding, oauth: { authorized: false } };
+    }
+    return {
+      ...binding,
+      oauth: {
+        authorized: !token.revokedAt,
+        bungieMembershipId: token.bungieMembershipId,
+        accessExpiresAt: token.accessExpiresAt,
+        refreshExpiresAt: token.refreshExpiresAt,
+        revokedAt: token.revokedAt,
+        updatedAt: token.updatedAt
+      }
     };
   }
 

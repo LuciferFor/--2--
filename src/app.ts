@@ -19,6 +19,7 @@ import { DestinyService } from "./destiny/destiny-service.js";
 import { ManifestService } from "./destiny/manifest-service.js";
 import { toAppError } from "./lib/errors.js";
 import { fail } from "./lib/response.js";
+import { QqOAuthService } from "./oauth/qq-oauth-service.js";
 import { registerBungieProxyRoutes } from "./routes/bungie-proxy-routes.js";
 import { registerD2Routes } from "./routes/d2-routes.js";
 import { registerHealthRoutes } from "./routes/health.js";
@@ -31,6 +32,7 @@ export interface AppDeps {
   manifestService?: ManifestService;
   destinyService?: DestinyService;
   cardService?: CardService;
+  qqOAuthService?: QqOAuthService;
 }
 
 export async function buildApp(overrides: AppDeps = {}): Promise<FastifyInstance> {
@@ -47,6 +49,11 @@ export async function buildApp(overrides: AppDeps = {}): Promise<FastifyInstance
   const destinyService =
     overrides.destinyService ?? new DestinyService(bungieClient, cache, store, manifestService);
   const cardService = overrides.cardService ?? new CardService();
+  const qqOAuthService = overrides.qqOAuthService ?? new QqOAuthService(config, cache, store, bungieClient);
+
+  app.addContentTypeParser("application/x-www-form-urlencoded", { parseAs: "string" }, (_request, body, done) => {
+    done(null, Object.fromEntries(new URLSearchParams(String(body))));
+  });
 
   await app.register(cors, {
     origin: config.CORS_ORIGIN === "*" ? true : config.CORS_ORIGIN.split(",").map((origin) => origin.trim())
@@ -95,6 +102,7 @@ export async function buildApp(overrides: AppDeps = {}): Promise<FastifyInstance
     cardService,
     cache,
     store,
+    qqOAuthService,
     cardCacheTtlSeconds: config.CARD_CACHE_TTL_SECONDS
   });
   await registerBungieProxyRoutes(app, {

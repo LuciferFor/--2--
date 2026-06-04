@@ -3,7 +3,7 @@
 Adds two OpenClaw tools:
 
 - `destiny2_card_query`: fetches public Destiny 2 JSON data, renders an HTML card inside OpenClaw, then returns it as a PNG image tool result. It supports `help`, `summary`, `career`, `profile`, `namecard`, `pvp`, `weapons`, `raid_overview`, `dungeon_overview`, `heatmap`, `activities`, `latest_activity`, and `activity`.
-- `destiny2_bind_qq`: creates a public QQ -> Bungie membership binding.
+- `destiny2_bind_qq`: creates a QQ -> Bungie membership binding. If no Bungie target is provided, it returns a 3-minute Bungie OAuth binding link.
 
 Default backend:
 
@@ -21,6 +21,10 @@ docker restart openclaw-openclaw-gateway-1
 
 The tool accepts QQ numbers, `BungieName#1234`, `membershipType:membershipId`,
 or a bare long membership ID using `defaultMembershipType`.
+
+When a QQ number is not bound, `destiny2_card_query` calls the backend OAuth start
+endpoint and returns the binding link text instead of asking the user to provide
+JSON or backend details.
 
 It also accepts command aliases such as `/帮助`, `/战绩`, `/生涯`, `/pvp`,
 `/raid`, `/地牢`, `/热力图`, `/名片`, `/最近`, `/活动`, `/武器`, and `/资料`.

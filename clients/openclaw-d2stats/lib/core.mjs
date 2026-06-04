@@ -260,7 +260,7 @@ export async function bindQq(params = {}, rawConfig = {}, options = {}) {
   }
 
   if (!body.bungieName && (!body.membershipType || !body.membershipId)) {
-    return textResult("绑定需要 BungieName#1234 或 membershipType:membershipId。", { status: "invalid_input" });
+    return startQqOauthBinding(qq, config, options);
   }
 
   const url = `${config.baseUrl}/api/d2/bindings/qq`;
@@ -455,7 +455,15 @@ async function resolveTargetMembership(targetInput, config, options) {
 
   if (target.kind === "qq") {
     const url = `${config.baseUrl}/api/d2/bindings/qq/${encodeURIComponent(target.qq)}`;
-    const binding = await fetchEnvelope(url, config, options);
+    let binding;
+    try {
+      binding = await fetchEnvelope(url, config, options);
+    } catch (error) {
+      if (error instanceof D2StatsBackendError && error.status === 404) {
+        throw new D2StatsInputError(await startQqOauthBindingMessage(target.qq, config, options));
+      }
+      throw error;
+    }
     return {
       membershipType: Number(binding.membershipType),
       membershipId: String(binding.membershipId),
@@ -484,6 +492,50 @@ async function fetchEnvelope(url, config, options = {}) {
     throw new D2StatsBackendError(payload, response.status, url);
   }
   return payload?.data ?? payload;
+}
+
+async function startQqOauthBinding(qq, config, options = {}) {
+  try {
+    const message = await startQqOauthBindingMessage(qq, config, options);
+    return textResult(message, {
+      status: "oauth_bind_required",
+      qq,
+    });
+  } catch (error) {
+    if (error instanceof D2StatsBackendError) {
+      return textResult(formatBackendError(error.payload, error.status), {
+        status: "failed",
+        httpStatus: error.status,
+        url: error.url,
+        error: error.payload,
+      });
+    }
+    return textResult(`生成绑定链接失败：${error?.message || "未知错误"}`, {
+      status: "failed",
+      error: String(error?.stack || error),
+    });
+  }
+}
+
+async function startQqOauthBindingMessage(qq, config, options = {}) {
+  const url = `${config.baseUrl}/api/d2/bindings/qq/oauth/start`;
+  const response = await fetchWithTimeout(url, {
+    method: "POST",
+    timeoutMs: config.timeoutMs,
+    signal: options.signal,
+    fetchImpl: options.fetchImpl,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ qq }),
+  });
+  const payload = await safeJson(response);
+  if (!response.ok || payload?.success === false) {
+    throw new D2StatsBackendError(payload, response.status, url);
+  }
+  const message = payload?.data?.message;
+  if (typeof message !== "string" || message.length === 0) {
+    throw new D2StatsInputError("后端没有返回绑定链接。");
+  }
+  return message;
 }
 
 async function renderHtmlToPng(html, options = {}) {

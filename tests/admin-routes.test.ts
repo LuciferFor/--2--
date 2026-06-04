@@ -436,10 +436,11 @@ describe("admin routes", () => {
   });
 
   it("manages QQ bindings from admin APIs and writes audit logs", async () => {
+    const store = new NullStore();
     const app = await buildApp({
       config: adminConfig,
       cache: new MemoryCacheStore(),
-      store: new NullStore(),
+      store,
       destinyService: fakeDestinyService as never,
       manifestService: fakeManifestService as never
     });
@@ -486,6 +487,17 @@ describe("admin routes", () => {
       }
     });
 
+    await store.upsertQqOAuthToken({
+      qq: "607972716",
+      bungieMembershipId: "4352344",
+      membershipType: 3,
+      membershipId: "4611686019",
+      accessTokenEncrypted: "v1:access",
+      refreshTokenEncrypted: "v1:refresh",
+      accessExpiresAt: "2026-06-04T12:00:00.000Z",
+      refreshExpiresAt: "2026-09-04T12:00:00.000Z"
+    });
+
     const list = await app.inject({
       method: "GET",
       url: "/api/admin/bindings/qq?q=607&pageSize=10",
@@ -499,11 +511,23 @@ describe("admin routes", () => {
         items: [
           {
             qq: "607972716",
-            membershipId: "4611686019"
+            membershipId: "4611686019",
+            oauth: {
+              authorized: true,
+              bungieMembershipId: "4352344"
+            }
           }
         ]
       }
     });
+
+    const revoke = await app.inject({
+      method: "DELETE",
+      url: "/api/admin/bindings/qq/607972716/oauth",
+      headers: { cookie }
+    });
+    expect(revoke.statusCode).toBe(200);
+    expect(revoke.json()).toMatchObject({ success: true, data: { qq: "607972716", revoked: true } });
 
     const remove = await app.inject({
       method: "DELETE",
@@ -520,6 +544,7 @@ describe("admin routes", () => {
     });
     const actions = audit.json().data.items.map((row: { action: string }) => row.action);
     expect(actions).toContain("qq.bind.upsert");
+    expect(actions).toContain("qq.oauth.revoke");
     expect(actions).toContain("qq.bind.delete");
     await app.close();
   });

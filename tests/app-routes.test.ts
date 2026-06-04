@@ -3,6 +3,7 @@ import { buildApp } from "../src/app.js";
 import { MemoryCacheStore } from "../src/cache/cache.js";
 import { makeTestConfig } from "../src/config.js";
 import { NullStore } from "../src/db/store.js";
+import { QqOAuthService } from "../src/oauth/qq-oauth-service.js";
 
 const fakeDestinyService = {
   async searchPlayer() {
@@ -313,6 +314,55 @@ const fakeBungieClient = {
   }
 };
 
+const fakeOAuthBungieClient = {
+  async get() {
+    return {
+      destinyMemberships: [
+        {
+          membershipType: 3,
+          membershipId: "4611686018428939884",
+          displayName: "SteamName",
+          bungieGlobalDisplayName: "Lucifer",
+          bungieGlobalDisplayNameCode: 8571
+        },
+        {
+          membershipType: 2,
+          membershipId: "4611686018428939885",
+          displayName: "PsnName",
+          bungieGlobalDisplayName: "Lucifer",
+          bungieGlobalDisplayNameCode: 8571
+        }
+      ]
+    };
+  }
+};
+
+function oauthConfig() {
+  return makeTestConfig({
+    PUBLIC_BASE_URL: "https://xrx.hitokage.cn",
+    BUNGIE_OAUTH_CLIENT_ID: "45756",
+    BUNGIE_OAUTH_CLIENT_SECRET: "client-secret",
+    BUNGIE_OAUTH_REDIRECT_URL: "https://xrx.hitokage.cn/api/d2/bindings/qq/oauth/callback",
+    BUNGIE_OAUTH_TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 9).toString("base64"),
+    QQ_BIND_OAUTH_TTL_SECONDS: 180
+  });
+}
+
+function oauthFetch(): typeof fetch {
+  return (async () =>
+    new Response(
+      JSON.stringify({
+        access_token: "access-token",
+        token_type: "Bearer",
+        expires_in: 3600,
+        refresh_token: "refresh-token",
+        refresh_expires_in: 7776000,
+        membership_id: "4352344"
+      }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    )) as typeof fetch;
+}
+
 describe("Fastify routes", () => {
   it("returns the health envelope", async () => {
     const app = await buildApp({
@@ -394,6 +444,104 @@ describe("Fastify routes", () => {
       }
     });
     expect(resolve.json().data.lastResolvedAt).toEqual(expect.any(String));
+    expect(resolve.json().data.oauth).toBeUndefined();
+    await app.close();
+  });
+
+  it("returns config errors when QQ OAuth is not configured", async () => {
+    const app = await buildApp({
+      config: makeTestConfig(),
+      cache: new MemoryCacheStore(),
+      store: new NullStore(),
+      destinyService: fakeDestinyService as never,
+      cardService: fakeCardService as never
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/d2/bindings/qq/oauth/start",
+      payload: { qq: "607972716" }
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({ success: false, error: { code: "CONFIG_ERROR" } });
+    await app.close();
+  });
+
+  it("creates QQ bindings through Bungie OAuth callback and confirm", async () => {
+    const config = oauthConfig();
+    const cache = new MemoryCacheStore();
+    const store = new NullStore();
+    const qqOAuthService = new QqOAuthService(
+      config,
+      cache,
+      store,
+      fakeOAuthBungieClient as never,
+      oauthFetch()
+    );
+    const app = await buildApp({
+      config,
+      cache,
+      store,
+      destinyService: fakeDestinyService as never,
+      cardService: fakeCardService as never,
+      qqOAuthService
+    });
+
+    const start = await app.inject({
+      method: "POST",
+      url: "/api/d2/bindings/qq/oauth/start",
+      payload: { qq: "607972716" }
+    });
+    expect(start.statusCode).toBe(200);
+    const bindUrl = start.json().data.bindUrl as string;
+    expect(start.json().data.message).toContain("请在3分钟之内访问该链接进行绑定");
+    const state = new URL(bindUrl).searchParams.get("state");
+    expect(state).toMatch(/^user_bind:/);
+
+    const authorize = await app.inject({
+      method: "GET",
+      url: `/api/d2/bindings/qq/oauth/authorize?state=${encodeURIComponent(state ?? "")}`
+    });
+    expect(authorize.statusCode).toBe(302);
+    expect(authorize.headers.location).toContain("https://www.bungie.net/en/oauth/authorize");
+
+    const callback = await app.inject({
+      method: "GET",
+      url: `/api/d2/bindings/qq/oauth/callback?code=test-code&state=${encodeURIComponent(state ?? "")}`
+    });
+    expect(callback.statusCode).toBe(200);
+    expect(callback.body).toContain("选择要绑定的 Destiny 账号");
+    expect(callback.body).toContain("4611686018428939884");
+    const confirmToken = /name="confirmToken" value="([0-9a-f]{64})"/u.exec(callback.body)?.[1];
+    expect(confirmToken).toBeTruthy();
+
+    const confirm = await app.inject({
+      method: "POST",
+      url: "/api/d2/bindings/qq/oauth/confirm",
+      payload: {
+        confirmToken,
+        membershipType: 3,
+        membershipId: "4611686018428939884"
+      }
+    });
+    expect(confirm.statusCode).toBe(200);
+    expect(confirm.body).toContain("绑定成功");
+
+    const binding = await app.inject({ method: "GET", url: "/api/d2/bindings/qq/607972716" });
+    expect(binding.statusCode).toBe(200);
+    expect(binding.json()).toMatchObject({
+      success: true,
+      data: {
+        qq: "607972716",
+        membershipType: 3,
+        membershipId: "4611686018428939884",
+        bungieName: "Lucifer#8571"
+      }
+    });
+    expect(binding.json().data.oauth).toBeUndefined();
+    const token = await store.getQqOAuthToken("607972716");
+    expect(token?.accessTokenEncrypted).not.toContain("access-token");
+    expect(token?.refreshTokenEncrypted).not.toContain("refresh-token");
     await app.close();
   });
 

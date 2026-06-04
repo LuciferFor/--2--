@@ -10,6 +10,8 @@ import type {
   PlayerRow,
   QqBindingRecord,
   QqBindingRow,
+  QqOAuthTokenRecord,
+  QqOAuthTokenRow,
   QueryLogRow,
   Store
 } from "./store.js";
@@ -160,10 +162,16 @@ export class PostgresStore implements Store {
   async getQqBinding(qq: string): Promise<QqBindingRow | null> {
     const result = await this.pool.query(
       `
-        SELECT id, qq, membership_type, membership_id, bungie_name, display_name,
-               display_name_code, notes, last_resolved_at, created_at, updated_at
-        FROM qq_bindings
-        WHERE qq = $1
+        SELECT qb.id, qb.qq, qb.membership_type, qb.membership_id, qb.bungie_name, qb.display_name,
+               qb.display_name_code, qb.notes, qb.last_resolved_at, qb.created_at, qb.updated_at,
+               qot.bungie_membership_id AS oauth_bungie_membership_id,
+               qot.access_expires_at AS oauth_access_expires_at,
+               qot.refresh_expires_at AS oauth_refresh_expires_at,
+               qot.revoked_at AS oauth_revoked_at,
+               qot.updated_at AS oauth_updated_at
+        FROM qq_bindings qb
+        LEFT JOIN qq_oauth_tokens qot ON qot.qq = qb.qq
+        WHERE qb.qq = $1
       `,
       [qq]
     );
@@ -173,17 +181,23 @@ export class PostgresStore implements Store {
 
   async listQqBindings(query: string | undefined, options: PageOptions): Promise<PaginatedResult<QqBindingRow>> {
     const where = query
-      ? `WHERE qq LIKE $1 OR membership_id = $2 OR LOWER(COALESCE(bungie_name, '')) LIKE LOWER($3) OR LOWER(COALESCE(display_name, '')) LIKE LOWER($4)`
+      ? `WHERE qb.qq LIKE $1 OR qb.membership_id = $2 OR LOWER(COALESCE(qb.bungie_name, '')) LIKE LOWER($3) OR LOWER(COALESCE(qb.display_name, '')) LIKE LOWER($4)`
       : "";
     const params = query ? [`%${query}%`, query, `%${query}%`, `%${query}%`] : [];
-    const countResult = await this.pool.query(`SELECT COUNT(*)::int AS total FROM qq_bindings ${where}`, params);
+    const countResult = await this.pool.query(`SELECT COUNT(*)::int AS total FROM qq_bindings qb ${where}`, params);
     const result = await this.pool.query(
       `
-        SELECT id, qq, membership_type, membership_id, bungie_name, display_name,
-               display_name_code, notes, last_resolved_at, created_at, updated_at
-        FROM qq_bindings
+        SELECT qb.id, qb.qq, qb.membership_type, qb.membership_id, qb.bungie_name, qb.display_name,
+               qb.display_name_code, qb.notes, qb.last_resolved_at, qb.created_at, qb.updated_at,
+               qot.bungie_membership_id AS oauth_bungie_membership_id,
+               qot.access_expires_at AS oauth_access_expires_at,
+               qot.refresh_expires_at AS oauth_refresh_expires_at,
+               qot.revoked_at AS oauth_revoked_at,
+               qot.updated_at AS oauth_updated_at
+        FROM qq_bindings qb
+        LEFT JOIN qq_oauth_tokens qot ON qot.qq = qb.qq
         ${where}
-        ORDER BY updated_at DESC
+        ORDER BY qb.updated_at DESC
         LIMIT $${params.length + 1} OFFSET $${params.length + 2}
       `,
       [...params, options.pageSize, offset(options)]
@@ -204,6 +218,79 @@ export class PostgresStore implements Store {
 
   async touchQqBinding(qq: string): Promise<void> {
     await this.pool.query("UPDATE qq_bindings SET last_resolved_at = NOW() WHERE qq = $1", [qq]);
+  }
+
+  async upsertQqOAuthToken(token: QqOAuthTokenRecord): Promise<QqOAuthTokenRow> {
+    const result = await this.pool.query(
+      `
+        INSERT INTO qq_oauth_tokens (
+          qq,
+          bungie_membership_id,
+          membership_type,
+          membership_id,
+          access_token_encrypted,
+          refresh_token_encrypted,
+          access_expires_at,
+          refresh_expires_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        ON CONFLICT (qq)
+        DO UPDATE SET
+          bungie_membership_id = EXCLUDED.bungie_membership_id,
+          membership_type = EXCLUDED.membership_type,
+          membership_id = EXCLUDED.membership_id,
+          access_token_encrypted = EXCLUDED.access_token_encrypted,
+          refresh_token_encrypted = EXCLUDED.refresh_token_encrypted,
+          access_expires_at = EXCLUDED.access_expires_at,
+          refresh_expires_at = EXCLUDED.refresh_expires_at,
+          revoked_at = NULL,
+          updated_at = NOW()
+        RETURNING id, qq, bungie_membership_id, membership_type, membership_id,
+                  access_token_encrypted, refresh_token_encrypted, access_expires_at,
+                  refresh_expires_at, revoked_at, created_at, updated_at
+      `,
+      [
+        token.qq,
+        token.bungieMembershipId,
+        token.membershipType,
+        token.membershipId,
+        token.accessTokenEncrypted,
+        token.refreshTokenEncrypted ?? null,
+        token.accessExpiresAt,
+        token.refreshExpiresAt ?? null
+      ]
+    );
+
+    return mapQqOAuthTokenRow(result.rows[0]);
+  }
+
+  async getQqOAuthToken(qq: string): Promise<QqOAuthTokenRow | null> {
+    const result = await this.pool.query(
+      `
+        SELECT id, qq, bungie_membership_id, membership_type, membership_id,
+               access_token_encrypted, refresh_token_encrypted, access_expires_at,
+               refresh_expires_at, revoked_at, created_at, updated_at
+        FROM qq_oauth_tokens
+        WHERE qq = $1
+      `,
+      [qq]
+    );
+
+    return result.rows[0] ? mapQqOAuthTokenRow(result.rows[0]) : null;
+  }
+
+  async revokeQqOAuthToken(qq: string): Promise<boolean> {
+    const result = await this.pool.query(
+      `
+        UPDATE qq_oauth_tokens
+        SET revoked_at = COALESCE(revoked_at, NOW()),
+            updated_at = NOW()
+        WHERE qq = $1
+          AND revoked_at IS NULL
+      `,
+      [qq]
+    );
+    return (result.rowCount ?? 0) > 0;
   }
 
   async listQueryLogs(
@@ -484,6 +571,33 @@ function mapQqBindingRow(row: Record<string, any>): QqBindingRow {
     displayNameCode: row.display_name_code ?? undefined,
     notes: row.notes ?? undefined,
     lastResolvedAt: row.last_resolved_at?.toISOString(),
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+    oauth: row.oauth_bungie_membership_id
+      ? {
+          authorized: !row.oauth_revoked_at,
+          bungieMembershipId: row.oauth_bungie_membership_id,
+          accessExpiresAt: row.oauth_access_expires_at?.toISOString(),
+          refreshExpiresAt: row.oauth_refresh_expires_at?.toISOString(),
+          revokedAt: row.oauth_revoked_at?.toISOString(),
+          updatedAt: row.oauth_updated_at?.toISOString()
+        }
+      : { authorized: false }
+  };
+}
+
+function mapQqOAuthTokenRow(row: Record<string, any>): QqOAuthTokenRow {
+  return {
+    id: Number(row.id),
+    qq: row.qq,
+    bungieMembershipId: row.bungie_membership_id,
+    membershipType: row.membership_type,
+    membershipId: row.membership_id,
+    accessTokenEncrypted: row.access_token_encrypted,
+    refreshTokenEncrypted: row.refresh_token_encrypted ?? undefined,
+    accessExpiresAt: row.access_expires_at.toISOString(),
+    refreshExpiresAt: row.refresh_expires_at?.toISOString(),
+    revokedAt: row.revoked_at?.toISOString(),
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString()
   };

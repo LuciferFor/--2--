@@ -442,24 +442,41 @@ describe("d2stats core", () => {
   });
 
   it("returns a friendly text result for unbound QQ", async () => {
+    const seenUrls = [];
     const result = await queryCard(
       { target: "607972716", card: "summary" },
       { baseUrl: "http://d2.local" },
       {
-        fetchImpl: async () =>
-          jsonResponse(
+        fetchImpl: async (url, init) => {
+          seenUrls.push(String(url));
+          if (String(url).includes("/bindings/qq/oauth/start")) {
+            assert.equal(init.method, "POST");
+            assert.deepEqual(JSON.parse(init.body), { qq: "607972716" });
+            return jsonResponse({
+              success: true,
+              data: {
+                message: "请在3分钟之内访问该链接进行绑定\nhttp://d2.local/bind\n\n该链接🔗被腾讯标识为危险网站",
+              },
+            });
+          }
+          return jsonResponse(
             {
               success: false,
               error: { code: "NOT_FOUND", message: "qq binding was not found" },
             },
             404,
-          ),
+          );
+        },
         renderHtmlToPng: async () => Buffer.from("should-not-render"),
       },
     );
 
     assert.equal(result.content[0].type, "text");
-    assert.match(result.content[0].text, /未绑定/);
+    assert.match(result.content[0].text, /请在3分钟之内访问该链接进行绑定/);
+    assert.deepEqual(seenUrls, [
+      "http://d2.local/api/d2/bindings/qq/607972716",
+      "http://d2.local/api/d2/bindings/qq/oauth/start",
+    ]);
   });
 
   it("binds QQ through the public API", async () => {
@@ -479,6 +496,29 @@ describe("d2stats core", () => {
     );
 
     assert.match(result.content[0].text, /绑定成功/);
+  });
+
+  it("starts OAuth binding when no Bungie target is provided", async () => {
+    const result = await bindQq(
+      { qq: "607972716" },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async (url, init) => {
+          assert.equal(String(url), "http://d2.local/api/d2/bindings/qq/oauth/start");
+          assert.equal(init.method, "POST");
+          assert.deepEqual(JSON.parse(init.body), { qq: "607972716" });
+          return jsonResponse({
+            success: true,
+            data: {
+              message: "请在3分钟之内访问该链接进行绑定\nhttp://d2.local/bind\n\n该链接🔗被腾讯标识为危险网站",
+            },
+          });
+        },
+      },
+    );
+
+    assert.equal(result.details.status, "oauth_bind_required");
+    assert.match(result.content[0].text, /http:\/\/d2\.local\/bind/);
   });
 });
 

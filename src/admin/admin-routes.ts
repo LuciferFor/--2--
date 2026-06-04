@@ -156,6 +156,14 @@ export async function registerAdminRoutes(app: FastifyInstance, deps: AdminRoute
     return ok({ qq, deleted });
   });
 
+  app.delete("/api/admin/bindings/qq/:qq/oauth", async (request) => {
+    const session = requireAdminSession(request, authConfig);
+    const qq = parseQq((request.params as Params).qq);
+    const revoked = await deps.store.revokeQqOAuthToken(qq);
+    await audit(deps.store, request, session.username, "qq.oauth.revoke", qq, { revoked });
+    return ok({ qq, revoked });
+  });
+
   app.post("/api/admin/d2/query", async (request) => {
     const session = requireAdminSession(request, authConfig);
     const parsed = parseAdminD2Query(request.body);

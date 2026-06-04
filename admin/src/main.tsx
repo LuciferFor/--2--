@@ -81,6 +81,14 @@ interface QqBindingRow {
   notes?: string;
   lastResolvedAt?: string;
   updatedAt: string;
+  oauth?: {
+    authorized: boolean;
+    bungieMembershipId?: string;
+    accessExpiresAt?: string;
+    refreshExpiresAt?: string;
+    revokedAt?: string;
+    updatedAt?: string;
+  };
 }
 
 interface QueryParam {
@@ -712,6 +720,12 @@ function QqBindingsPanel() {
     reload();
   }
 
+  async function revokeOAuth(binding: QqBindingRow) {
+    if (!window.confirm(`撤销 QQ ${binding.qq} 的 Bungie OAuth 授权？绑定关系会保留。`)) return;
+    await api(`/api/admin/bindings/qq/${binding.qq}/oauth`, { method: "DELETE" });
+    reload();
+  }
+
   async function copyMembership(binding: QqBindingRow) {
     await navigator.clipboard.writeText(`${binding.membershipType}:${binding.membershipId}`).catch(() => undefined);
   }
@@ -774,6 +788,7 @@ function QqBindingsPanel() {
               <th>玩家</th>
               <th>Membership</th>
               <th>备注</th>
+              <th>OAuth</th>
               <th>最近解析</th>
               <th>更新</th>
               <th>操作</th>
@@ -781,17 +796,19 @@ function QqBindingsPanel() {
           </thead>
           <tbody>
             {data.items.length === 0 ? (
-              <tr><td colSpan={7}>暂无 QQ 绑定</td></tr>
+              <tr><td colSpan={8}>暂无 QQ 绑定</td></tr>
             ) : data.items.map((binding) => (
               <tr key={binding.qq}>
                 <td>{binding.qq}</td>
                 <td>{binding.bungieName ?? binding.displayName ?? "-"}</td>
                 <td>{`${binding.membershipType}:${binding.membershipId}`}</td>
                 <td>{binding.notes ?? "-"}</td>
+                <td>{formatOAuthStatus(binding.oauth)}</td>
                 <td>{binding.lastResolvedAt ? formatDate(binding.lastResolvedAt) : "-"}</td>
                 <td>{formatDate(binding.updatedAt)}</td>
                 <td className="actions">
                   <button onClick={() => copyMembership(binding)}>复制ID</button>
+                  <button onClick={() => revokeOAuth(binding)} disabled={!binding.oauth?.authorized}>撤销授权</button>
                   <button onClick={() => deleteBinding(binding)}>删除</button>
                 </td>
               </tr>
@@ -938,6 +955,14 @@ async function api<T>(url: string, options: { method?: string; body?: unknown } 
 
 function formatDate(value: string) {
   return new Date(value).toLocaleString("zh-CN", { hour12: false });
+}
+
+function formatOAuthStatus(oauth: QqBindingRow["oauth"]) {
+  if (!oauth || !oauth.authorized) {
+    return oauth?.revokedAt ? `已撤销 ${formatDate(oauth.revokedAt)}` : "未授权";
+  }
+  const refresh = oauth.refreshExpiresAt ? `刷新至 ${formatDate(oauth.refreshExpiresAt)}` : "无刷新Token";
+  return `已授权 / ${refresh}`;
 }
 
 function formatUptime(seconds: number) {

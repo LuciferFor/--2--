@@ -97,7 +97,7 @@ export function registerD2StatsRuntime(api, options = {}) {
     {
       name: "destiny2_card_query",
       description:
-        "Return Destiny 2 public stat data as an OpenClaw-rendered HTML PNG card. Use card=help for the menu, card=career for career overview, card=pvp for PvP/trials, card=dungeon_overview for dungeon stats, card=heatmap for activity heatmap, card=activities for recent activity history, and card=raid_overview when the user asks for raid overview, per-raid clears, day-one, or flawless raid stats. Prefer this tool for Destiny 2 stats, PvP, trials, weapons, profile, or recent activity. If a QQ number is unbound, ask the user for BungieName#1234 or membershipType:membershipId.",
+        "Return Destiny 2 public stat data as an OpenClaw-rendered HTML PNG card. Use card=help for the menu, card=career for career overview, card=pvp for PvP/trials, card=dungeon_overview for dungeon stats, card=heatmap for activity heatmap, card=activities for recent activity history, and card=raid_overview when the user asks for raid overview, per-raid clears, day-one, or flawless raid stats. Prefer this tool for Destiny 2 stats, PvP, trials, weapons, profile, or recent activity. If a QQ number is unbound, the tool returns a 3-minute Bungie OAuth binding link.",
       parameters: cardQueryParameters,
       async execute(_toolCallId, params, signal) {
         const config = getConfig();
@@ -112,7 +112,7 @@ export function registerD2StatsRuntime(api, options = {}) {
     {
       name: "destiny2_bind_qq",
       description:
-        "Bind a QQ number to a Destiny 2 player. Public self-binding only creates a binding and never overwrites an existing QQ binding.",
+        "Bind a QQ number to a Destiny 2 player. If no BungieName or membership ID is provided, return a 3-minute Bungie OAuth binding link. Public self-binding only creates a binding and never overwrites an existing QQ binding.",
       parameters: bindQqParameters,
       async execute(_toolCallId, params, signal) {
         const config = getConfig();

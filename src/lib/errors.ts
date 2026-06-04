@@ -38,6 +38,12 @@ export class OAuthRequiredError extends AppError {
   }
 }
 
+export class ConfigError extends AppError {
+  constructor(message: string, details?: unknown) {
+    super(503, "CONFIG_ERROR", message, details);
+  }
+}
+
 export class UpstreamError extends AppError {
   constructor(message: string, details?: unknown) {
     super(502, "UPSTREAM_ERROR", message, details);
