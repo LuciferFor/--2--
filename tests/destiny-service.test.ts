@@ -67,7 +67,23 @@ const fakeManifest = {
           displayProperties: { name: "纪念", icon: "/common/destiny2_content/icons/memorial.jpg" },
           itemTypeDisplayName: "机枪",
           inventory: { bucketTypeHash: 953998645, tierTypeName: "传说" }
+        },
+        "301": {
+          displayProperties: { name: "纪念", icon: "/common/destiny2_content/icons/memorial.jpg" },
+          itemTypeDisplayName: "机枪",
+          inventory: { bucketTypeHash: 953998645, tierTypeName: "传说" }
+        },
+        "302": {
+          displayProperties: { name: "烈日弹丸", icon: "/common/destiny2_content/icons/sunshot.jpg" },
+          itemTypeDisplayName: "手炮",
+          inventory: { bucketTypeHash: 2465295065, tierTypeName: "异域" }
         }
+      };
+    }
+    if (entityType === "DestinyInventoryBucketDefinition") {
+      return {
+        "953998645": { displayProperties: { name: "威能武器" } },
+        "2465295065": { displayProperties: { name: "能量武器" } }
       };
     }
     if (entityType === "DestinyActivityDefinition") {
@@ -121,6 +137,94 @@ class FakeBungieClient {
 
   async get(path: string, options?: { query?: Record<string, unknown> }) {
     if (path.includes("/Profile/")) {
+      if (String(options?.query?.components || "").includes("102")) {
+        return {
+          profile: {
+            data: {
+              userInfo: {
+                bungieGlobalDisplayName: "Guardian",
+                bungieGlobalDisplayNameCode: 7
+              },
+              characterIds: ["2305843009"],
+              minutesPlayedTotal: "120"
+            }
+          },
+          characters: {
+            data: {
+              "2305843009": {
+                classType: 2,
+                classHash: 2271682572,
+                light: 2010,
+                minutesPlayedTotal: "120"
+              }
+            }
+          },
+          profileInventory: {
+            data: {
+              items: [
+                {
+                  itemHash: 301,
+                  itemInstanceId: "691752902764",
+                  quantity: 1,
+                  bucketHash: 953998645,
+                  state: 1
+                }
+              ]
+            }
+          },
+          characterInventories: {
+            data: {
+              "2305843009": {
+                items: []
+              }
+            }
+          },
+          characterEquipment: {
+            data: {
+              "2305843009": {
+                items: [
+                  {
+                    itemHash: 302,
+                    itemInstanceId: "691752902765",
+                    quantity: 1,
+                    bucketHash: 2465295065,
+                    state: 0
+                  }
+                ]
+              }
+            }
+          },
+          characterLoadouts: {
+            data: {
+              "2305843009": {
+                loadouts: [{ name: "Raid", items: [{ itemInstanceId: "691752902765" }] }]
+              }
+            }
+          },
+          itemComponents: {
+            instances: {
+              data: {
+                "691752902764": {
+                  primaryStat: { value: 2010 },
+                  canEquip: true,
+                  transferStatus: 0
+                },
+                "691752902765": {
+                  primaryStat: { value: 2000 },
+                  canEquip: true,
+                  transferStatus: 0
+                }
+              }
+            },
+            commonData: {
+              data: {
+                "691752902764": { isLocked: true },
+                "691752902765": { isLocked: false }
+              }
+            }
+          }
+        };
+      }
       if (String(options?.query?.components || "").includes("Records")) {
         return {
           profile: {
@@ -522,6 +626,31 @@ describe("DestinyService", () => {
         }
       ],
       scan: { candidateRecords: 1, recordsReturned: 1, collectiblesReturned: 1 }
+    });
+    await expect(service.getPrivateInventory(3, "4611686018", "access-token", "607972716")).resolves.toMatchObject({
+      qq: "607972716",
+      totals: { items: 2, vault: 1, inventory: 0, equipped: 1 },
+      items: expect.arrayContaining([
+        expect.objectContaining({
+          name: "纪念",
+          owner: "vault",
+          itemInstanceId: "691752902764",
+          bucketName: "威能武器",
+          power: 2010,
+          locked: true
+        }),
+        expect.objectContaining({
+          name: "烈日弹丸",
+          owner: "equipped",
+          bucketName: "能量武器",
+          power: 2000,
+          locked: false
+        })
+      ])
+    });
+    await expect(service.getLoadouts(3, "4611686018", "access-token", "607972716")).resolves.toMatchObject({
+      qq: "607972716",
+      loadouts: [{ index: 0, characterId: "2305843009", name: "Raid", itemCount: 1 }]
     });
     await expect(
       service.getDungeonOverview(3, "4611686018", { historyPages: 1, pgcrLimit: 5 })

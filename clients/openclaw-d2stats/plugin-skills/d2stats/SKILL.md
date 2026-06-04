@@ -1,12 +1,16 @@
 # Destiny 2 Stats OpenClaw Skill
 
-Use this skill when a user asks to query Destiny 2 stats, cards, QQ bindings, raid, dungeon, Grandmaster, PvP, career, heatmap, crafting pattern, or catalyst progress.
+Use this skill when a user asks to query Destiny 2 stats, cards, QQ bindings, raid, dungeon, Grandmaster, PvP, career, heatmap, crafting pattern, catalyst progress, or OAuth-protected inventory/equipment management.
 
 ## Tool To Use
 
 Prefer `destiny2_card_query` for all read-only Destiny 2 queries. It returns an image card rendered from backend JSON.
 
 Use `destiny2_bind_qq` only when the user explicitly wants to bind a QQ number to a Bungie account, or when they ask for a binding link.
+
+Use `destiny2_inventory_query` for `/仓库搜索`, `/库存`, `/背包`, or when the user needs itemInstanceId/characterId before an equipment operation. It only accepts QQ targets and returns an image card.
+
+Use `destiny2_item_action` for `/装备`, `/转移`, `/锁定`, `/解锁`, `/套装`. It only accepts QQ targets. Always call it once without `confirm=true` to produce the confirmation text, and only call again with `confirm=true` after the user explicitly confirms.
 
 ## Targets
 
@@ -34,6 +38,8 @@ Map common Chinese commands to `destiny2_card_query`:
 - `/热力图`, `/活跃`: `card=heatmap`.
 - `/锻造`, `/图纸`: `card=crafting`.
 - `/催化`: `card=catalysts`; only use QQ targets because catalyst progress requires OAuth.
+- `/仓库搜索`, `/库存`, `/背包`: use `destiny2_inventory_query`; only use QQ targets.
+- `/装备`, `/转移`, `/锁定`, `/解锁`, `/套装`: use `destiny2_item_action`; only use QQ targets and require explicit confirmation before execution.
 - `/武器`: `card=weapons`.
 - `/最近`, `/活动`, `/战绩列表`: `card=activities`.
 - `/单局`, `PGCR`: `card=activity` and pass `activityId`.
@@ -50,5 +56,8 @@ Map common Chinese commands to `destiny2_card_query`:
 
 - Catalyst progress is private-ish OAuth data. Only query catalysts by QQ number that owns the OAuth binding.
 - Do not query catalyst progress by arbitrary BungieName or membership id.
+- Inventory, vault, equipment, lock state, and loadout actions are private OAuth capabilities. Only use them for the QQ owner; never use BungieName or membershipId for these tools.
+- Never execute `destiny2_item_action` with `confirm=true` unless the user has just explicitly confirmed the operation. If the user gave only an item name, first run `destiny2_inventory_query` to show candidate items and ask which itemInstanceId to use.
+- Do not offer dismantle/delete/mod/socket operations; this skill intentionally supports only safe DIM-like operations.
 - Do not claim Bungie returns these images. The backend returns JSON and OpenClaw renders the image card.
 - If a query fails because the Bungie API key or backend is broken, say the backend/Bungie API is unavailable and avoid inventing stats.

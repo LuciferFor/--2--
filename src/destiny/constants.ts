@@ -5,6 +5,16 @@ export const VALID_MEMBERSHIP_TYPES = new Set([1, 2, 3, 4, 5, 6, 10, 20, 254]);
 export const PROFILE_COMPONENTS = ["Profiles", "Characters"] as const;
 export const CRAFTABLES_COMPONENTS = ["Profiles", "Characters", "Craftables"] as const;
 export const CATALYST_COMPONENTS = ["Profiles", "Characters", "Records", "Collectibles"] as const;
+export const PRIVATE_INVENTORY_COMPONENTS = [
+  100, // Profiles
+  102, // ProfileInventories
+  200, // Characters
+  201, // CharacterInventories
+  205, // CharacterEquipment
+  206, // CharacterLoadouts
+  300, // ItemInstances
+  307 // ItemCommonData
+] as const;
 
 export const CACHE_TTL = {
   playerSearch: 24 * 60 * 60,

@@ -101,6 +101,94 @@ export interface WeaponsSummary {
   updatedAt: string;
 }
 
+export type InventoryOwner = "vault" | "inventory" | "equipped";
+export type InventoryBucketFilter = "all" | "vault" | "inventory" | "equipped";
+
+export interface InventoryItemSummary {
+  itemHash: number;
+  itemInstanceId?: string;
+  quantity: number;
+  owner: InventoryOwner;
+  characterId?: string;
+  bucketHash?: number;
+  bucketName?: string;
+  name: string;
+  iconPath?: string;
+  itemTypeDisplayName?: string;
+  tierTypeName?: string;
+  power?: number;
+  locked: boolean;
+  canEquip: boolean;
+  transferStatus?: number;
+  state?: number;
+  classType?: number;
+  damageType?: string;
+  energyCapacity?: number;
+  energyUsed?: number;
+}
+
+export interface InventorySummary {
+  qq?: string;
+  membershipType: number;
+  membershipId: string;
+  characters: CharacterSummary[];
+  items: InventoryItemSummary[];
+  totals: {
+    items: number;
+    vault: number;
+    inventory: number;
+    equipped: number;
+  };
+  updatedAt: string;
+}
+
+export interface InventorySearchSummary {
+  qq?: string;
+  membershipType: number;
+  membershipId: string;
+  query: string;
+  bucket: InventoryBucketFilter;
+  characterId?: string;
+  items: InventoryItemSummary[];
+  total: number;
+  updatedAt: string;
+}
+
+export interface InventoryActionResult {
+  qq?: string;
+  membershipType: number;
+  membershipId: string;
+  action: "transfer" | "equip" | "equipItems" | "lock" | "equipLoadout";
+  ok: boolean;
+  itemId?: string;
+  itemIds?: string[];
+  itemHash?: number;
+  characterId?: string;
+  loadoutIndex?: number;
+  bungieResponse: unknown;
+  message: string;
+  updatedAt: string;
+}
+
+export interface LoadoutSummary {
+  index: number;
+  characterId: string;
+  name?: string;
+  colorHash?: number;
+  iconHash?: number;
+  itemCount: number;
+  raw?: unknown;
+}
+
+export interface LoadoutsSummary {
+  qq?: string;
+  membershipType: number;
+  membershipId: string;
+  characters: CharacterSummary[];
+  loadouts: LoadoutSummary[];
+  updatedAt: string;
+}
+
 export interface CraftableWeaponSummary {
   itemHash: string;
   name: string;

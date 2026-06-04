@@ -2,7 +2,13 @@ import type { CacheStore } from "../cache/cache.js";
 import type { Store } from "../db/store.js";
 import { BadRequestError, NotFoundError } from "../lib/errors.js";
 import { asArray, asBoolean, asNumber, asRecord, asString, numberFrom, optionalNumber, optionalString } from "../lib/json.js";
-import { CACHE_TTL, CATALYST_COMPONENTS, CRAFTABLES_COMPONENTS, PROFILE_COMPONENTS } from "./constants.js";
+import {
+  CACHE_TTL,
+  CATALYST_COMPONENTS,
+  CRAFTABLES_COMPONENTS,
+  PRIVATE_INVENTORY_COMPONENTS,
+  PROFILE_COMPONENTS
+} from "./constants.js";
 import { parseBungieName } from "./bungie-name.js";
 import type { BungieClient } from "./bungie-client.js";
 import type {
@@ -32,6 +38,13 @@ import type {
   HeatmapCalendarYear,
   HeatmapRange,
   HeatmapSummary,
+  InventoryActionResult,
+  InventoryBucketFilter,
+  InventoryItemSummary,
+  InventoryOwner,
+  InventorySearchSummary,
+  InventorySummary,
+  LoadoutsSummary,
   NamecardSummary,
   PgcrPlayerSummary,
   PgcrSummary,
@@ -910,6 +923,251 @@ export class DestinyService {
     return result;
   }
 
+  async getPrivateInventory(
+    membershipType: number,
+    membershipId: string,
+    accessToken: string,
+    qq?: string
+  ): Promise<InventorySummary> {
+    const response = await this.getPrivateProfile(membershipType, membershipId, accessToken, PRIVATE_INVENTORY_COMPONENTS);
+    return this.toInventorySummary(membershipType, membershipId, response, qq);
+  }
+
+  async searchPrivateInventory(
+    membershipType: number,
+    membershipId: string,
+    accessToken: string,
+    options: {
+      qq?: string;
+      query?: string;
+      bucket: InventoryBucketFilter;
+      characterId?: string;
+    }
+  ): Promise<InventorySearchSummary> {
+    const inventory = await this.getPrivateInventory(membershipType, membershipId, accessToken, options.qq);
+    const normalizedQuery = normalizeSearchText(options.query);
+    const characterId = options.characterId;
+    const items = inventory.items.filter((item) => {
+      if (options.bucket !== "all" && item.owner !== options.bucket) {
+        return false;
+      }
+      if (characterId && item.characterId !== characterId) {
+        return false;
+      }
+      if (!normalizedQuery) {
+        return true;
+      }
+      return normalizeSearchText(`${item.name} ${item.itemTypeDisplayName ?? ""} ${item.bucketName ?? ""}`).includes(
+        normalizedQuery
+      );
+    });
+
+    return {
+      qq: options.qq,
+      membershipType,
+      membershipId,
+      query: options.query?.trim() ?? "",
+      bucket: options.bucket,
+      ...(characterId ? { characterId } : {}),
+      items,
+      total: items.length,
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  async transferInventoryItem(
+    membershipType: number,
+    membershipId: string,
+    accessToken: string,
+    request: {
+      qq?: string;
+      itemReferenceHash: number;
+      stackSize: number;
+      transferToVault: boolean;
+      itemId: string;
+      characterId: string;
+    }
+  ): Promise<InventoryActionResult> {
+    const response = await this.client.post<unknown>("/Destiny2/Actions/Items/TransferItem/", {
+      headers: oauthHeaders(accessToken),
+      body: {
+        itemReferenceHash: request.itemReferenceHash,
+        stackSize: request.stackSize,
+        transferToVault: request.transferToVault,
+        itemId: request.itemId,
+        characterId: request.characterId,
+        membershipType
+      }
+    });
+    return {
+      qq: request.qq,
+      membershipType,
+      membershipId,
+      action: "transfer",
+      ok: true,
+      itemId: request.itemId,
+      itemHash: request.itemReferenceHash,
+      characterId: request.characterId,
+      bungieResponse: response,
+      message: request.transferToVault ? "已移动到仓库" : "已移动到角色",
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  async equipInventoryItem(
+    membershipType: number,
+    membershipId: string,
+    accessToken: string,
+    request: { qq?: string; itemId: string; characterId: string }
+  ): Promise<InventoryActionResult> {
+    const response = await this.client.post<unknown>("/Destiny2/Actions/Items/EquipItem/", {
+      headers: oauthHeaders(accessToken),
+      body: {
+        itemId: request.itemId,
+        characterId: request.characterId,
+        membershipType
+      }
+    });
+    return {
+      qq: request.qq,
+      membershipType,
+      membershipId,
+      action: "equip",
+      ok: true,
+      itemId: request.itemId,
+      characterId: request.characterId,
+      bungieResponse: response,
+      message: "已装备物品",
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  async equipInventoryItems(
+    membershipType: number,
+    membershipId: string,
+    accessToken: string,
+    request: { qq?: string; itemIds: string[]; characterId: string }
+  ): Promise<InventoryActionResult> {
+    const response = await this.client.post<unknown>("/Destiny2/Actions/Items/EquipItems/", {
+      headers: oauthHeaders(accessToken),
+      body: {
+        itemIds: request.itemIds,
+        characterId: request.characterId,
+        membershipType
+      }
+    });
+    return {
+      qq: request.qq,
+      membershipType,
+      membershipId,
+      action: "equipItems",
+      ok: true,
+      itemIds: request.itemIds,
+      characterId: request.characterId,
+      bungieResponse: response,
+      message: "已批量装备物品",
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  async setInventoryItemLockState(
+    membershipType: number,
+    membershipId: string,
+    accessToken: string,
+    request: { qq?: string; itemId: string; characterId: string; state: boolean }
+  ): Promise<InventoryActionResult> {
+    const response = await this.client.post<unknown>("/Destiny2/Actions/Items/SetLockState/", {
+      headers: oauthHeaders(accessToken),
+      body: {
+        state: request.state,
+        itemId: request.itemId,
+        characterId: request.characterId,
+        membershipType
+      }
+    });
+    return {
+      qq: request.qq,
+      membershipType,
+      membershipId,
+      action: "lock",
+      ok: true,
+      itemId: request.itemId,
+      characterId: request.characterId,
+      bungieResponse: response,
+      message: request.state ? "已锁定物品" : "已解锁物品",
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  async getLoadouts(
+    membershipType: number,
+    membershipId: string,
+    accessToken: string,
+    qq?: string
+  ): Promise<LoadoutsSummary> {
+    const response = await this.getPrivateProfile(membershipType, membershipId, accessToken, PRIVATE_INVENTORY_COMPONENTS);
+    const profileResponse = asRecord(response);
+    const charactersData = asRecord(asRecord(profileResponse.characters).data);
+    const characters = await Promise.all(
+      Object.entries(charactersData).map(([characterId, value]) =>
+        this.toCharacterSummary(characterId, asRecord(value))
+      )
+    );
+    const loadoutData = asRecord(asRecord(profileResponse.characterLoadouts).data);
+    const loadouts = Object.entries(loadoutData).flatMap(([characterId, value]) => {
+      const entries = asArray(asRecord(value).loadouts);
+      return entries.map((entry, index) => {
+        const record = asRecord(entry);
+        return {
+          index: optionalNumber(record.index) ?? index,
+          characterId,
+          name: optionalString(record.name),
+          colorHash: optionalNumber(record.colorHash),
+          iconHash: optionalNumber(record.iconHash),
+          itemCount: asArray(record.items).length,
+          raw: record
+        };
+      });
+    });
+
+    return {
+      qq,
+      membershipType,
+      membershipId,
+      characters,
+      loadouts,
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  async equipLoadout(
+    membershipType: number,
+    membershipId: string,
+    accessToken: string,
+    request: { qq?: string; characterId: string; loadoutIndex: number }
+  ): Promise<InventoryActionResult> {
+    const response = await this.client.post<unknown>("/Destiny2/Actions/Loadouts/EquipLoadout/", {
+      headers: oauthHeaders(accessToken),
+      body: {
+        loadoutIndex: request.loadoutIndex,
+        characterId: request.characterId,
+        membershipType
+      }
+    });
+    return {
+      qq: request.qq,
+      membershipType,
+      membershipId,
+      action: "equipLoadout",
+      ok: true,
+      characterId: request.characterId,
+      loadoutIndex: request.loadoutIndex,
+      bungieResponse: response,
+      message: "已装备游戏内 Loadout",
+      updatedAt: new Date().toISOString()
+    };
+  }
+
   async getRaidOverview(
     membershipType: number,
     membershipId: string,
@@ -1497,6 +1755,179 @@ export class DestinyService {
     } catch {
       return {};
     }
+  }
+
+  private async safeInventoryBucketDefinitions(): Promise<Record<string, InventoryBucketDefinition>> {
+    try {
+      return await this.manifest.getDefinitionMap<InventoryBucketDefinition>("DestinyInventoryBucketDefinition");
+    } catch {
+      return {};
+    }
+  }
+
+  private async getPrivateProfile(
+    membershipType: number,
+    membershipId: string,
+    accessToken: string,
+    components: readonly (string | number)[]
+  ): Promise<unknown> {
+    return this.client.get<unknown>(`/Destiny2/${membershipType}/Profile/${membershipId}/`, {
+      query: {
+        components: [...components]
+      },
+      headers: oauthHeaders(accessToken)
+    });
+  }
+
+  private async toInventorySummary(
+    membershipType: number,
+    membershipId: string,
+    response: unknown,
+    qq?: string
+  ): Promise<InventorySummary> {
+    const profileResponse = asRecord(response);
+    const charactersData = asRecord(asRecord(profileResponse.characters).data);
+    const characters = await Promise.all(
+      Object.entries(charactersData).map(([characterId, value]) =>
+        this.toCharacterSummary(characterId, asRecord(value))
+      )
+    );
+    const [inventoryDefinitions, bucketDefinitions] = await Promise.all([
+      this.safeInventoryDefinitions(),
+      this.safeInventoryBucketDefinitions()
+    ]);
+    const itemInstances = asRecord(asRecord(asRecord(profileResponse.itemComponents).instances).data);
+    const itemCommonData = asRecord(asRecord(asRecord(profileResponse.itemComponents).commonData).data);
+    const items: InventoryItemSummary[] = [];
+
+    this.addInventoryItems(
+      items,
+      asArray(asRecord(asRecord(profileResponse.profileInventory).data).items),
+      "vault",
+      undefined,
+      inventoryDefinitions,
+      bucketDefinitions,
+      itemInstances,
+      itemCommonData
+    );
+
+    const characterInventories = asRecord(asRecord(profileResponse.characterInventories).data);
+    for (const [characterId, value] of Object.entries(characterInventories)) {
+      this.addInventoryItems(
+        items,
+        asArray(asRecord(value).items),
+        "inventory",
+        characterId,
+        inventoryDefinitions,
+        bucketDefinitions,
+        itemInstances,
+        itemCommonData
+      );
+    }
+
+    const characterEquipment = asRecord(asRecord(profileResponse.characterEquipment).data);
+    for (const [characterId, value] of Object.entries(characterEquipment)) {
+      this.addInventoryItems(
+        items,
+        asArray(asRecord(value).items),
+        "equipped",
+        characterId,
+        inventoryDefinitions,
+        bucketDefinitions,
+        itemInstances,
+        itemCommonData
+      );
+    }
+
+    const totals = inventoryOwnerCounts(items);
+    return {
+      qq,
+      membershipType,
+      membershipId,
+      characters,
+      items: items.sort(compareInventoryItems),
+      totals,
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  private addInventoryItems(
+    target: InventoryItemSummary[],
+    rawItems: unknown[],
+    owner: InventoryOwner,
+    characterId: string | undefined,
+    inventoryDefinitions: Record<string, InventoryItemDefinition>,
+    bucketDefinitions: Record<string, InventoryBucketDefinition>,
+    itemInstances: Record<string, unknown>,
+    itemCommonData: Record<string, unknown>
+  ): void {
+    for (const rawItem of rawItems) {
+      const item = this.toInventoryItemSummary(
+        asRecord(rawItem),
+        owner,
+        characterId,
+        inventoryDefinitions,
+        bucketDefinitions,
+        itemInstances,
+        itemCommonData
+      );
+      if (item) {
+        target.push(item);
+      }
+    }
+  }
+
+  private toInventoryItemSummary(
+    item: Record<string, unknown>,
+    owner: InventoryOwner,
+    characterId: string | undefined,
+    inventoryDefinitions: Record<string, InventoryItemDefinition>,
+    bucketDefinitions: Record<string, InventoryBucketDefinition>,
+    itemInstances: Record<string, unknown>,
+    itemCommonData: Record<string, unknown>
+  ): InventoryItemSummary | null {
+    const itemHash = optionalNumber(item.itemHash) ?? numberFrom(item.itemHash, Number.NaN);
+    if (!Number.isFinite(itemHash)) {
+      return null;
+    }
+    const instanceId = optionalString(item.itemInstanceId);
+    const definition = inventoryDefinitions[String(itemHash)];
+    const instance = asRecord(instanceId ? itemInstances[instanceId] : undefined);
+    const common = asRecord(instanceId ? itemCommonData[instanceId] : undefined);
+    const bucketHash =
+      optionalNumber(item.bucketHash) ??
+      optionalNumber(definition?.inventory?.bucketTypeHash) ??
+      numberFrom(definition?.inventory?.bucketTypeHash, Number.NaN);
+    const bucketDefinition = Number.isFinite(bucketHash) ? bucketDefinitions[String(bucketHash)] : undefined;
+    const power = optionalNumber(asRecord(instance.primaryStat).value);
+    const energy = asRecord(instance.energy);
+    const state = optionalNumber(item.state);
+    const locked = asBoolean(common.isLocked, isLockedInventoryItem(state));
+    return {
+      itemHash,
+      ...(instanceId ? { itemInstanceId: instanceId } : {}),
+      quantity: optionalNumber(item.quantity) ?? 1,
+      owner,
+      ...(characterId ? { characterId } : {}),
+      ...(Number.isFinite(bucketHash) ? { bucketHash } : {}),
+      bucketName:
+        optionalString(bucketDefinition?.displayProperties?.name) ??
+        optionalString(bucketDefinition?.displayProperties?.description) ??
+        optionalString(definition?.inventory?.bucketTypeName),
+      name: asString(definition?.displayProperties?.name, `Item ${itemHash}`),
+      iconPath: optionalString(definition?.displayProperties?.icon),
+      itemTypeDisplayName: optionalString(definition?.itemTypeDisplayName),
+      tierTypeName: optionalString(definition?.inventory?.tierTypeName),
+      ...(power !== undefined ? { power } : {}),
+      locked,
+      canEquip: asBoolean(instance.canEquip, Boolean(instanceId)),
+      transferStatus: optionalNumber(instance.transferStatus),
+      ...(state !== undefined ? { state } : {}),
+      classType: optionalNumber(definition?.classType),
+      damageType: optionalString(instance.damageType),
+      energyCapacity: optionalNumber(energy.energyCapacity),
+      energyUsed: optionalNumber(energy.energyUsed)
+    };
   }
 
   private toCatalystWeapon(
@@ -3277,6 +3708,7 @@ interface InventoryItemDefinition {
     icon?: string;
   };
   itemTypeDisplayName?: string;
+  classType?: number;
   inventory?: {
     bucketTypeHash?: string | number;
     bucketTypeName?: string;
@@ -3287,6 +3719,14 @@ interface InventoryItemDefinition {
   };
   iconWatermark?: string;
   iconWatermarkShelved?: string;
+  [key: string]: unknown;
+}
+
+interface InventoryBucketDefinition {
+  displayProperties?: {
+    name?: string;
+    description?: string;
+  };
   [key: string]: unknown;
 }
 
@@ -3301,6 +3741,45 @@ interface RecordDefinition {
   loreHash?: unknown;
   recordTypeName?: unknown;
   [key: string]: unknown;
+}
+
+function oauthHeaders(accessToken: string): Record<string, string> {
+  return {
+    Authorization: `Bearer ${accessToken}`
+  };
+}
+
+function normalizeSearchText(value: unknown): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/gu, " ");
+}
+
+function inventoryOwnerCounts(items: InventoryItemSummary[]): InventorySummary["totals"] {
+  return {
+    items: items.length,
+    vault: items.filter((item) => item.owner === "vault").length,
+    inventory: items.filter((item) => item.owner === "inventory").length,
+    equipped: items.filter((item) => item.owner === "equipped").length
+  };
+}
+
+function isLockedInventoryItem(state: number | undefined): boolean {
+  return state !== undefined && (state & 1) === 1;
+}
+
+function compareInventoryItems(left: InventoryItemSummary, right: InventoryItemSummary): number {
+  const ownerOrder: Record<InventoryOwner, number> = { equipped: 0, inventory: 1, vault: 2 };
+  const ownerDiff = ownerOrder[left.owner] - ownerOrder[right.owner];
+  if (ownerDiff !== 0) {
+    return ownerDiff;
+  }
+  const powerDiff = (right.power ?? 0) - (left.power ?? 0);
+  if (powerDiff !== 0) {
+    return powerDiff;
+  }
+  return left.name.localeCompare(right.name);
 }
 
 const CAREER_MODES: CareerModeInfo[] = [

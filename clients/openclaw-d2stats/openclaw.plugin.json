@@ -9,7 +9,9 @@
   "contracts": {
     "tools": [
       "destiny2_card_query",
-      "destiny2_bind_qq"
+      "destiny2_bind_qq",
+      "destiny2_inventory_query",
+      "destiny2_item_action"
     ]
   },
   "configSchema": {

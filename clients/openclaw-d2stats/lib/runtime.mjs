@@ -1,4 +1,4 @@
-import { bindQq, queryCard, resolveConfig } from "./core.mjs";
+import { bindQq, itemAction, queryCard, queryInventory, resolveConfig } from "./core.mjs";
 
 const cardQueryParameters = {
   type: "object",
@@ -106,6 +106,93 @@ const bindQqParameters = {
   required: ["qq"],
 };
 
+const inventoryQueryParameters = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    target: {
+      type: "string",
+      description: "QQ number only. Inventory requires the QQ owner's Bungie OAuth authorization.",
+    },
+    q: {
+      type: "string",
+      description: "Optional item search keyword, such as weapon name.",
+    },
+    query: {
+      type: "string",
+      description: "Optional alias for q.",
+    },
+    bucket: {
+      type: "string",
+      enum: ["all", "vault", "inventory", "equipped"],
+      description: "Optional inventory scope.",
+    },
+    characterId: {
+      type: "string",
+      description: "Optional Destiny character ID filter.",
+    },
+  },
+  required: ["target"],
+};
+
+const itemActionParameters = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    target: {
+      type: "string",
+      description: "QQ number only. Equipment operations require the QQ owner's Bungie OAuth authorization.",
+    },
+    qq: {
+      type: "string",
+      description: "Optional explicit QQ number; same as target.",
+    },
+    action: {
+      type: "string",
+      enum: ["transfer", "equip", "equip_items", "lock", "unlock", "equip_loadout"],
+      description: "Operation to perform.",
+    },
+    command: {
+      type: "string",
+      description: "Natural command alias, such as /装备, /转移, /锁定, /解锁, /套装.",
+    },
+    itemId: {
+      type: "string",
+      description: "Destiny itemInstanceId from inventory query.",
+    },
+    itemIds: {
+      type: "array",
+      items: { type: "string" },
+      description: "Destiny itemInstanceIds for bulk equip.",
+    },
+    itemReferenceHash: {
+      type: "number",
+      description: "Destiny itemHash, required for transfer.",
+    },
+    stackSize: {
+      type: "number",
+      description: "Transfer stack size, default 1.",
+    },
+    transferToVault: {
+      type: "boolean",
+      description: "For transfer: true moves to vault, false moves from vault to character.",
+    },
+    characterId: {
+      type: "string",
+      description: "Destination/equipping Destiny character ID.",
+    },
+    loadoutIndex: {
+      type: "number",
+      description: "In-game loadout index, 0-9.",
+    },
+    confirm: {
+      type: "boolean",
+      description: "Must be true to execute. Omit or false returns a confirmation prompt only.",
+    },
+  },
+  required: ["action"],
+};
+
 export function registerD2StatsRuntime(api, options = {}) {
   const logger = getLogger(api);
   const getConfig = () => resolveConfig(api.pluginConfig || options.config || {});
@@ -135,6 +222,36 @@ export function registerD2StatsRuntime(api, options = {}) {
         const config = getConfig();
         logger.info("d2stats.bind qq", { hasQq: Boolean(params?.qq) });
         return bindQq(params, config, { signal, fetchImpl: options.fetchImpl });
+      },
+    },
+    { optional: false },
+  );
+
+  api.registerTool(
+    {
+      name: "destiny2_inventory_query",
+      description:
+        "Query the bound QQ owner's Destiny 2 private inventory/vault/equipped items and return an image card. Use for /仓库搜索, /库存, /背包. Requires QQ OAuth; if missing, returns a 3-minute Bungie OAuth binding link.",
+      parameters: inventoryQueryParameters,
+      async execute(_toolCallId, params, signal) {
+        const config = getConfig();
+        logger.info("d2stats.inventory query", { hasTarget: Boolean(params?.target), hasQuery: Boolean(params?.q || params?.query) });
+        return queryInventory(params, config, { signal, fetchImpl: options.fetchImpl });
+      },
+    },
+    { optional: false },
+  );
+
+  api.registerTool(
+    {
+      name: "destiny2_item_action",
+      description:
+        "Safely operate the bound QQ owner's Destiny 2 equipment: transfer, equip, bulk equip, lock/unlock, or equip in-game loadout. Never use for arbitrary membership IDs. First call without confirm=true to ask for confirmation; only execute after explicit user confirmation.",
+      parameters: itemActionParameters,
+      async execute(_toolCallId, params, signal) {
+        const config = getConfig();
+        logger.info("d2stats.item action", { action: params?.action, confirmed: params?.confirm === true });
+        return itemAction(params, config, { signal, fetchImpl: options.fetchImpl });
       },
     },
     { optional: false },

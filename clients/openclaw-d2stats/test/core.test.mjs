@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { bindQq, buildPublicDataUrl, parseTarget, queryCard, resolveConfig } from "../lib/core.mjs";
+import { bindQq, buildPublicDataUrl, itemAction, parseTarget, queryCard, queryInventory, resolveConfig } from "../lib/core.mjs";
 
 describe("d2stats core", () => {
   it("parses supported target formats", () => {
@@ -970,6 +970,98 @@ describe("d2stats core", () => {
     );
 
     assert.match(result.content[0].text, /绑定成功/);
+  });
+
+  it("renders inventory query cards for QQ OAuth targets", async () => {
+    const seenUrls = [];
+    const result = await queryInventory(
+      { target: "607972716", q: "纪念" },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async (url) => {
+          seenUrls.push(String(url));
+          if (String(url).includes("/bindings/qq/")) {
+            return jsonResponse({
+              success: true,
+              data: {
+                qq: "607972716",
+                membershipType: 3,
+                membershipId: "4611686018428939884",
+                bungieName: "Lucifer#8571",
+                displayName: "Lucifer",
+                displayNameCode: 8571,
+              },
+            });
+          }
+          if (String(url).includes("/namecard/")) {
+            return jsonResponse({
+              success: true,
+              data: {
+                membershipType: 3,
+                membershipId: "4611686018428939884",
+                profile: { characters: [] },
+              },
+            });
+          }
+          return jsonResponse({
+            success: true,
+            data: {
+              membershipType: 3,
+              membershipId: "4611686018428939884",
+              query: "纪念",
+              items: [
+                {
+                  itemHash: 101,
+                  itemInstanceId: "691752902764",
+                  owner: "vault",
+                  name: "纪念",
+                  itemTypeDisplayName: "机枪",
+                  locked: true,
+                  canEquip: true,
+                },
+              ],
+              total: 1,
+            },
+          });
+        },
+        renderHtmlToPng: async (html) => {
+          assert.match(html, /DESTINY 2 INVENTORY/);
+          assert.match(html, /纪念/);
+          assert.match(html, /691752902764/);
+          return Buffer.from("png-bytes");
+        },
+      },
+    );
+
+    assert.equal(result.content[0].type, "image");
+    assert.deepEqual(seenUrls, [
+      "http://d2.local/api/d2/bindings/qq/607972716",
+      "http://d2.local/api/d2/namecard/3/4611686018428939884",
+      "http://d2.local/api/d2/inventory/qq/607972716/search?q=%E7%BA%AA%E5%BF%B5&bucket=all",
+    ]);
+  });
+
+  it("requires confirmation before item actions execute", async () => {
+    let called = false;
+    const result = await itemAction(
+      {
+        target: "607972716",
+        action: "equip",
+        itemId: "691752902764",
+        characterId: "2305843009",
+      },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async () => {
+          called = true;
+          return jsonResponse({ success: true, data: {} });
+        },
+      },
+    );
+
+    assert.equal(called, false);
+    assert.equal(result.details.status, "confirmation_required");
+    assert.match(result.content[0].text, /confirm=true/);
   });
 
   it("starts OAuth binding when no Bungie target is provided", async () => {

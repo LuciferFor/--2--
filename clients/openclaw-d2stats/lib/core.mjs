@@ -206,6 +206,44 @@ export function buildPublicDataUrl(kind, target, params = {}, config = resolveCo
   throw new D2StatsInputError("不支持的数据接口。");
 }
 
+function buildInventoryDataUrl(qq, params = {}, config = resolveConfig()) {
+  const query = new URLSearchParams();
+  const searchText = String(params.q || params.query || "").trim();
+  const bucket = normalizeInventoryBucket(params.bucket);
+  const characterId = String(params.characterId || "").trim();
+  if (searchText.length > 0 || bucket !== "all" || characterId.length > 0) {
+    if (searchText.length > 0) {
+      query.set("q", searchText);
+    }
+    query.set("bucket", bucket);
+    if (characterId.length > 0) {
+      query.set("characterId", characterId);
+    }
+    return `${config.baseUrl}/api/d2/inventory/qq/${encodeURIComponent(qq)}/search?${query.toString()}`;
+  }
+  return `${config.baseUrl}/api/d2/inventory/qq/${encodeURIComponent(qq)}`;
+}
+
+function buildInventoryActionUrl(qq, action, config = resolveConfig()) {
+  const base = `${config.baseUrl}/api/d2`;
+  if (action === "transfer") {
+    return `${base}/inventory/qq/${encodeURIComponent(qq)}/transfer`;
+  }
+  if (action === "equip") {
+    return `${base}/inventory/qq/${encodeURIComponent(qq)}/equip`;
+  }
+  if (action === "equip_items") {
+    return `${base}/inventory/qq/${encodeURIComponent(qq)}/equip-items`;
+  }
+  if (action === "lock" || action === "unlock") {
+    return `${base}/inventory/qq/${encodeURIComponent(qq)}/lock`;
+  }
+  if (action === "equip_loadout") {
+    return `${base}/loadouts/qq/${encodeURIComponent(qq)}/equip`;
+  }
+  throw new D2StatsInputError("不支持的装备操作。");
+}
+
 export async function queryCard(params = {}, rawConfig = {}, options = {}) {
   const config = resolveConfig(rawConfig);
   if (!config.enabled) {
@@ -318,6 +356,140 @@ export async function bindQq(params = {}, rawConfig = {}, options = {}) {
     status: "ok",
     binding: data,
   });
+}
+
+export async function queryInventory(params = {}, rawConfig = {}, options = {}) {
+  const config = resolveConfig(rawConfig);
+  if (!config.enabled) {
+    return textResult("命运2查询工具当前未启用。", { status: "disabled" });
+  }
+
+  let target;
+  try {
+    target = parseTarget(params.target, config);
+  } catch (error) {
+    if (error instanceof D2StatsInputError) {
+      return textResult(error.message, { status: "invalid_input" });
+    }
+    throw error;
+  }
+  if (target.kind !== "qq") {
+    return textResult("库存和装备管理需要本人 QQ OAuth 授权，请用已绑定 QQ 查询。", { status: "qq_required" });
+  }
+
+  try {
+    const resolved = await withCardIdentity(await resolveTargetMembership(target.qq, config, options), config, options);
+    const sourceUrl = buildInventoryDataUrl(target.qq, params, config);
+    const inventory = await fetchEnvelope(sourceUrl, config, options);
+    const html = renderInventoryHtml(resolved.player, inventory, params);
+    const png = await renderHtmlToPng(html, {
+      width: HEATMAP_CARD_WIDTH,
+      height: estimateInventoryHeight(inventory),
+      signal: options.signal,
+      renderer: options.renderHtmlToPng,
+    });
+    return imageResult({
+      label: "Destiny 2 inventory card",
+      path: sourceUrl,
+      base64: png.toString("base64"),
+      mimeType: "image/png",
+      details: {
+        status: "ok",
+        card: "inventory",
+        bytes: png.length,
+        sourceUrl,
+        renderedBy: "openclaw-html",
+      },
+    });
+  } catch (error) {
+    if (error instanceof D2StatsInputError) {
+      return textResult(error.message, { status: "invalid_input" });
+    }
+    if (error instanceof D2StatsBackendError && (error.status === 401 || error.status === 403 || error.status === 404)) {
+      return startQqOauthBinding(target.qq, config, options);
+    }
+    if (error instanceof D2StatsBackendError) {
+      return textResult(formatBackendError(error.payload, error.status), {
+        status: "failed",
+        httpStatus: error.status,
+        url: error.url,
+        error: error.payload,
+      });
+    }
+    return textResult(`库存卡片渲染失败：${error?.message || "未知错误"}`, {
+      status: "render_failed",
+      error: String(error?.stack || error),
+    });
+  }
+}
+
+export async function itemAction(params = {}, rawConfig = {}, options = {}) {
+  const config = resolveConfig(rawConfig);
+  if (!config.enabled) {
+    return textResult("命运2查询工具当前未启用。", { status: "disabled" });
+  }
+
+  let target;
+  try {
+    target = parseTarget(params.qq || params.target, config);
+  } catch (error) {
+    if (error instanceof D2StatsInputError) {
+      return textResult(error.message, { status: "invalid_input" });
+    }
+    throw error;
+  }
+  if (target.kind !== "qq") {
+    return textResult("装备操作只能使用本人 QQ OAuth 授权，不能用 BungieName 或 membershipId 操作装备。", {
+      status: "qq_required",
+    });
+  }
+
+  let action;
+  try {
+    action = normalizeItemAction(params.action || params.command);
+  } catch (error) {
+    if (error instanceof D2StatsInputError) {
+      return textResult(error.message, { status: "invalid_input" });
+    }
+    throw error;
+  }
+
+  const body = buildInventoryActionBody(action, params);
+  if (params.confirm !== true) {
+    return textResult(inventoryConfirmationMessage(action, body), {
+      status: "confirmation_required",
+      qq: target.qq,
+      action,
+      body,
+    });
+  }
+
+  const url = buildInventoryActionUrl(target.qq, action, config);
+  try {
+    const data = await postEnvelope(url, body, config, options);
+    return textResult(data?.message || "装备操作已提交成功。", {
+      status: "ok",
+      action,
+      result: data,
+      url,
+    });
+  } catch (error) {
+    if (error instanceof D2StatsBackendError && (error.status === 401 || error.status === 403 || error.status === 404)) {
+      return startQqOauthBinding(target.qq, config, options);
+    }
+    if (error instanceof D2StatsBackendError) {
+      return textResult(formatBackendError(error.payload, error.status), {
+        status: "failed",
+        httpStatus: error.status,
+        url: error.url,
+        error: error.payload,
+      });
+    }
+    return textResult(`装备操作失败：${error?.message || "未知错误"}`, {
+      status: "failed",
+      error: String(error?.stack || error),
+    });
+  }
 }
 
 async function renderCardFromPublicJson(card, params, config, options) {
@@ -576,6 +748,22 @@ async function fetchEnvelope(url, config, options = {}) {
     timeoutMs: config.timeoutMs,
     signal: options.signal,
     fetchImpl: options.fetchImpl,
+  });
+  const payload = await safeJson(response);
+  if (!response.ok || payload?.success === false) {
+    throw new D2StatsBackendError(payload, response.status, url);
+  }
+  return payload?.data ?? payload;
+}
+
+async function postEnvelope(url, body, config, options = {}) {
+  const response = await fetchWithTimeout(url, {
+    method: "POST",
+    timeoutMs: config.timeoutMs,
+    signal: options.signal,
+    fetchImpl: options.fetchImpl,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
   });
   const payload = await safeJson(response);
   if (!response.ok || payload?.success === false) {
@@ -1185,6 +1373,84 @@ function renderWeaponsHtml(player, weapons) {
   });
 }
 
+function renderInventoryHtml(player, inventory, params = {}) {
+  const items = Array.isArray(inventory?.items) ? inventory.items : [];
+  const query = String(params.q || params.query || inventory?.query || "").trim();
+  const limitedItems = items.slice(0, 80);
+  const groups = inventoryGroups(limitedItems);
+  return cardPage({
+    width: HEATMAP_CARD_WIDTH,
+    player,
+    title: formatPlayerName(player),
+    eyebrow: "DESTINY 2 INVENTORY",
+    subtitle: query ? `库存搜索 · ${query}` : `库存管理 · ${dateOnly(inventory?.updatedAt)}`,
+    body: `
+      <section class="metrics metrics-4">
+        ${metric("物品", int(inventory?.totals?.items ?? inventory?.total ?? items.length))}
+        ${metric("已装备", int(inventory?.totals?.equipped ?? groups.equipped.length))}
+        ${metric("背包", int(inventory?.totals?.inventory ?? groups.inventory.length))}
+        ${metric("仓库", int(inventory?.totals?.vault ?? groups.vault.length))}
+      </section>
+      <section class="crafting-groups">
+        ${inventoryGroupHtml("已装备", groups.equipped, "green")}
+        ${inventoryGroupHtml("角色背包", groups.inventory, "red")}
+        ${inventoryGroupHtml("仓库", groups.vault, "green")}
+        ${limitedItems.length === 0 ? emptyState("没有找到匹配的库存物品。") : ""}
+      </section>
+      ${items.length > limitedItems.length ? `<footer class="card-footer">只展示前 ${limitedItems.length} 件；请加关键词缩小搜索范围。</footer>` : ""}
+      <footer class="card-footer">写操作请先确认 itemInstanceId 和 characterId；转移/装备/锁定会要求二次确认。</footer>
+      ${membershipBlock(inventory?.membershipType, inventory?.membershipId)}
+    `,
+  });
+}
+
+function inventoryGroups(items) {
+  return {
+    equipped: items.filter((item) => item?.owner === "equipped"),
+    inventory: items.filter((item) => item?.owner === "inventory"),
+    vault: items.filter((item) => item?.owner === "vault"),
+  };
+}
+
+function inventoryGroupHtml(title, items, tone) {
+  if (!items.length) {
+    return "";
+  }
+  return `
+    <section class="crafting-group">
+      <div class="crafting-group-title ${tone}">
+        <strong>${escapeHtml(title)}</strong>
+        <span>${int(items.length)}</span>
+      </div>
+      <div class="crafting-grid">
+        ${items.map(inventoryItemHtml).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function inventoryItemHtml(item) {
+  const iconUrl = item?.iconPath ? bungieAssetUrl(item.iconPath) : "";
+  const tone = item?.locked ? "green" : "red";
+  const subtitle = [item?.itemTypeDisplayName, item?.bucketName, item?.power ? `光等 ${int(item.power)}` : ""]
+    .filter(Boolean)
+    .join(" · ");
+  const idLine = item?.itemInstanceId ? `ID ${item.itemInstanceId}` : `Hash ${item?.itemHash || "-"}`;
+  return `
+    <div class="crafting-item ${tone}">
+      <div class="crafting-icon ${iconUrl ? "" : "empty"}">
+        ${iconUrl ? `<img src="${escapeHtml(iconUrl)}" />` : "?"}
+      </div>
+      <div class="crafting-rail"></div>
+      <div class="crafting-item-main">
+        <strong>${escapeHtml(item?.name || "Unknown Item")}</strong>
+        <span>${escapeHtml(subtitle || ownerLabel(item?.owner))}</span>
+        <b>${escapeHtml(item?.locked ? `已锁定 · ${idLine}` : idLine)}</b>
+      </div>
+    </div>
+  `;
+}
+
 function renderCraftingHtml(player, craftables) {
   const groups = Array.isArray(craftables?.groups) ? craftables.groups : [];
   return cardPage({
@@ -1747,6 +2013,18 @@ function estimateCatalystsHeight(catalysts) {
     return height + 78 + Math.ceil(Math.max(1, itemCount) / 3) * 148;
   }, 0);
   return Math.max(760, 330 + groupHeights);
+}
+
+function estimateInventoryHeight(inventory) {
+  const items = Array.isArray(inventory?.items) ? inventory.items.slice(0, 80) : [];
+  const groups = inventoryGroups(items);
+  const groupHeights = Object.values(groups).reduce((height, group) => {
+    if (!group.length) {
+      return height;
+    }
+    return height + 72 + Math.ceil(Math.max(1, group.length) / 3) * 92;
+  }, 0);
+  return Math.max(720, 340 + groupHeights);
 }
 
 function estimateDungeonHeight(overview) {
@@ -3735,6 +4013,13 @@ function membershipBlock(membershipType, membershipId) {
   return `<div class="membership">Membership <strong>${escapeHtml(`${membershipType}:${membershipId}`)}</strong></div>`;
 }
 
+function ownerLabel(owner) {
+  if (owner === "equipped") return "已装备";
+  if (owner === "inventory") return "角色背包";
+  if (owner === "vault") return "仓库";
+  return "库存";
+}
+
 function statusBadge(status, confirmedLabel = "确认") {
   if (status === "confirmed") {
     return badge(confirmedLabel, "ok");
@@ -4050,6 +4335,105 @@ function normalizeGrandmasterSeason(value) {
     return season;
   }
   throw new D2StatsInputError("宗师 season 只支持 current 或 all。");
+}
+
+function normalizeInventoryBucket(value) {
+  const bucket = String(value || "all").trim();
+  if (bucket === "all" || bucket === "vault" || bucket === "inventory" || bucket === "equipped") {
+    return bucket;
+  }
+  throw new D2StatsInputError("库存 bucket 只支持 all、vault、inventory、equipped。");
+}
+
+function normalizeItemAction(value) {
+  const action = String(value || "").trim().toLowerCase();
+  if (/转移|transfer/u.test(action)) return "transfer";
+  if (/批量|equip_items|equip-items/u.test(action)) return "equip_items";
+  if (/装备|equip/u.test(action)) return "equip";
+  if (/解锁|unlock/u.test(action)) return "unlock";
+  if (/锁定|lock/u.test(action)) return "lock";
+  if (/套装|loadout/u.test(action)) return "equip_loadout";
+  throw new D2StatsInputError("装备操作 action 只支持 transfer、equip、equip_items、lock、unlock、equip_loadout。");
+}
+
+function buildInventoryActionBody(action, params = {}) {
+  if (action === "transfer") {
+    return {
+      itemReferenceHash: requiredActionNumber(params.itemReferenceHash, "itemReferenceHash"),
+      stackSize: clampInteger(params.stackSize, 1, 1, 9999),
+      transferToVault: Boolean(params.transferToVault),
+      itemId: requiredActionId(params.itemId, "itemId"),
+      characterId: requiredActionId(params.characterId, "characterId"),
+    };
+  }
+  if (action === "equip") {
+    return {
+      itemId: requiredActionId(params.itemId, "itemId"),
+      characterId: requiredActionId(params.characterId, "characterId"),
+    };
+  }
+  if (action === "equip_items") {
+    const itemIds = Array.isArray(params.itemIds) ? params.itemIds : String(params.itemIds || "").split(/[,，\s]+/u).filter(Boolean);
+    if (itemIds.length < 1 || itemIds.length > 10) {
+      throw new D2StatsInputError("批量装备需要 1 到 10 个 itemIds。");
+    }
+    return {
+      itemIds: itemIds.map((id, index) => requiredActionId(id, `itemIds[${index}]`)),
+      characterId: requiredActionId(params.characterId, "characterId"),
+    };
+  }
+  if (action === "lock" || action === "unlock") {
+    return {
+      itemId: requiredActionId(params.itemId, "itemId"),
+      characterId: requiredActionId(params.characterId, "characterId"),
+      state: action === "lock",
+    };
+  }
+  if (action === "equip_loadout") {
+    return {
+      characterId: requiredActionId(params.characterId, "characterId"),
+      loadoutIndex: clampInteger(params.loadoutIndex, 0, 0, 9),
+    };
+  }
+  throw new D2StatsInputError("不支持的装备操作。");
+}
+
+function requiredActionId(value, name) {
+  const text = String(value || "").trim();
+  if (!/^[0-9]+$/u.test(text)) {
+    throw new D2StatsInputError(`${name} 必须是数字 ID。`);
+  }
+  return text;
+}
+
+function requiredActionNumber(value, name) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < 0) {
+    throw new D2StatsInputError(`${name} 必须是数字。`);
+  }
+  return number;
+}
+
+function inventoryConfirmationMessage(action, body) {
+  const actionLabel = {
+    transfer: body.transferToVault ? "转移到仓库" : "转移到角色",
+    equip: "装备单件物品",
+    equip_items: "批量装备物品",
+    lock: "锁定物品",
+    unlock: "解锁物品",
+    equip_loadout: "装备游戏内 Loadout",
+  }[action] || action;
+  return [
+    `需要确认后才会执行：${actionLabel}`,
+    `characterId: ${body.characterId || "-"}`,
+    body.itemId ? `itemId: ${body.itemId}` : "",
+    body.itemIds ? `itemIds: ${body.itemIds.join(", ")}` : "",
+    body.itemReferenceHash !== undefined ? `itemReferenceHash: ${body.itemReferenceHash}` : "",
+    body.loadoutIndex !== undefined ? `loadoutIndex: ${body.loadoutIndex}` : "",
+    "确认无误后，请再次调用并传 confirm=true。角色通常需要在轨道、社交空间或离线。",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 async function fetchWithTimeout(url, options = {}) {

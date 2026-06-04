@@ -490,6 +490,135 @@ const fakeDestinyService = {
       },
       updatedAt: "2026-06-03T00:00:00.000Z"
     };
+  },
+  async getPrivateInventory() {
+    return {
+      qq: "607972716",
+      membershipType: 3,
+      membershipId: "4611686018",
+      characters: [
+        {
+          characterId: "2305843009",
+          classType: 2,
+          className: "术士",
+          light: 2010,
+          minutesPlayedTotal: 120
+        }
+      ],
+      items: [
+        {
+          itemHash: 101,
+          itemInstanceId: "691752902764",
+          quantity: 1,
+          owner: "vault",
+          name: "纪念",
+          itemTypeDisplayName: "机枪",
+          bucketName: "威能武器",
+          power: 2010,
+          locked: true,
+          canEquip: true
+        }
+      ],
+      totals: { items: 1, vault: 1, inventory: 0, equipped: 0 },
+      updatedAt: "2026-06-03T00:00:00.000Z"
+    };
+  },
+  async searchPrivateInventory() {
+    return {
+      qq: "607972716",
+      membershipType: 3,
+      membershipId: "4611686018",
+      query: "纪念",
+      bucket: "all",
+      items: [
+        {
+          itemHash: 101,
+          itemInstanceId: "691752902764",
+          quantity: 1,
+          owner: "vault",
+          name: "纪念",
+          locked: true,
+          canEquip: true
+        }
+      ],
+      total: 1,
+      updatedAt: "2026-06-03T00:00:00.000Z"
+    };
+  },
+  async transferInventoryItem(_membershipType: number, _membershipId: string, _token: string, request: { itemId: string; characterId: string }) {
+    return {
+      membershipType: 3,
+      membershipId: "4611686018",
+      action: "transfer",
+      ok: true,
+      itemId: request.itemId,
+      characterId: request.characterId,
+      bungieResponse: 1,
+      message: "已移动到角色",
+      updatedAt: "2026-06-03T00:00:00.000Z"
+    };
+  },
+  async equipInventoryItem(_membershipType: number, _membershipId: string, _token: string, request: { itemId: string; characterId: string }) {
+    return {
+      membershipType: 3,
+      membershipId: "4611686018",
+      action: "equip",
+      ok: true,
+      itemId: request.itemId,
+      characterId: request.characterId,
+      bungieResponse: 1,
+      message: "已装备物品",
+      updatedAt: "2026-06-03T00:00:00.000Z"
+    };
+  },
+  async equipInventoryItems(_membershipType: number, _membershipId: string, _token: string, request: { itemIds: string[]; characterId: string }) {
+    return {
+      membershipType: 3,
+      membershipId: "4611686018",
+      action: "equipItems",
+      ok: true,
+      itemIds: request.itemIds,
+      characterId: request.characterId,
+      bungieResponse: 1,
+      message: "已批量装备物品",
+      updatedAt: "2026-06-03T00:00:00.000Z"
+    };
+  },
+  async setInventoryItemLockState(_membershipType: number, _membershipId: string, _token: string, request: { itemId: string; characterId: string; state: boolean }) {
+    return {
+      membershipType: 3,
+      membershipId: "4611686018",
+      action: "lock",
+      ok: true,
+      itemId: request.itemId,
+      characterId: request.characterId,
+      bungieResponse: 1,
+      message: request.state ? "已锁定物品" : "已解锁物品",
+      updatedAt: "2026-06-03T00:00:00.000Z"
+    };
+  },
+  async getLoadouts() {
+    return {
+      qq: "607972716",
+      membershipType: 3,
+      membershipId: "4611686018",
+      characters: [],
+      loadouts: [{ index: 0, characterId: "2305843009", name: "Raid", itemCount: 8 }],
+      updatedAt: "2026-06-03T00:00:00.000Z"
+    };
+  },
+  async equipLoadout(_membershipType: number, _membershipId: string, _token: string, request: { characterId: string; loadoutIndex: number }) {
+    return {
+      membershipType: 3,
+      membershipId: "4611686018",
+      action: "equipLoadout",
+      ok: true,
+      characterId: request.characterId,
+      loadoutIndex: request.loadoutIndex,
+      bungieResponse: 1,
+      message: "已装备游戏内 Loadout",
+      updatedAt: "2026-06-03T00:00:00.000Z"
+    };
   }
 };
 
@@ -840,6 +969,98 @@ describe("Fastify routes", () => {
     expect(response.statusCode).toBe(403);
     expect(response.json()).toMatchObject({ success: false, error: { code: "OAUTH_REQUIRED" } });
     expect(qqOAuthService.getValidAccessTokenForQq).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("returns private inventory only for the QQ OAuth bound membership", async () => {
+    const store = new NullStore();
+    await store.createQqBinding({
+      qq: "607972716",
+      membershipType: 3,
+      membershipId: "4611686018",
+      bungieName: "Guardian#0007",
+      displayName: "Guardian",
+      displayNameCode: 7
+    });
+    await store.upsertQqOAuthToken({
+      qq: "607972716",
+      bungieMembershipId: "4352344",
+      membershipType: 3,
+      membershipId: "4611686018",
+      accessTokenEncrypted: "encrypted-access",
+      accessExpiresAt: new Date(Date.now() + 3600_000).toISOString()
+    });
+    const qqOAuthService = {
+      getValidAccessTokenForQq: vi.fn(async () => "access-token")
+    };
+    const app = await buildApp({
+      config: makeTestConfig(),
+      cache: new MemoryCacheStore(),
+      store,
+      destinyService: fakeDestinyService as never,
+      cardService: fakeCardService as never,
+      qqOAuthService: qqOAuthService as never
+    });
+
+    const response = await app.inject({ method: "GET", url: "/api/d2/inventory/qq/607972716/search?q=%E7%BA%AA%E5%BF%B5" });
+    expect(response.statusCode).toBe(200);
+    expect(qqOAuthService.getValidAccessTokenForQq).toHaveBeenCalledWith("607972716");
+    expect(response.json()).toMatchObject({
+      success: true,
+      data: {
+        total: 1,
+        items: [{ name: "纪念", itemInstanceId: "691752902764" }]
+      }
+    });
+    await app.close();
+  });
+
+  it("executes inventory actions through QQ OAuth and writes audit logs", async () => {
+    const store = new NullStore();
+    await store.createQqBinding({
+      qq: "607972716",
+      membershipType: 3,
+      membershipId: "4611686018"
+    });
+    await store.upsertQqOAuthToken({
+      qq: "607972716",
+      bungieMembershipId: "4352344",
+      membershipType: 3,
+      membershipId: "4611686018",
+      accessTokenEncrypted: "encrypted-access",
+      accessExpiresAt: new Date(Date.now() + 3600_000).toISOString()
+    });
+    const app = await buildApp({
+      config: makeTestConfig(),
+      cache: new MemoryCacheStore(),
+      store,
+      destinyService: fakeDestinyService as never,
+      cardService: fakeCardService as never,
+      qqOAuthService: { getValidAccessTokenForQq: vi.fn(async () => "access-token") } as never
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/d2/inventory/qq/607972716/transfer",
+      payload: {
+        itemReferenceHash: 101,
+        itemId: "691752902764",
+        characterId: "2305843009",
+        transferToVault: false
+      }
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      success: true,
+      data: { action: "transfer", itemId: "691752902764", message: "已移动到角色" }
+    });
+    const audit = await store.listAdminAuditLogs({ page: 1, pageSize: 10 });
+    expect(audit.items[0]).toMatchObject({
+      actor: "qq:607972716",
+      action: "inventory.transfer",
+      target: "691752902764",
+      details: { ok: true, itemId: "691752902764" }
+    });
     await app.close();
   });
 

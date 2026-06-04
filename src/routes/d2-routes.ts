@@ -3,7 +3,7 @@ import type { CacheStore } from "../cache/cache.js";
 import type { CardService } from "../cards/card-service.js";
 import type { Store } from "../db/store.js";
 import type { DestinyService } from "../destiny/destiny-service.js";
-import type { PlayerSearchResult } from "../destiny/destiny-types.js";
+import type { InventoryBucketFilter, InventoryActionResult, PlayerSearchResult } from "../destiny/destiny-types.js";
 import type { QqOAuthService } from "../oauth/qq-oauth-service.js";
 import { parseQq } from "../bindings/qq.js";
 import { parseCount, parseId, parseMembershipType, parsePage } from "../destiny/validators.js";
@@ -241,6 +241,125 @@ export async function registerD2Routes(app: FastifyInstance, deps: D2RouteDeps):
     return ok(data, { tookMs: Date.now() - started });
   });
 
+  app.get("/api/d2/inventory/qq/:qq", async (request) => {
+    const started = Date.now();
+    const qq = parseQq((request.params as Params).qq);
+    const { binding, accessToken } = await resolveQqOAuthContext(deps, qq, "Inventory management");
+    const data = await deps.destinyService.getPrivateInventory(
+      binding.membershipType,
+      binding.membershipId,
+      accessToken,
+      qq
+    );
+    await deps.store.touchQqBinding(qq);
+    await recordQuery(deps.store, request, false);
+    return ok(data, { tookMs: Date.now() - started });
+  });
+
+  app.get("/api/d2/inventory/qq/:qq/search", async (request) => {
+    const started = Date.now();
+    const qq = parseQq((request.params as Params).qq);
+    const query = request.query as Query;
+    const { binding, accessToken } = await resolveQqOAuthContext(deps, qq, "Inventory search");
+    const data = await deps.destinyService.searchPrivateInventory(
+      binding.membershipType,
+      binding.membershipId,
+      accessToken,
+      {
+        qq,
+        query: typeof query.q === "string" ? query.q : "",
+        bucket: parseInventoryBucket(query.bucket),
+        characterId:
+          query.characterId === undefined || query.characterId === ""
+            ? undefined
+            : parseId(query.characterId, "characterId")
+      }
+    );
+    await deps.store.touchQqBinding(qq);
+    await recordQuery(deps.store, request, false);
+    return ok(data, { tookMs: Date.now() - started });
+  });
+
+  app.post("/api/d2/inventory/qq/:qq/transfer", async (request) => {
+    const qq = parseQq((request.params as Params).qq);
+    const { binding, accessToken } = await resolveQqOAuthContext(deps, qq, "Inventory transfer");
+    const body = requireRecordBody(request.body);
+    return runInventoryAction(deps, request, qq, "inventory.transfer", body.itemId, async () =>
+      deps.destinyService.transferInventoryItem(binding.membershipType, binding.membershipId, accessToken, {
+        qq,
+        itemReferenceHash: parseHash(body.itemReferenceHash, "itemReferenceHash"),
+        stackSize: parseBoundedInteger(body.stackSize, "stackSize", 1, 9999, 1),
+        transferToVault: parseBoolean(body.transferToVault, "transferToVault"),
+        itemId: parseNumericId(body.itemId, "itemId"),
+        characterId: parseNumericId(body.characterId, "characterId")
+      })
+    );
+  });
+
+  app.post("/api/d2/inventory/qq/:qq/equip", async (request) => {
+    const qq = parseQq((request.params as Params).qq);
+    const { binding, accessToken } = await resolveQqOAuthContext(deps, qq, "Inventory equip");
+    const body = requireRecordBody(request.body);
+    return runInventoryAction(deps, request, qq, "inventory.equip", body.itemId, async () =>
+      deps.destinyService.equipInventoryItem(binding.membershipType, binding.membershipId, accessToken, {
+        qq,
+        itemId: parseNumericId(body.itemId, "itemId"),
+        characterId: parseNumericId(body.characterId, "characterId")
+      })
+    );
+  });
+
+  app.post("/api/d2/inventory/qq/:qq/equip-items", async (request) => {
+    const qq = parseQq((request.params as Params).qq);
+    const { binding, accessToken } = await resolveQqOAuthContext(deps, qq, "Inventory equip items");
+    const body = requireRecordBody(request.body);
+    const itemIds = parseIdArray(body.itemIds, "itemIds", 1, 10);
+    return runInventoryAction(deps, request, qq, "inventory.equipItems", itemIds.join(","), async () =>
+      deps.destinyService.equipInventoryItems(binding.membershipType, binding.membershipId, accessToken, {
+        qq,
+        itemIds,
+        characterId: parseNumericId(body.characterId, "characterId")
+      })
+    );
+  });
+
+  app.post("/api/d2/inventory/qq/:qq/lock", async (request) => {
+    const qq = parseQq((request.params as Params).qq);
+    const { binding, accessToken } = await resolveQqOAuthContext(deps, qq, "Inventory lock");
+    const body = requireRecordBody(request.body);
+    return runInventoryAction(deps, request, qq, "inventory.lock", body.itemId, async () =>
+      deps.destinyService.setInventoryItemLockState(binding.membershipType, binding.membershipId, accessToken, {
+        qq,
+        itemId: parseNumericId(body.itemId, "itemId"),
+        characterId: parseNumericId(body.characterId, "characterId"),
+        state: parseBoolean(body.state, "state")
+      })
+    );
+  });
+
+  app.get("/api/d2/loadouts/qq/:qq", async (request) => {
+    const started = Date.now();
+    const qq = parseQq((request.params as Params).qq);
+    const { binding, accessToken } = await resolveQqOAuthContext(deps, qq, "Loadouts");
+    const data = await deps.destinyService.getLoadouts(binding.membershipType, binding.membershipId, accessToken, qq);
+    await deps.store.touchQqBinding(qq);
+    await recordQuery(deps.store, request, false);
+    return ok(data, { tookMs: Date.now() - started });
+  });
+
+  app.post("/api/d2/loadouts/qq/:qq/equip", async (request) => {
+    const qq = parseQq((request.params as Params).qq);
+    const { binding, accessToken } = await resolveQqOAuthContext(deps, qq, "Loadout equip");
+    const body = requireRecordBody(request.body);
+    return runInventoryAction(deps, request, qq, "loadout.equip", body.loadoutIndex, async () =>
+      deps.destinyService.equipLoadout(binding.membershipType, binding.membershipId, accessToken, {
+        qq,
+        characterId: parseNumericId(body.characterId, "characterId"),
+        loadoutIndex: parseBoundedInteger(body.loadoutIndex, "loadoutIndex", 0, 9, 0)
+      })
+    );
+  });
+
   app.get("/api/d2/vault/:membershipType/:membershipId/search", oauthRequired("Vault search"));
   app.get("/api/d2/inventory/:membershipType/:membershipId/weapons", oauthRequired("Private inventory weapons"));
   app.get("/api/d2/catalysts/:membershipType/:membershipId", oauthRequired("Catalyst progress"));
@@ -250,13 +369,7 @@ export async function registerD2Routes(app: FastifyInstance, deps: D2RouteDeps):
   app.get("/api/d2/catalysts/qq/:qq", async (request) => {
     const started = Date.now();
     const qq = parseQq((request.params as Params).qq);
-    const binding = await deps.store.getQqBinding(qq);
-    if (!binding) {
-      throw new NotFoundError("qq binding was not found");
-    }
-    await assertQqOAuthMatchesBinding(deps.store, qq, binding.membershipType, binding.membershipId);
-    const accessToken = await deps.qqOAuthService.getValidAccessTokenForQq(qq);
-    await assertQqOAuthMatchesBinding(deps.store, qq, binding.membershipType, binding.membershipId);
+    const { binding, accessToken } = await resolveQqOAuthContext(deps, qq, "Catalyst progress");
     const data = await deps.destinyService.getCatalysts(binding.membershipType, binding.membershipId, accessToken);
     await deps.store.touchQqBinding(qq);
     await recordQuery(deps.store, request, false);
@@ -517,6 +630,82 @@ function parseBoundedInteger(
   return number;
 }
 
+function parseInventoryBucket(value: unknown): InventoryBucketFilter {
+  const bucket = typeof value === "string" && value.trim().length > 0 ? value.trim() : "all";
+  if (bucket === "all" || bucket === "vault" || bucket === "inventory" || bucket === "equipped") {
+    return bucket;
+  }
+  throw new BadRequestError("bucket must be one of all, vault, inventory, equipped");
+}
+
+function parseBoolean(value: unknown, name: string): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "1", "yes", "on"].includes(normalized)) {
+      return true;
+    }
+    if (["false", "0", "no", "off"].includes(normalized)) {
+      return false;
+    }
+  }
+  throw new BadRequestError(`${name} must be a boolean`);
+}
+
+function parseHash(value: unknown, name: string): number {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < 0 || number > 4_294_967_295) {
+    throw new BadRequestError(`${name} must be an unsigned 32-bit integer`);
+  }
+  return number;
+}
+
+function parseNumericId(value: unknown, name: string): string {
+  if (typeof value === "number" && Number.isInteger(value)) {
+    return parseId(String(value), name);
+  }
+  return parseId(value, name);
+}
+
+function parseIdArray(value: unknown, name: string, min: number, max: number): string[] {
+  if (!Array.isArray(value)) {
+    throw new BadRequestError(`${name} must be an array`);
+  }
+  if (value.length < min || value.length > max) {
+    throw new BadRequestError(`${name} must contain between ${min} and ${max} ids`);
+  }
+  return value.map((entry, index) => parseNumericId(entry, `${name}[${index}]`));
+}
+
+function requireRecordBody(body: unknown): Record<string, unknown> {
+  if (!isRecord(body)) {
+    throw new BadRequestError("Request body must be an object");
+  }
+  return body;
+}
+
+function friendlyInventoryErrorMessage(error: ReturnType<typeof toAppError>): string {
+  const details = isRecord(error.details) ? error.details : {};
+  const status = String(
+    (error as unknown as { bungieErrorStatus?: unknown }).bungieErrorStatus ?? details.ErrorStatus ?? details.errorStatus ?? ""
+  );
+  if (/DestinyAccountNotFound|OAuth/i.test(status) || error.code === "OAUTH_REQUIRED") {
+    return "需要重新进行 Bungie OAuth 授权。";
+  }
+  if (/ItemNotFound|ItemUniqueIdentity/i.test(status)) {
+    return "没有找到这个物品实例，请刷新库存后重试。";
+  }
+  if (/CannotPerformAction|NotInOrbit|Character/i.test(status)) {
+    return "Bungie 拒绝了装备操作；通常需要角色在轨道、社交空间或离线。";
+  }
+  if (/Transfer|Bucket|Full|Item/i.test(status)) {
+    return "物品当前不可转移或目标背包已满。";
+  }
+  return error.message;
+}
+
 function parseTimezone(value: unknown): string {
   const timezone = typeof value === "string" && value.trim().length > 0 ? value.trim() : "Asia/Shanghai";
   try {
@@ -574,20 +763,90 @@ async function assertQqOAuthMatchesBinding(
   store: Store,
   qq: string,
   membershipType: number,
-  membershipId: string
+  membershipId: string,
+  feature = "Private Destiny data"
 ): Promise<void> {
   const token = await store.getQqOAuthToken(qq);
   if (!token || token.revokedAt) {
     throw new OAuthRequiredError("QQ binding does not have active Bungie OAuth authorization", {
-      feature: "Catalyst progress",
-      reason: "Catalyst progress is account-private and requires the bound QQ owner to authorize Bungie OAuth."
+      feature,
+      reason: `${feature} is account-private and requires the bound QQ owner to authorize Bungie OAuth.`
     });
   }
   if (token.membershipType !== membershipType || token.membershipId !== membershipId) {
     throw new OAuthRequiredError("QQ OAuth authorization does not match the bound Destiny membership", {
-      feature: "Catalyst progress",
-      reason: "The saved OAuth token belongs to a different Destiny membership; bind again before querying catalysts."
+      feature,
+      reason: "The saved OAuth token belongs to a different Destiny membership; bind again before using this private feature."
     });
+  }
+}
+
+async function resolveQqOAuthContext(deps: D2RouteDeps, qq: string, feature: string) {
+  const binding = await deps.store.getQqBinding(qq);
+  if (!binding) {
+    throw new NotFoundError("qq binding was not found");
+  }
+  await assertQqOAuthMatchesBinding(deps.store, qq, binding.membershipType, binding.membershipId, feature);
+  const accessToken = await deps.qqOAuthService.getValidAccessTokenForQq(qq);
+  await assertQqOAuthMatchesBinding(deps.store, qq, binding.membershipType, binding.membershipId, feature);
+  return { binding, accessToken };
+}
+
+async function runInventoryAction(
+  deps: D2RouteDeps,
+  request: FastifyRequest,
+  qq: string,
+  action: string,
+  target: unknown,
+  execute: () => Promise<InventoryActionResult>
+) {
+  const started = Date.now();
+  try {
+    const data = await execute();
+    await auditInventoryAction(deps.store, request, qq, action, target, {
+      ok: true,
+      resultAction: data.action,
+      itemId: data.itemId,
+      itemIds: data.itemIds,
+      itemHash: data.itemHash,
+      characterId: data.characterId,
+      loadoutIndex: data.loadoutIndex
+    });
+    await deps.store.touchQqBinding(qq);
+    await recordQuery(deps.store, request, false);
+    return ok(data, { tookMs: Date.now() - started });
+  } catch (error) {
+    const appError = toAppError(error);
+    await auditInventoryAction(deps.store, request, qq, action, target, {
+      ok: false,
+      code: appError.code,
+      statusCode: appError.statusCode,
+      message: friendlyInventoryErrorMessage(appError),
+      bungieErrorCode: (error as { bungieErrorCode?: unknown }).bungieErrorCode,
+      bungieErrorStatus: (error as { bungieErrorStatus?: unknown }).bungieErrorStatus
+    });
+    throw error;
+  }
+}
+
+async function auditInventoryAction(
+  store: Store,
+  request: FastifyRequest,
+  qq: string,
+  action: string,
+  target: unknown,
+  details: Record<string, unknown>
+): Promise<void> {
+  try {
+    await store.logAdminAudit({
+      actor: `qq:${qq}`,
+      action,
+      target: target === undefined || target === null ? undefined : String(target),
+      ipHash: sha256Hex(request.ip),
+      details
+    });
+  } catch {
+    return;
   }
 }
 
