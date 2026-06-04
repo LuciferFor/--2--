@@ -33,6 +33,23 @@ describe("d2stats core", () => {
       resolveConfig({ baseUrl: "http://d2.local" }),
     );
     assert.equal(raidOverview, "http://d2.local/api/d2/raids/3/4611686018428939884?historyPages=2&pgcrLimit=50");
+
+    const career = buildPublicDataUrl("career", target, {}, resolveConfig({ baseUrl: "http://d2.local" }));
+    assert.equal(career, "http://d2.local/api/d2/career/3/4611686018428939884");
+
+    const pvp = buildPublicDataUrl("pvp", target, { count: 12 }, resolveConfig({ baseUrl: "http://d2.local" }));
+    assert.equal(pvp, "http://d2.local/api/d2/pvp/3/4611686018428939884?count=12");
+
+    const dungeons = buildPublicDataUrl("dungeons", target, { historyPages: 3 }, resolveConfig({ baseUrl: "http://d2.local" }));
+    assert.equal(dungeons, "http://d2.local/api/d2/dungeons/3/4611686018428939884?historyPages=3");
+
+    const heatmap = buildPublicDataUrl(
+      "heatmap",
+      target,
+      { mode: "raid", pages: 4, timezone: "Asia/Shanghai" },
+      resolveConfig({ baseUrl: "http://d2.local" }),
+    );
+    assert.equal(heatmap, "http://d2.local/api/d2/heatmap/3/4611686018428939884?mode=raid&pages=4&timezone=Asia%2FShanghai");
   });
 
   it("returns an image result from OpenClaw-rendered raid HTML", async () => {
@@ -137,6 +154,151 @@ describe("d2stats core", () => {
 
     assert.equal(result.content[0].type, "image");
     assert.equal(result.details.sourceUrl, "http://d2.local/api/d2/summary/3/4611686018428939884?mode=raid");
+  });
+
+  it("renders a help menu without target", async () => {
+    const result = await queryCard(
+      { card: "help" },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async () => {
+          throw new Error("help card should not fetch backend JSON");
+        },
+        renderHtmlToPng: async (html) => {
+          assert.match(html, /DESTINY 2 COMMANDS/);
+          assert.match(html, /命运2查询菜单/);
+          assert.match(html, /\/raid/);
+          return Buffer.from("png-bytes");
+        },
+      },
+    );
+
+    assert.equal(result.content[0].type, "image");
+    assert.equal(result.details.card, "help");
+  });
+
+  it("routes command aliases to activity history cards", async () => {
+    const result = await queryCard(
+      { target: "3:4611686018428939884", command: "/最近", mode: "raid" },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async (url) => {
+          assert.equal(String(url), "http://d2.local/api/d2/activities/3/4611686018428939884?mode=raid&count=18&page=0");
+          return jsonResponse({
+            success: true,
+            data: [
+              {
+                period: "2026-06-03T00:00:00.000Z",
+                activityId: "1234567890",
+                activityName: "玻璃拱顶",
+                modeName: "突袭",
+                values: {
+                  completed: { basic: { value: 1 } },
+                  kills: { basic: { value: 100 } },
+                  deaths: { basic: { value: 5 } },
+                  killsDeathsRatio: { basic: { value: 20 } },
+                  activityDurationSeconds: { basic: { value: 1800 } },
+                },
+              },
+            ],
+          });
+        },
+        renderHtmlToPng: async (html) => {
+          assert.match(html, /DESTINY 2 ACTIVITY HISTORY/);
+          assert.match(html, /玻璃拱顶/);
+          assert.match(html, /已完成/);
+          return Buffer.from("png-bytes");
+        },
+      },
+    );
+
+    assert.equal(result.content[0].type, "image");
+    assert.equal(result.details.card, "activities");
+  });
+
+  it("routes expanded command aliases to dedicated cards", async () => {
+    const calls = [];
+    const result = await queryCard(
+      { target: "3:4611686018428939884", command: "/地牢", historyPages: 2 },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async (url) => {
+          calls.push(String(url));
+          return jsonResponse({
+            success: true,
+            data: {
+              membershipType: 3,
+              membershipId: "4611686018428939884",
+              mode: "dungeon",
+              modeLabel: "地牢",
+              totals: { activities: 1, clears: 2, kills: 50, deaths: 5, secondsPlayed: 1800 },
+              activities: [
+                {
+                  name: "二象性",
+                  activityHashes: [1],
+                  clears: 2,
+                  kills: 50,
+                  deaths: 5,
+                  secondsPlayed: 1800,
+                  fastestCompletionDisplay: "15:00.000",
+                },
+              ],
+              scan: { historyPages: 2 },
+              updatedAt: "2026-06-03T00:00:00.000Z",
+            },
+          });
+        },
+        renderHtmlToPng: async (html) => {
+          assert.match(html, /DESTINY 2 DUNGEON OVERVIEW/);
+          assert.match(html, /二象性/);
+          return Buffer.from("png-bytes");
+        },
+      },
+    );
+
+    assert.deepEqual(calls, ["http://d2.local/api/d2/dungeons/3/4611686018428939884?historyPages=2"]);
+    assert.equal(result.content[0].type, "image");
+    assert.equal(result.details.card, "dungeon_overview");
+  });
+
+  it("renders heatmap cards from public JSON", async () => {
+    const result = await queryCard(
+      { target: "3:4611686018428939884", command: "/热力图", mode: "all", pages: 2 },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async (url) => {
+          assert.equal(
+            String(url),
+            "http://d2.local/api/d2/heatmap/3/4611686018428939884?mode=all&pages=2&timezone=Asia%2FShanghai",
+          );
+          return jsonResponse({
+            success: true,
+            data: {
+              membershipType: 3,
+              membershipId: "4611686018428939884",
+              mode: "all",
+              modeLabel: "全部",
+              timezone: "Asia/Shanghai",
+              activitiesScanned: 2,
+              days: [
+                { key: "2026-06-02", activities: 1, completed: 1, kills: 10, deaths: 1, secondsPlayed: 100 },
+                { key: "2026-06-03", activities: 1, completed: 1, kills: 20, deaths: 2, secondsPlayed: 200 },
+              ],
+              hours: [{ key: "20", activities: 2, completed: 2, kills: 30, deaths: 3, secondsPlayed: 300 }],
+              updatedAt: "2026-06-03T00:00:00.000Z",
+            },
+          });
+        },
+        renderHtmlToPng: async (html) => {
+          assert.match(html, /DESTINY 2 ACTIVITY HEATMAP/);
+          assert.match(html, /2026-06-03/);
+          return Buffer.from("png-bytes");
+        },
+      },
+    );
+
+    assert.equal(result.content[0].type, "image");
+    assert.equal(result.details.card, "heatmap");
   });
 
   it("supports direct activity PGCR rendering", async () => {

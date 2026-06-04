@@ -2,6 +2,7 @@ export type ErrorCode =
   | "BAD_REQUEST"
   | "UNAUTHORIZED"
   | "NOT_FOUND"
+  | "OAUTH_REQUIRED"
   | "UPSTREAM_ERROR"
   | "BUNGIE_ERROR"
   | "CONFIG_ERROR"
@@ -28,6 +29,12 @@ export class BadRequestError extends AppError {
 export class NotFoundError extends AppError {
   constructor(message: string, details?: unknown) {
     super(404, "NOT_FOUND", message, details);
+  }
+}
+
+export class OAuthRequiredError extends AppError {
+  constructor(message: string, details?: unknown) {
+    super(403, "OAUTH_REQUIRED", message, details);
   }
 }
 

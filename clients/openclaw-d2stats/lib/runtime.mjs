@@ -6,13 +6,31 @@ const cardQueryParameters = {
   properties: {
     target: {
       type: "string",
-      description: "QQ number, BungieName#1234, membershipType:membershipId, or a long membershipId.",
+      description: "QQ number, BungieName#1234, membershipType:membershipId, or a long membershipId. Not required for card=help.",
+    },
+    command: {
+      type: "string",
+      description: "Optional natural command alias, such as /raid, /pvp, /地牢, /热力图, /生涯, /名片, /战绩, /最近, /活动, /武器, /资料, /帮助.",
     },
     card: {
       type: "string",
-      enum: ["summary", "profile", "weapons", "raid_overview", "latest_activity", "activity"],
+      enum: [
+        "help",
+        "summary",
+        "career",
+        "profile",
+        "namecard",
+        "pvp",
+        "weapons",
+        "raid_overview",
+        "dungeon_overview",
+        "heatmap",
+        "activities",
+        "latest_activity",
+        "activity",
+      ],
       description:
-        "HTML-rendered image card type. Use raid_overview for per-raid clears/fastest/flawless/day-one overview, latest_activity for recent match/activity, activity for a known PGCR activityId.",
+        "HTML-rendered image card type. Use help for command menu, career for all-mode career stats, pvp for crucible/trials, dungeon_overview for per-dungeon clears/fastest, heatmap for activity distribution, activities for recent activity list, raid_overview for per-raid clears/fastest/flawless/day-one overview, latest_activity for one recent PGCR, activity for a known PGCR activityId.",
     },
     mode: {
       type: "string",
@@ -25,14 +43,22 @@ const cardQueryParameters = {
     },
     historyPages: {
       type: "number",
-      description: "Optional raid_overview history pages to scan, default 1.",
+      description: "Optional raid_overview or dungeon_overview history pages to scan, default 1.",
     },
     pgcrLimit: {
       type: "number",
       description: "Optional raid_overview PGCR scan limit, default 20.",
     },
+    pages: {
+      type: "number",
+      description: "Optional heatmap activity history pages to scan, default 2.",
+    },
+    timezone: {
+      type: "string",
+      description: "Optional heatmap timezone, default Asia/Shanghai.",
+    },
   },
-  required: ["target"],
+  required: [],
 };
 
 const bindQqParameters = {
@@ -71,7 +97,7 @@ export function registerD2StatsRuntime(api, options = {}) {
     {
       name: "destiny2_card_query",
       description:
-        "Return Destiny 2 public stat data as an OpenClaw-rendered HTML PNG card. Use card=raid_overview when the user asks for raid overview, per-raid clears, day-one, or flawless raid stats. Prefer this tool for Destiny 2 stats, PvP, trials, weapons, profile, or recent activity. If a QQ number is unbound, ask the user for BungieName#1234 or membershipType:membershipId.",
+        "Return Destiny 2 public stat data as an OpenClaw-rendered HTML PNG card. Use card=help for the menu, card=career for career overview, card=pvp for PvP/trials, card=dungeon_overview for dungeon stats, card=heatmap for activity heatmap, card=activities for recent activity history, and card=raid_overview when the user asks for raid overview, per-raid clears, day-one, or flawless raid stats. Prefer this tool for Destiny 2 stats, PvP, trials, weapons, profile, or recent activity. If a QQ number is unbound, ask the user for BungieName#1234 or membershipType:membershipId.",
       parameters: cardQueryParameters,
       async execute(_toolCallId, params, signal) {
         const config = getConfig();

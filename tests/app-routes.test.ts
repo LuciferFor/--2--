@@ -46,6 +46,46 @@ const fakeDestinyService = {
       }
     };
   },
+  async getCareerSummary() {
+    return {
+      membershipType: 3,
+      membershipId: "4611686018",
+      modes: [
+        {
+          membershipType: 3,
+          membershipId: "4611686018",
+          mode: "all",
+          modeLabel: "全部",
+          updatedAt: "2026-06-03T00:00:00.000Z",
+          stats: {
+            activitiesEntered: 1,
+            activitiesWon: 1,
+            kills: 10,
+            deaths: 1,
+            assists: 2,
+            secondsPlayed: 100,
+            kd: 10,
+            kda: 11,
+            efficiency: 12,
+            winRate: 100
+          }
+        }
+      ],
+      updatedAt: "2026-06-03T00:00:00.000Z"
+    };
+  },
+  async getPvpOverview() {
+    return {
+      membershipType: 3,
+      membershipId: "4611686018",
+      summary: await fakeDestinyService.getSummary(),
+      trials: await fakeDestinyService.getSummary(),
+      recent: [],
+      weapons: [],
+      weaponScope: "all-time unique weapon history",
+      updatedAt: "2026-06-03T00:00:00.000Z"
+    };
+  },
   async getActivities() {
     return [
       {
@@ -55,6 +95,62 @@ const fakeDestinyService = {
         values: {}
       }
     ];
+  },
+  async getDungeonOverview() {
+    return {
+      membershipType: 3,
+      membershipId: "4611686018",
+      mode: "dungeon",
+      modeLabel: "地牢",
+      totals: {
+        activities: 1,
+        clears: 2,
+        kills: 50,
+        deaths: 5,
+        secondsPlayed: 1800
+      },
+      activities: [
+        {
+          name: "Duality",
+          activityHashes: [2],
+          clears: 2,
+          completions: 2,
+          wins: 2,
+          kills: 50,
+          deaths: 5,
+          secondsPlayed: 1800,
+          fastestCompletionDisplay: "15:00.000"
+        }
+      ],
+      scan: {
+        historyPages: 1,
+        recentActivitiesScanned: 0,
+        note: "test"
+      },
+      updatedAt: "2026-06-03T00:00:00.000Z"
+    };
+  },
+  async getHeatmap() {
+    return {
+      membershipType: 3,
+      membershipId: "4611686018",
+      mode: "all",
+      modeLabel: "全部",
+      timezone: "Asia/Shanghai",
+      activitiesScanned: 1,
+      days: [{ key: "2026-06-03", activities: 1, completed: 1, kills: 10, deaths: 1, secondsPlayed: 100 }],
+      hours: [{ key: "20", activities: 1, completed: 1, kills: 10, deaths: 1, secondsPlayed: 100 }],
+      updatedAt: "2026-06-03T00:00:00.000Z"
+    };
+  },
+  async getNamecard() {
+    return {
+      membershipType: 3,
+      membershipId: "4611686018",
+      profile: await fakeDestinyService.getProfile(),
+      summary: await fakeDestinyService.getSummary(),
+      updatedAt: "2026-06-03T00:00:00.000Z"
+    };
   },
   async getRaidOverview() {
     return {
@@ -311,6 +407,60 @@ describe("Fastify routes", () => {
             fastestCompletionDisplay: "30:00.000"
           }
         ]
+      }
+    });
+    await app.close();
+  });
+
+  it("returns expanded public stat interfaces", async () => {
+    const app = await buildApp({
+      config: makeTestConfig(),
+      cache: new MemoryCacheStore(),
+      store: new NullStore(),
+      destinyService: fakeDestinyService as never,
+      cardService: fakeCardService as never
+    });
+
+    const career = await app.inject({ method: "GET", url: "/api/d2/career/3/4611686018" });
+    const pvp = await app.inject({ method: "GET", url: "/api/d2/pvp/3/4611686018?count=5" });
+    const dungeons = await app.inject({ method: "GET", url: "/api/d2/dungeons/3/4611686018?historyPages=1" });
+    const heatmap = await app.inject({
+      method: "GET",
+      url: "/api/d2/heatmap/3/4611686018?mode=all&pages=1&timezone=Asia%2FShanghai"
+    });
+    const namecard = await app.inject({ method: "GET", url: "/api/d2/namecard/3/4611686018" });
+
+    expect(career.statusCode).toBe(200);
+    expect(career.json()).toMatchObject({ success: true, data: { modes: [{ mode: "all" }] } });
+    expect(pvp.statusCode).toBe(200);
+    expect(pvp.json()).toMatchObject({ success: true, data: { weaponScope: expect.any(String) } });
+    expect(dungeons.statusCode).toBe(200);
+    expect(dungeons.json()).toMatchObject({ success: true, data: { totals: { clears: 2 } } });
+    expect(heatmap.statusCode).toBe(200);
+    expect(heatmap.json()).toMatchObject({ success: true, data: { timezone: "Asia/Shanghai" } });
+    expect(namecard.statusCode).toBe(200);
+    expect(namecard.json()).toMatchObject({ success: true, data: { membershipId: "4611686018" } });
+    await app.close();
+  });
+
+  it("returns OAuth-required errors for private Destiny interfaces", async () => {
+    const app = await buildApp({
+      config: makeTestConfig(),
+      cache: new MemoryCacheStore(),
+      store: new NullStore(),
+      destinyService: fakeDestinyService as never,
+      cardService: fakeCardService as never
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/d2/vault/3/4611686018/search?q=fatebringer"
+    });
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toMatchObject({
+      success: false,
+      error: {
+        code: "OAUTH_REQUIRED"
       }
     });
     await app.close();

@@ -7,19 +7,26 @@ import { parseBungieName } from "./bungie-name.js";
 import type { BungieClient } from "./bungie-client.js";
 import type {
   AccountSummary,
+  ActivityModeOverview,
+  ActivityModeOverviewActivity,
   ActivitySummary,
+  CareerSummary,
   CharacterSummary,
+  HeatmapBucket,
+  HeatmapSummary,
+  NamecardSummary,
   PgcrPlayerSummary,
   PgcrSummary,
   PlayerSearchResult,
   ProfileSummary,
+  PvpOverview,
   RaidOverview,
   RaidOverviewActivity,
   WeaponUsageSummary,
   WeaponsSummary
 } from "./destiny-types.js";
 import type { ManifestService } from "./manifest-service.js";
-import { parsePublicMode, type ModeInfo } from "./modes.js";
+import { parsePublicMode, type ModeInfo, type PublicMode } from "./modes.js";
 import { findRaidReleaseWindow } from "./raid-release-windows.js";
 import { aggregatePgcrPlayerValues, statBasicValue, summarizeHistoricalStats } from "./stat-utils.js";
 
@@ -141,6 +148,142 @@ export class DestinyService {
     };
 
     await this.cache.setJson(cacheKey, result, CACHE_TTL.summary);
+    return result;
+  }
+
+  async getCareerSummary(membershipType: number, membershipId: string): Promise<CareerSummary> {
+    const cacheKey = `d2:career:${membershipType}:${membershipId}`;
+    const cached = await this.cache.getJson<CareerSummary>(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const modes: PublicMode[] = ["all", "pvp", "trials", "raid", "dungeon", "gambit"];
+    const result: CareerSummary = {
+      membershipType,
+      membershipId,
+      modes: await Promise.all(modes.map((mode) => this.getSummary(membershipType, membershipId, mode))),
+      updatedAt: new Date().toISOString()
+    };
+
+    await this.cache.setJson(cacheKey, result, CACHE_TTL.career);
+    return result;
+  }
+
+  async getPvpOverview(membershipType: number, membershipId: string, count: number): Promise<PvpOverview> {
+    const cacheKey = `d2:pvp-overview:${membershipType}:${membershipId}:${count}`;
+    const cached = await this.cache.getJson<PvpOverview>(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const [summary, trials, recent, weapons] = await Promise.all([
+      this.getSummary(membershipType, membershipId, "pvp"),
+      this.getSummary(membershipType, membershipId, "trials"),
+      this.getActivities(membershipType, membershipId, "pvp", count, 0),
+      this.getWeapons(membershipType, membershipId)
+    ]);
+
+    const result: PvpOverview = {
+      membershipType,
+      membershipId,
+      summary,
+      trials,
+      recent,
+      weapons: weapons.weapons.slice(0, 25),
+      weaponScope: "all-time unique weapon history; Bungie public API does not expose mode-scoped weapon totals here",
+      updatedAt: new Date().toISOString()
+    };
+
+    await this.cache.setJson(cacheKey, result, CACHE_TTL.summary);
+    return result;
+  }
+
+  async getNamecard(membershipType: number, membershipId: string): Promise<NamecardSummary> {
+    const cacheKey = `d2:namecard:${membershipType}:${membershipId}`;
+    const cached = await this.cache.getJson<NamecardSummary>(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const [profile, summary] = await Promise.all([
+      this.getProfile(membershipType, membershipId),
+      this.getSummary(membershipType, membershipId, "all")
+    ]);
+    const result: NamecardSummary = {
+      membershipType,
+      membershipId,
+      profile,
+      summary,
+      updatedAt: new Date().toISOString()
+    };
+
+    await this.cache.setJson(cacheKey, result, CACHE_TTL.profile);
+    return result;
+  }
+
+  async getDungeonOverview(
+    membershipType: number,
+    membershipId: string,
+    options: { historyPages: number }
+  ): Promise<ActivityModeOverview> {
+    return this.getActivityModeOverview(membershipType, membershipId, "dungeon", options);
+  }
+
+  async getHeatmap(
+    membershipType: number,
+    membershipId: string,
+    modeValue: unknown,
+    options: { pages: number; timezone: string }
+  ): Promise<HeatmapSummary> {
+    const mode = parsePublicMode(modeValue);
+    const cacheKey = `d2:heatmap:${membershipType}:${membershipId}:${mode.publicMode}:${options.pages}:${options.timezone}`;
+    const cached = await this.cache.getJson<HeatmapSummary>(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const profile = await this.getProfile(membershipType, membershipId);
+    const perCharacter = await Promise.all(
+      profile.characters.map(async (character) => {
+        const pages = await Promise.all(
+          Array.from({ length: options.pages }, (_, page) =>
+            this.getCharacterActivities(membershipType, membershipId, character.characterId, mode, RAID_HISTORY_PAGE_SIZE, page)
+          )
+        );
+        return pages.flat();
+      })
+    );
+    const activities = perCharacter
+      .flat()
+      .filter(uniqueActivity())
+      .sort((a, b) => a.period.localeCompare(b.period));
+
+    const dayBuckets = new Map<string, HeatmapBucket>();
+    const hourBuckets = new Map<string, HeatmapBucket>();
+    for (const activity of activities) {
+      const keys = heatmapKeys(activity.period, options.timezone);
+      const completed = statBasicValue(activity.values, "completed") > 0 ? 1 : 0;
+      const kills = statBasicValue(activity.values, "kills");
+      const deaths = statBasicValue(activity.values, "deaths");
+      const secondsPlayed = statBasicValue(activity.values, "activityDurationSeconds");
+      addHeatmapBucket(dayBuckets, keys.day, completed, kills, deaths, secondsPlayed);
+      addHeatmapBucket(hourBuckets, keys.hour, completed, kills, deaths, secondsPlayed);
+    }
+
+    const result: HeatmapSummary = {
+      membershipType,
+      membershipId,
+      mode: mode.publicMode,
+      modeLabel: mode.label,
+      timezone: options.timezone,
+      activitiesScanned: activities.length,
+      days: [...dayBuckets.values()].sort((a, b) => a.key.localeCompare(b.key)),
+      hours: [...hourBuckets.values()].sort((a, b) => Number(a.key) - Number(b.key)),
+      updatedAt: new Date().toISOString()
+    };
+
+    await this.cache.setJson(cacheKey, result, CACHE_TTL.heatmap);
     return result;
   }
 
@@ -368,6 +511,93 @@ export class DestinyService {
     return result;
   }
 
+  private async getActivityModeOverview(
+    membershipType: number,
+    membershipId: string,
+    modeValue: PublicMode,
+    options: { historyPages: number }
+  ): Promise<ActivityModeOverview> {
+    const mode = parsePublicMode(modeValue);
+    if (mode.bungieMode === undefined) {
+      throw new BadRequestError("Activity overview requires a concrete Bungie mode");
+    }
+
+    const cacheKey = `d2:activity-overview:${mode.publicMode}:${membershipType}:${membershipId}:${options.historyPages}`;
+    const cached = await this.cache.getJson<ActivityModeOverview>(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const profile = await this.getProfile(membershipType, membershipId);
+    const activityDefinitions = await this.manifest.getDefinitionMap<RaidActivityDefinition>(
+      "DestinyActivityDefinition"
+    );
+    const aggregateResponses = await Promise.all(
+      profile.characters.map((character) =>
+        this.client.get<unknown>(
+          `/Destiny2/${membershipType}/Account/${membershipId}/Character/${character.characterId}/Stats/AggregateActivityStats/`
+        )
+      )
+    );
+
+    const groups = new Map<string, ActivityOverviewGroup>();
+    for (const response of aggregateResponses) {
+      for (const activity of asArray(asRecord(response).activities)) {
+        this.addAggregateModeActivity(groups, asRecord(activity), activityDefinitions, mode.bungieMode);
+      }
+    }
+
+    const recentActivities = await this.getRecentModeActivitiesForScan(
+      membershipType,
+      membershipId,
+      profile.characters.map((character) => character.characterId),
+      mode,
+      options.historyPages,
+      activityDefinitions
+    );
+
+    for (const activity of recentActivities) {
+      const group = this.groupForModeActivity(groups, activity.referenceId, activity.activityName, activityDefinitions, mode.bungieMode);
+      if (!group) {
+        continue;
+      }
+      const completed = statBasicValue(activity.values, "completed") > 0;
+      if (completed && (!group.lastClearedAt || activity.period > group.lastClearedAt)) {
+        group.lastClearedAt = activity.period;
+        group.lastActivityId = activity.activityId;
+      }
+    }
+
+    const activities = [...groups.values()]
+      .map(finalizeActivityGroup)
+      .filter((activity) => activity.clears > 0 || activity.completions > 0)
+      .sort((a, b) => b.clears - a.clears || a.name.localeCompare(b.name));
+
+    const result: ActivityModeOverview = {
+      membershipType,
+      membershipId,
+      mode: mode.publicMode,
+      modeLabel: mode.label,
+      totals: {
+        activities: activities.length,
+        clears: activities.reduce((sum, activity) => sum + activity.clears, 0),
+        kills: activities.reduce((sum, activity) => sum + activity.kills, 0),
+        deaths: activities.reduce((sum, activity) => sum + activity.deaths, 0),
+        secondsPlayed: activities.reduce((sum, activity) => sum + activity.secondsPlayed, 0)
+      },
+      activities,
+      scan: {
+        historyPages: options.historyPages,
+        recentActivitiesScanned: recentActivities.length,
+        note: "clears/fastest are all-time aggregate stats; lastClear is checked from recent public activity history"
+      },
+      updatedAt: new Date().toISOString()
+    };
+
+    await this.cache.setJson(cacheKey, result, CACHE_TTL.activityOverview);
+    return result;
+  }
+
   private async getCharacterActivities(
     membershipType: number,
     membershipId: string,
@@ -533,6 +763,40 @@ export class DestinyService {
     }
   }
 
+  private addAggregateModeActivity(
+    groups: Map<string, ActivityOverviewGroup>,
+    activity: Record<string, unknown>,
+    activityDefinitions: Record<string, RaidActivityDefinition>,
+    modeType: number
+  ): void {
+    const activityHash = optionalNumber(activity.activityHash) ?? optionalString(activity.activityHash);
+    const definition = activityHash === undefined || activityHash === null ? undefined : activityDefinitions[String(activityHash)];
+    if (!definition || !isActivityDefinitionForMode(definition, modeType)) {
+      return;
+    }
+
+    const name = normalizeActivityDisplayName(asString(definition.displayProperties?.name, `Activity ${activityHash}`));
+    const group = getOrCreateActivityGroup(groups, name, definition);
+    const hashNumber = Number(activityHash);
+    if (Number.isFinite(hashNumber)) {
+      group.activityHashes.add(hashNumber);
+    }
+
+    const values = asRecord(activity.values);
+    group.completions += statBasicValue(values, "activityCompletions");
+    group.wins += statBasicValue(values, "activityWins");
+    group.kills += statBasicValue(values, "activityKills");
+    group.deaths += statBasicValue(values, "activityDeaths");
+    group.secondsPlayed += statBasicValue(values, "activitySecondsPlayed");
+
+    const fastest = statBasicValue(values, "fastestCompletionMsForActivity");
+    if (fastest > 0 && (group.fastestCompletionMs === undefined || fastest < group.fastestCompletionMs)) {
+      group.fastestCompletionMs = fastest;
+      group.fastestCompletionDisplay = statDisplayValue(values, "fastestCompletionMsForActivity");
+      group.fastestActivityId = statActivityId(values, "fastestCompletionMsForActivity");
+    }
+  }
+
   private async getRecentRaidActivitiesForScan(
     membershipType: number,
     membershipId: string,
@@ -569,6 +833,39 @@ export class DestinyService {
       const name = normalizeRaidDisplayName(asString(definition?.displayProperties?.name, activity.activityName));
       return definition && isRaidActivityDefinition(definition) && !isPantheonActivityName(name);
     });
+  }
+
+  private async getRecentModeActivitiesForScan(
+    membershipType: number,
+    membershipId: string,
+    characterIds: string[],
+    mode: ModeInfo,
+    historyPages: number,
+    activityDefinitions: Record<string, RaidActivityDefinition>
+  ): Promise<ActivitySummary[]> {
+    if (mode.bungieMode === undefined) {
+      return [];
+    }
+
+    const perCharacter = await Promise.all(
+      characterIds.map(async (characterId) => {
+        const pages = await Promise.all(
+          Array.from({ length: historyPages }, (_, page) =>
+            this.getCharacterActivities(membershipType, membershipId, characterId, mode, RAID_HISTORY_PAGE_SIZE, page)
+          )
+        );
+        return pages.flat();
+      })
+    );
+
+    return perCharacter
+      .flat()
+      .filter(uniqueActivity())
+      .sort((a, b) => b.period.localeCompare(a.period))
+      .filter((activity) => {
+        const definition = activity.referenceId === undefined ? undefined : activityDefinitions[String(activity.referenceId)];
+        return definition !== undefined && isActivityDefinitionForMode(definition, mode.bungieMode!);
+      });
   }
 
   private async getCharacterActivitiesForRaidScan(
@@ -622,6 +919,21 @@ export class DestinyService {
       return null;
     }
     return groups.get(name) ?? (definition && isRaidActivityDefinition(definition) ? getOrCreateRaidGroup(groups, name, definition) : null);
+  }
+
+  private groupForModeActivity(
+    groups: Map<string, ActivityOverviewGroup>,
+    referenceId: number | undefined,
+    fallbackName: string,
+    activityDefinitions: Record<string, RaidActivityDefinition>,
+    modeType: number
+  ): ActivityOverviewGroup | null {
+    const definition = referenceId === undefined ? undefined : activityDefinitions[String(referenceId)];
+    const name = normalizeActivityDisplayName(asString(definition?.displayProperties?.name, fallbackName));
+    return groups.get(name) ??
+      (definition && isActivityDefinitionForMode(definition, modeType)
+        ? getOrCreateActivityGroup(groups, name, definition)
+        : null);
   }
 
   private applyRaidPgcrScan(group: RaidOverviewGroup, pgcr: PgcrSummary, membershipId: string): void {
@@ -682,8 +994,28 @@ interface RaidOverviewGroup {
   dayOne: RaidOverviewActivity["dayOne"];
 }
 
+interface ActivityOverviewGroup {
+  name: string;
+  activityHashes: Set<number>;
+  pgcrImage?: string;
+  completions: number;
+  wins: number;
+  kills: number;
+  deaths: number;
+  secondsPlayed: number;
+  fastestCompletionMs?: number;
+  fastestCompletionDisplay?: string;
+  fastestActivityId?: string;
+  lastClearedAt?: string;
+  lastActivityId?: string;
+}
+
 function isRaidActivityDefinition(definition: RaidActivityDefinition): boolean {
   return Array.isArray(definition.activityModeTypes) && definition.activityModeTypes.includes(RAID_MODE_TYPE);
+}
+
+function isActivityDefinitionForMode(definition: RaidActivityDefinition, modeType: number): boolean {
+  return Array.isArray(definition.activityModeTypes) && definition.activityModeTypes.includes(modeType);
 }
 
 function getOrCreateRaidGroup(
@@ -722,12 +1054,41 @@ function getOrCreateRaidGroup(
   return group;
 }
 
+function getOrCreateActivityGroup(
+  groups: Map<string, ActivityOverviewGroup>,
+  name: string,
+  definition: RaidActivityDefinition
+): ActivityOverviewGroup {
+  const existing = groups.get(name);
+  if (existing) {
+    existing.pgcrImage ??= definition.pgcrImage;
+    return existing;
+  }
+
+  const group: ActivityOverviewGroup = {
+    name,
+    activityHashes: new Set(),
+    pgcrImage: definition.pgcrImage,
+    completions: 0,
+    wins: 0,
+    kills: 0,
+    deaths: 0,
+    secondsPlayed: 0
+  };
+  groups.set(name, group);
+  return group;
+}
+
 function normalizeRaidDisplayName(name: string): string {
   return name
     .replace(/\s*[:：]\s*(Normal|Master|Legend|Contest|Epic|Standard|标准|大师|普通|传说|竞赛|史诗)\s*$/iu, "")
     .replace(/\s*[（(]\s*(Normal|Master|Legend|Contest|Epic|Standard|标准|大师|普通|传说|竞赛|史诗)\s*[）)]\s*$/iu, "")
     .replace(/\s+/gu, " ")
     .trim();
+}
+
+function normalizeActivityDisplayName(name: string): string {
+  return normalizeRaidDisplayName(name);
 }
 
 function isPantheonActivityName(name: string): boolean {
@@ -771,6 +1132,74 @@ function finalizeRaidGroup(group: RaidOverviewGroup): RaidOverviewActivity {
     flawless: group.flawless,
     dayOne: group.dayOne
   };
+}
+
+function finalizeActivityGroup(group: ActivityOverviewGroup): ActivityModeOverviewActivity {
+  return {
+    name: group.name,
+    activityHashes: [...group.activityHashes].sort((a, b) => a - b),
+    pgcrImage: group.pgcrImage,
+    clears: group.completions,
+    completions: group.completions,
+    wins: group.wins,
+    kills: group.kills,
+    deaths: group.deaths,
+    secondsPlayed: group.secondsPlayed,
+    fastestCompletionMs: group.fastestCompletionMs,
+    fastestCompletionDisplay: group.fastestCompletionDisplay,
+    fastestActivityId: group.fastestActivityId,
+    lastClearedAt: group.lastClearedAt,
+    lastActivityId: group.lastActivityId
+  };
+}
+
+function addHeatmapBucket(
+  buckets: Map<string, HeatmapBucket>,
+  key: string,
+  completed: number,
+  kills: number,
+  deaths: number,
+  secondsPlayed: number
+): void {
+  const bucket = buckets.get(key) ?? {
+    key,
+    activities: 0,
+    completed: 0,
+    kills: 0,
+    deaths: 0,
+    secondsPlayed: 0
+  };
+  bucket.activities += 1;
+  bucket.completed += completed;
+  bucket.kills += kills;
+  bucket.deaths += deaths;
+  bucket.secondsPlayed += secondsPlayed;
+  buckets.set(key, bucket);
+}
+
+function heatmapKeys(period: string, timezone: string): { day: string; hour: string } {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    hour12: false,
+    hourCycle: "h23"
+  }).formatToParts(new Date(period));
+
+  const year = datePart(parts, "year");
+  const month = datePart(parts, "month");
+  const day = datePart(parts, "day");
+  const hour = datePart(parts, "hour").padStart(2, "0");
+  return {
+    day: `${year}-${month}-${day}`,
+    hour
+  };
+}
+
+function datePart(parts: Intl.DateTimeFormatPart[], type: Intl.DateTimeFormatPartTypes): string {
+  return parts.find((part) => part.type === type)?.value ?? "";
 }
 
 function uniqueActivity<T extends { activityId: string }>(): (activity: T) => boolean {

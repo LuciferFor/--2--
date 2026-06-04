@@ -32,7 +32,21 @@
       },
       "defaultCard": {
         "type": "string",
-        "enum": ["summary", "profile", "weapons", "raid_overview", "latest_activity", "activity"],
+        "enum": [
+          "help",
+          "summary",
+          "career",
+          "profile",
+          "namecard",
+          "pvp",
+          "weapons",
+          "raid_overview",
+          "dungeon_overview",
+          "heatmap",
+          "activities",
+          "latest_activity",
+          "activity"
+        ],
         "default": "summary"
       },
       "defaultMode": {

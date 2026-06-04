@@ -6,7 +6,7 @@ import type { DestinyService } from "../destiny/destiny-service.js";
 import type { PlayerSearchResult } from "../destiny/destiny-types.js";
 import { parseQq } from "../bindings/qq.js";
 import { parseCount, parseId, parseMembershipType, parsePage } from "../destiny/validators.js";
-import { BadRequestError, NotFoundError } from "../lib/errors.js";
+import { BadRequestError, NotFoundError, OAuthRequiredError } from "../lib/errors.js";
 import { sha256Hex } from "../lib/hash.js";
 import { ok } from "../lib/response.js";
 
@@ -76,6 +76,24 @@ export async function registerD2Routes(app: FastifyInstance, deps: D2RouteDeps):
     return ok(data, { tookMs: Date.now() - started });
   });
 
+  app.get("/api/d2/career/:membershipType/:membershipId", async (request) => {
+    const started = Date.now();
+    const { membershipType, membershipId } = parseMembershipParams(request.params as Params);
+    const data = await deps.destinyService.getCareerSummary(membershipType, membershipId);
+    await recordQuery(deps.store, request, false);
+    return ok(data, { tookMs: Date.now() - started });
+  });
+
+  app.get("/api/d2/pvp/:membershipType/:membershipId", async (request) => {
+    const started = Date.now();
+    const { membershipType, membershipId } = parseMembershipParams(request.params as Params);
+    const query = request.query as Query;
+    const count = parseBoundedInteger(query.count, "count", 1, 50, 10);
+    const data = await deps.destinyService.getPvpOverview(membershipType, membershipId, count);
+    await recordQuery(deps.store, request, false);
+    return ok(data, { count, tookMs: Date.now() - started });
+  });
+
   app.get("/api/d2/raids/:membershipType/:membershipId", async (request) => {
     const started = Date.now();
     const { membershipType, membershipId } = parseMembershipParams(request.params as Params);
@@ -83,6 +101,17 @@ export async function registerD2Routes(app: FastifyInstance, deps: D2RouteDeps):
     const data = await deps.destinyService.getRaidOverview(membershipType, membershipId, {
       historyPages: parseBoundedInteger(query.historyPages, "historyPages", 1, 10, 1),
       pgcrLimit: parseBoundedInteger(query.pgcrLimit, "pgcrLimit", 0, 200, 20)
+    });
+    await recordQuery(deps.store, request, false);
+    return ok(data, { tookMs: Date.now() - started });
+  });
+
+  app.get("/api/d2/dungeons/:membershipType/:membershipId", async (request) => {
+    const started = Date.now();
+    const { membershipType, membershipId } = parseMembershipParams(request.params as Params);
+    const query = request.query as Query;
+    const data = await deps.destinyService.getDungeonOverview(membershipType, membershipId, {
+      historyPages: parseBoundedInteger(query.historyPages, "historyPages", 1, 10, 1)
     });
     await recordQuery(deps.store, request, false);
     return ok(data, { tookMs: Date.now() - started });
@@ -99,6 +128,26 @@ export async function registerD2Routes(app: FastifyInstance, deps: D2RouteDeps):
     return ok(data, { count, page, tookMs: Date.now() - started });
   });
 
+  app.get("/api/d2/heatmap/:membershipType/:membershipId", async (request) => {
+    const started = Date.now();
+    const { membershipType, membershipId } = parseMembershipParams(request.params as Params);
+    const query = request.query as Query;
+    const data = await deps.destinyService.getHeatmap(membershipType, membershipId, query.mode, {
+      pages: parseBoundedInteger(query.pages, "pages", 1, 10, 2),
+      timezone: parseTimezone(query.timezone)
+    });
+    await recordQuery(deps.store, request, false);
+    return ok(data, { tookMs: Date.now() - started });
+  });
+
+  app.get("/api/d2/namecard/:membershipType/:membershipId", async (request) => {
+    const started = Date.now();
+    const { membershipType, membershipId } = parseMembershipParams(request.params as Params);
+    const data = await deps.destinyService.getNamecard(membershipType, membershipId);
+    await recordQuery(deps.store, request, false);
+    return ok(data, { tookMs: Date.now() - started });
+  });
+
   app.get("/api/d2/pgcr/:activityId", async (request) => {
     const started = Date.now();
     const activityId = parseId((request.params as Params).activityId, "activityId");
@@ -106,6 +155,12 @@ export async function registerD2Routes(app: FastifyInstance, deps: D2RouteDeps):
     await recordQuery(deps.store, request, false);
     return ok(data, { tookMs: Date.now() - started });
   });
+
+  app.get("/api/d2/vault/:membershipType/:membershipId/search", oauthRequired("Vault search"));
+  app.get("/api/d2/inventory/:membershipType/:membershipId/weapons", oauthRequired("Private inventory weapons"));
+  app.get("/api/d2/catalysts/:membershipType/:membershipId", oauthRequired("Catalyst progress"));
+  app.get("/api/d2/titles/:membershipType/:membershipId", oauthRequired("Triumph seal and title progress"));
+  app.get("/api/d2/skins/:membershipType/:membershipId", oauthRequired("Collection and ornament ownership"));
 
   app.get("/api/d2/weapons/:membershipType/:membershipId", async (request) => {
     const started = Date.now();
@@ -309,6 +364,27 @@ function parseBoundedInteger(
     throw new BadRequestError(`${name} must be an integer between ${min} and ${max}`);
   }
   return number;
+}
+
+function parseTimezone(value: unknown): string {
+  const timezone = typeof value === "string" && value.trim().length > 0 ? value.trim() : "Asia/Shanghai";
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(new Date());
+    return timezone;
+  } catch {
+    throw new BadRequestError("Invalid timezone");
+  }
+}
+
+function oauthRequired(feature: string): (request: FastifyRequest) => Promise<never> {
+  return async (request) => {
+    parseMembershipParams(request.params as Params);
+    throw new OAuthRequiredError(`${feature} requires Bungie OAuth authorization`, {
+      feature,
+      reason: "Bungie does not expose this account-private data through API-key-only public requests.",
+      nextStep: "Add OAuth login and request the required Destiny components before enabling this route."
+    });
+  };
 }
 
 async function resolveBindingInput(

@@ -1,4 +1,5 @@
 import type { HistoricalStatsSummary } from "./stat-utils.js";
+import type { PublicMode } from "./modes.js";
 
 export interface PlayerSearchResult {
   bungieName: string;
@@ -93,6 +94,91 @@ export interface WeaponsSummary {
   membershipType: number;
   membershipId: string;
   weapons: WeaponUsageSummary[];
+  updatedAt: string;
+}
+
+export interface CareerSummary {
+  membershipType: number;
+  membershipId: string;
+  modes: AccountSummary[];
+  updatedAt: string;
+}
+
+export interface PvpOverview {
+  membershipType: number;
+  membershipId: string;
+  summary: AccountSummary;
+  trials: AccountSummary;
+  recent: ActivitySummary[];
+  weapons: WeaponUsageSummary[];
+  weaponScope: string;
+  updatedAt: string;
+}
+
+export interface ActivityModeOverviewActivity {
+  name: string;
+  activityHashes: number[];
+  pgcrImage?: string;
+  clears: number;
+  completions: number;
+  wins: number;
+  kills: number;
+  deaths: number;
+  secondsPlayed: number;
+  fastestCompletionMs?: number;
+  fastestCompletionDisplay?: string;
+  fastestActivityId?: string;
+  lastClearedAt?: string;
+  lastActivityId?: string;
+}
+
+export interface ActivityModeOverview {
+  membershipType: number;
+  membershipId: string;
+  mode: PublicMode;
+  modeLabel: string;
+  totals: {
+    activities: number;
+    clears: number;
+    kills: number;
+    deaths: number;
+    secondsPlayed: number;
+  };
+  activities: ActivityModeOverviewActivity[];
+  scan: {
+    historyPages: number;
+    recentActivitiesScanned: number;
+    note: string;
+  };
+  updatedAt: string;
+}
+
+export interface HeatmapBucket {
+  key: string;
+  activities: number;
+  completed: number;
+  kills: number;
+  deaths: number;
+  secondsPlayed: number;
+}
+
+export interface HeatmapSummary {
+  membershipType: number;
+  membershipId: string;
+  mode: PublicMode;
+  modeLabel: string;
+  timezone: string;
+  activitiesScanned: number;
+  days: HeatmapBucket[];
+  hours: HeatmapBucket[];
+  updatedAt: string;
+}
+
+export interface NamecardSummary {
+  membershipType: number;
+  membershipId: string;
+  profile: ProfileSummary;
+  summary: AccountSummary;
   updatedAt: string;
 }
 

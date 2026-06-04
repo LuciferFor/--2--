@@ -1,10 +1,25 @@
 import { readFileSync } from "node:fs";
 
 const MODES = new Set(["all", "raid", "dungeon", "trials", "pvp", "gambit"]);
-const CARDS = new Set(["summary", "profile", "weapons", "raid_overview", "latest_activity", "activity"]);
+const CARDS = new Set([
+  "help",
+  "summary",
+  "career",
+  "profile",
+  "namecard",
+  "pvp",
+  "weapons",
+  "raid_overview",
+  "dungeon_overview",
+  "heatmap",
+  "activities",
+  "latest_activity",
+  "activity",
+]);
 const CARD_WIDTH = 1200;
 const CJK_FONT_URL = new URL("../assets/NotoSansSC-VF.ttf", import.meta.url).href;
 let cachedFontFaceCss;
+const imageDataUrlCache = new Map();
 
 const MODE_LABELS = {
   all: "总览",
@@ -70,8 +85,21 @@ export function buildPublicDataUrl(kind, target, params = {}, config = resolveCo
     return `${config.baseUrl}/api/d2/summary/${target.membershipType}/${target.membershipId}?${query.toString()}`;
   }
 
+  if (kind === "career") {
+    return `${config.baseUrl}/api/d2/career/${target.membershipType}/${target.membershipId}`;
+  }
+
+  if (kind === "pvp") {
+    query.set("count", String(clampInteger(params.count, 10, 1, 50)));
+    return `${config.baseUrl}/api/d2/pvp/${target.membershipType}/${target.membershipId}?${query.toString()}`;
+  }
+
   if (kind === "profile") {
     return `${config.baseUrl}/api/d2/profile/${target.membershipType}/${target.membershipId}`;
+  }
+
+  if (kind === "namecard") {
+    return `${config.baseUrl}/api/d2/namecard/${target.membershipType}/${target.membershipId}`;
   }
 
   if (kind === "weapons") {
@@ -89,6 +117,18 @@ export function buildPublicDataUrl(kind, target, params = {}, config = resolveCo
     query.set("historyPages", String(clampInteger(params.historyPages, 1, 1, 10)));
     query.set("pgcrLimit", String(clampInteger(params.pgcrLimit, 20, 0, 200)));
     return `${config.baseUrl}/api/d2/raids/${target.membershipType}/${target.membershipId}?${query.toString()}`;
+  }
+
+  if (kind === "dungeons") {
+    query.set("historyPages", String(clampInteger(params.historyPages, 1, 1, 10)));
+    return `${config.baseUrl}/api/d2/dungeons/${target.membershipType}/${target.membershipId}?${query.toString()}`;
+  }
+
+  if (kind === "heatmap") {
+    query.set("mode", normalizeMode(params.mode, config.defaultMode));
+    query.set("pages", String(clampInteger(params.pages, 2, 1, 10)));
+    query.set("timezone", String(params.timezone || "Asia/Shanghai"));
+    return `${config.baseUrl}/api/d2/heatmap/${target.membershipType}/${target.membershipId}?${query.toString()}`;
   }
 
   if (kind === "pgcr") {
@@ -110,7 +150,7 @@ export async function queryCard(params = {}, rawConfig = {}, options = {}) {
 
   let card;
   try {
-    card = normalizeCard(params.card, config.defaultCard);
+    card = normalizeCard(params.card || inferCardFromCommand(params.command || params.query), config.defaultCard);
   } catch (error) {
     if (error instanceof D2StatsInputError) {
       return textResult(error.message, { status: "invalid_input" });
@@ -217,6 +257,15 @@ export async function bindQq(params = {}, rawConfig = {}, options = {}) {
 }
 
 async function renderCardFromPublicJson(card, params, config, options) {
+  if (card === "help") {
+    return {
+      width: CARD_WIDTH,
+      height: 880,
+      sourceUrl: `${config.baseUrl}/health`,
+      html: renderHelpHtml(),
+    };
+  }
+
   if (card === "activity") {
     const sourceUrl = buildPublicDataUrl("pgcr", undefined, params, config);
     const pgcr = await fetchEnvelope(sourceUrl, config, options);
@@ -241,6 +290,28 @@ async function renderCardFromPublicJson(card, params, config, options) {
     };
   }
 
+  if (card === "career") {
+    const sourceUrl = buildPublicDataUrl("career", resolved, params, config);
+    const career = await fetchEnvelope(sourceUrl, config, options);
+    return {
+      width: CARD_WIDTH,
+      height: 700,
+      sourceUrl,
+      html: renderCareerHtml(resolved.player, career),
+    };
+  }
+
+  if (card === "pvp") {
+    const sourceUrl = buildPublicDataUrl("pvp", resolved, params, config);
+    const pvp = await fetchEnvelope(sourceUrl, config, options);
+    return {
+      width: CARD_WIDTH,
+      height: 760,
+      sourceUrl,
+      html: renderPvpHtml(resolved.player, pvp),
+    };
+  }
+
   if (card === "profile") {
     const sourceUrl = buildPublicDataUrl("profile", resolved, params, config);
     const profile = await fetchEnvelope(sourceUrl, config, options);
@@ -252,6 +323,17 @@ async function renderCardFromPublicJson(card, params, config, options) {
     };
   }
 
+  if (card === "namecard") {
+    const sourceUrl = buildPublicDataUrl("namecard", resolved, params, config);
+    const namecard = await fetchEnvelope(sourceUrl, config, options);
+    return {
+      width: CARD_WIDTH,
+      height: 640,
+      sourceUrl,
+      html: renderNamecardHtml(resolved.player, namecard),
+    };
+  }
+
   if (card === "weapons") {
     const sourceUrl = buildPublicDataUrl("weapons", resolved, params, config);
     const weapons = await fetchEnvelope(sourceUrl, config, options);
@@ -260,6 +342,17 @@ async function renderCardFromPublicJson(card, params, config, options) {
       height: 720,
       sourceUrl,
       html: renderWeaponsHtml(resolved.player, weapons),
+    };
+  }
+
+  if (card === "activities") {
+    const sourceUrl = buildPublicDataUrl("activities", resolved, { ...params, count: params.count || 18, page: params.page || 0 }, config);
+    const activities = await fetchEnvelope(sourceUrl, config, options);
+    return {
+      width: CARD_WIDTH,
+      height: 900,
+      sourceUrl,
+      html: renderActivitiesHtml(resolved.player, activities, params),
     };
   }
 
@@ -287,7 +380,29 @@ async function renderCardFromPublicJson(card, params, config, options) {
       width: CARD_WIDTH,
       height: 720,
       sourceUrl,
-      html: renderRaidOverviewHtml(resolved.player, overview),
+      html: await renderRaidOverviewHtml(resolved.player, overview, config, options),
+    };
+  }
+
+  if (card === "dungeon_overview") {
+    const sourceUrl = buildPublicDataUrl("dungeons", resolved, params, config);
+    const overview = await fetchEnvelope(sourceUrl, config, options);
+    return {
+      width: CARD_WIDTH,
+      height: 760,
+      sourceUrl,
+      html: await renderDungeonOverviewHtml(resolved.player, overview, config, options),
+    };
+  }
+
+  if (card === "heatmap") {
+    const sourceUrl = buildPublicDataUrl("heatmap", resolved, params, config);
+    const heatmap = await fetchEnvelope(sourceUrl, config, options);
+    return {
+      width: CARD_WIDTH,
+      height: 720,
+      sourceUrl,
+      html: renderHeatmapHtml(resolved.player, heatmap),
     };
   }
 
@@ -355,7 +470,7 @@ async function renderHtmlToPng(html, options = {}) {
       deviceScaleFactor: 1,
     });
     options.signal?.throwIfAborted?.();
-    await page.setContent(html, { waitUntil: "load" });
+    await page.setContent(html, { waitUntil: "networkidle" });
     await page.evaluate(() => document.fonts?.ready);
     const card = page.locator("#d2-card");
     return await card.screenshot({ type: "png" });
@@ -399,6 +514,229 @@ function renderSummaryHtml(player, summary) {
       </section>
       ${keyValueGrid(rows)}
       ${membershipBlock(summary?.membershipType, summary?.membershipId)}
+    `,
+  });
+}
+
+function renderCareerHtml(player, career) {
+  const rows = Array.isArray(career?.modes) ? career.modes : [];
+  const all = rows.find((item) => item.mode === "all")?.stats || rows[0]?.stats || {};
+  return cardPage({
+    title: formatPlayerName(player),
+    eyebrow: "DESTINY 2 CAREER",
+    subtitle: `生涯数据 · ${dateOnly(career?.updatedAt)}`,
+    body: `
+      <section class="metrics metrics-4">
+        ${metric("总场次", int(all.activitiesEntered))}
+        ${metric("胜率", percent(all.winRate))}
+        ${metric("KD", fixed(all.kd))}
+        ${metric("游玩时长", duration(all.secondsPlayed))}
+      </section>
+      <section class="table career-table">
+        <div class="table-head career-grid">
+          <div>模式</div><div>场次</div><div>胜率</div><div>KD</div><div>KDA</div><div>时长</div>
+        </div>
+        ${rows
+          .map((item) => {
+            const stats = item?.stats || {};
+            return `
+              <div class="table-row career-grid">
+                <div class="name">${escapeHtml(item?.modeLabel || item?.mode || "-")}</div>
+                <div>${int(stats.activitiesEntered)}</div>
+                <div>${percent(stats.winRate)}</div>
+                <div>${fixed(stats.kd)}</div>
+                <div>${fixed(stats.kda)}</div>
+                <div>${duration(stats.secondsPlayed)}</div>
+              </div>
+            `;
+          })
+          .join("")}
+      </section>
+      ${membershipBlock(career?.membershipType, career?.membershipId)}
+    `,
+  });
+}
+
+function renderPvpHtml(player, pvp) {
+  const stats = pvp?.summary?.stats || {};
+  const trials = pvp?.trials?.stats || {};
+  const recent = Array.isArray(pvp?.recent) ? pvp.recent.slice(0, 6) : [];
+  return cardPage({
+    title: formatPlayerName(player),
+    eyebrow: "DESTINY 2 PVP",
+    subtitle: `熔炉 / 试炼 · ${dateOnly(pvp?.updatedAt)}`,
+    body: `
+      <section class="metrics metrics-4">
+        ${metric("PVP 场次", int(stats.activitiesEntered))}
+        ${metric("PVP KD", fixed(stats.kd))}
+        ${metric("试炼胜率", percent(trials.winRate))}
+        ${metric("试炼 KD", fixed(trials.kd))}
+      </section>
+      <section class="activity-list compact">
+        ${recent
+          .map((item) => {
+            const values = item?.values || {};
+            const completed = Number(values?.completed?.basic?.value || 0) > 0;
+            return `
+              <div class="activity-card-row">
+                <div class="activity-mark">×</div>
+                <div class="activity-main">
+                  <strong>${escapeHtml(item?.activityName || "Unknown Activity")}</strong>
+                  <span>${escapeHtml(item?.modeName || "PVP")} · ${dateOnly(item?.period)}</span>
+                  <div class="tag-line">${completed ? pill("胜/完成", "green") : pill("记录", "muted")} ${pill(`PGCR ${item?.activityId || "-"}`, "muted")}</div>
+                </div>
+                <div class="activity-stat"><small>击杀</small><b>${int(statValue(values, "kills"))}</b></div>
+                <div class="activity-stat"><small>死亡</small><b>${int(statValue(values, "deaths"))}</b></div>
+                <div class="activity-stat"><small>KD</small><b>${fixed(statValue(values, "killsDeathsRatio"))}</b></div>
+                <div class="activity-stat"><small>时长</small><b>${duration(statValue(values, "activityDurationSeconds"))}</b></div>
+              </div>
+            `;
+          })
+          .join("")}
+      </section>
+      <footer class="card-footer">武器榜来自 Bungie UniqueWeapons 公开生涯统计；PVP 分模式武器需要更深的 PGCR 扫描或 OAuth 数据。</footer>
+    `,
+  });
+}
+
+function renderNamecardHtml(player, namecard) {
+  const profile = namecard?.profile || {};
+  const summary = namecard?.summary?.stats || {};
+  const characters = Array.isArray(profile?.characters) ? profile.characters.slice(0, 3) : [];
+  return cardPage({
+    title: formatPlayerName(player),
+    eyebrow: "DESTINY 2 NAMECARD",
+    subtitle: `名片资料 · ${dateOnly(namecard?.updatedAt)}`,
+    body: `
+      <section class="metrics metrics-4">
+        ${metric("最高光等", int(Math.max(0, ...characters.map((item) => Number(item.light || 0)))))}
+        ${metric("总时长", duration((profile?.profile?.minutesPlayedTotal || 0) * 60))}
+        ${metric("总击杀", int(summary.kills))}
+        ${metric("KD", fixed(summary.kd))}
+      </section>
+      <section class="list">
+        ${characters
+          .map(
+            (item) => `
+              <div class="list-row character-row">
+                <div>
+                  <strong>${escapeHtml(item.className || classLabel(item.classType))}</strong>
+                  <span>${escapeHtml(item.characterId || "")}</span>
+                </div>
+                <div class="big-number">${int(item.light)}</div>
+                <div>${duration((item.minutesPlayedTotal || 0) * 60)}</div>
+                <div>${dateOnly(item.dateLastPlayed)}</div>
+              </div>
+            `,
+          )
+          .join("")}
+      </section>
+      ${membershipBlock(namecard?.membershipType, namecard?.membershipId)}
+    `,
+  });
+}
+
+function renderHelpHtml() {
+  const groups = [
+    {
+      title: "玩家战绩",
+      items: [
+        ["/战绩", "总览：场次、胜率、KD、KDA"],
+        ["/生涯", "全部 / PVP / 突袭 / 地牢 / 智谋分模式总览"],
+        ["/pvp", "PVP 与试炼总览、近期战绩"],
+        ["/raid", "突袭总览：每个突袭通关、最快、无暇、Day One"],
+        ["/地牢", "地牢总览：每个地牢通关、最快、时长"],
+        ["/热力图", "玩家活跃日期与小时分布"],
+        ["/活动", "最近活动列表"],
+      ],
+    },
+    {
+      title: "单局与列表",
+      items: [
+        ["/最近", "最近一场活动 PGCR"],
+        ["/战绩 activityId", "指定 PGCR 单局详情"],
+        ["/武器", "玩家生涯武器击杀统计"],
+        ["/资料", "角色、光等、在线时间"],
+        ["/名片", "名片资料：角色 + 生涯核心数据"],
+        ["/绑定", "QQ -> Bungie ID 自助绑定"],
+      ],
+    },
+    {
+      title: "后续补齐",
+      items: [
+        ["/武器查询", "按武器名查 perk / 推荐组合"],
+        ["/perk查询", "按 perk 查数据与武器"],
+        ["/仓库搜索", "需要 OAuth 才能看私有仓库"],
+        ["/催化", "催化完成情况"],
+        ["/称号", "称号/凯旋进度"],
+      ],
+    },
+  ];
+
+  return cardPage({
+    eyebrow: "DESTINY 2 COMMANDS",
+    title: "命运2查询菜单",
+    subtitle: "QQ / BungieName#1234 / membershipType:membershipId 均可作为目标",
+    body: `
+      <section class="command-grid">
+        ${groups
+          .map(
+            (group) => `
+              <div class="command-panel">
+                <h2>${escapeHtml(group.title)}</h2>
+                ${group.items
+                  .map(
+                    ([command, description]) => `
+                      <div class="command-row">
+                        <strong>${escapeHtml(command)}</strong>
+                        <span>${escapeHtml(description)}</span>
+                      </div>
+                    `,
+                  )
+                  .join("")}
+              </div>
+            `,
+          )
+          .join("")}
+      </section>
+      <section class="notice-panel">
+        <strong>当前策略</strong>
+        <span>公开接口直接出图；涉及库存、仓库、装备、催化细节和皮肤收藏的能力，需要后续加 OAuth 授权后才完整。</span>
+      </section>
+    `,
+  });
+}
+
+function renderActivitiesHtml(player, activities, params) {
+  const rows = Array.isArray(activities) ? activities.slice(0, 18) : [];
+  const mode = MODE_LABELS[params?.mode] || "最近";
+  return cardPage({
+    title: formatPlayerName(player),
+    eyebrow: "DESTINY 2 ACTIVITY HISTORY",
+    subtitle: `${mode}活动 · 最近 ${rows.length} 场`,
+    body: `
+      <section class="activity-list">
+        ${rows
+          .map((item) => {
+            const values = item?.values || {};
+            const completed = Number(values?.completed?.basic?.value || 0) > 0;
+            return `
+              <div class="activity-card-row">
+                <div class="activity-mark">${activityModeIcon(item?.modeName || item?.activityName)}</div>
+                <div class="activity-main">
+                  <strong>${escapeHtml(item?.activityName || "Unknown Activity")}</strong>
+                  <span>${escapeHtml(item?.modeName || "未知模式")} · ${dateOnly(item?.period)}</span>
+                  <div class="tag-line">${completed ? pill("已完成", "green") : pill("记录", "muted")} ${pill(`PGCR ${item?.activityId || "-"}`, "muted")}</div>
+                </div>
+                <div class="activity-stat"><small>击杀</small><b>${int(statValue(values, "kills"))}</b></div>
+                <div class="activity-stat"><small>死亡</small><b>${int(statValue(values, "deaths"))}</b></div>
+                <div class="activity-stat"><small>KD</small><b>${fixed(statValue(values, "killsDeathsRatio"))}</b></div>
+                <div class="activity-stat"><small>时长</small><b>${duration(statValue(values, "activityDurationSeconds"))}</b></div>
+              </div>
+            `;
+          })
+          .join("")}
+      </section>
     `,
   });
 }
@@ -498,9 +836,15 @@ function renderActivityHtml(pgcr) {
   });
 }
 
-function renderRaidOverviewHtml(player, overview) {
+async function renderRaidOverviewHtml(player, overview, config, options) {
   const rows = Array.isArray(overview?.raids) ? overview.raids.slice(0, 10) : [];
   const totals = overview?.totals || {};
+  const rowsWithImages = await Promise.all(
+    rows.map(async (item) => ({
+      item,
+      imageDataUrl: item.pgcrImage ? await imageDataUrl(bungieAssetUrl(item.pgcrImage), config, options) : "",
+    })),
+  );
   return cardPage({
     title: formatPlayerName(player),
     eyebrow: "DESTINY 2 RAID OVERVIEW",
@@ -512,20 +856,22 @@ function renderRaidOverviewHtml(player, overview) {
         ${metric("击杀", int(totals.kills))}
         ${metric("游玩时长", duration(totals.secondsPlayed))}
       </section>
-      <section class="table raid-table">
-        <div class="table-head raid-grid">
-          <div>突袭</div><div>通关</div><div>最快</div><div>时长</div><div>无暇</div><div>Day One</div>
-        </div>
-        ${rows
+      <section class="raid-list">
+        ${rowsWithImages
           .map(
-            (item) => `
-              <div class="table-row raid-grid">
-                <div class="name">${escapeHtml(item.name || "Unknown")}</div>
-                <div>${int(item.clears)}</div>
-                <div>${escapeHtml(item.fastestCompletionDisplay || "-")}</div>
-                <div>${duration(item.secondsPlayed)}</div>
-                <div>${statusBadge(item.flawless?.status)}</div>
-                <div>${statusBadge(item.dayOne?.status)}</div>
+            ({ item, imageDataUrl }) => `
+              <div class="raid-card-row">
+                <div class="raid-thumb ${imageDataUrl ? "" : "empty"}">
+                  ${imageDataUrl ? `<img src="${escapeHtml(imageDataUrl)}" />` : `<span>${escapeHtml((item.name || "?").slice(0, 2))}</span>`}
+                </div>
+                <div class="raid-title-block">
+                  <strong>${escapeHtml(item.name || "Unknown")}</strong>
+                  <span>${statusBadge(item.flawless?.status, "无暇")} ${statusBadge(item.dayOne?.status, "Day One")}</span>
+                </div>
+                ${raidMetric("通关", int(item.clears), "blue")}
+                ${raidMetric("最快", item.fastestCompletionDisplay || "-", "green")}
+                ${raidMetric("时长", duration(item.secondsPlayed), "purple")}
+                ${raidMetric("击杀", int(item.kills), "red")}
               </div>
             `,
           )
@@ -534,6 +880,100 @@ function renderRaidOverviewHtml(player, overview) {
       <footer class="card-footer">
         扫描最近 ${int(overview?.scan?.pgcrScanned)} 场 PGCR；无暇 / Day One 未发现表示当前扫描范围内未确认。
       </footer>
+    `,
+  });
+}
+
+async function renderDungeonOverviewHtml(player, overview, config, options) {
+  const rows = Array.isArray(overview?.activities) ? overview.activities.slice(0, 10) : [];
+  const totals = overview?.totals || {};
+  const rowsWithImages = await Promise.all(
+    rows.map(async (item) => ({
+      item,
+      imageDataUrl: item.pgcrImage ? await imageDataUrl(bungieAssetUrl(item.pgcrImage), config, options) : "",
+    })),
+  );
+  return cardPage({
+    title: formatPlayerName(player),
+    eyebrow: "DESTINY 2 DUNGEON OVERVIEW",
+    subtitle: `地牢总览 · ${dateOnly(overview?.updatedAt)}`,
+    body: `
+      <section class="metrics metrics-4">
+        ${metric("地牢数", int(totals.activities))}
+        ${metric("通关", int(totals.clears))}
+        ${metric("击杀", int(totals.kills))}
+        ${metric("游玩时长", duration(totals.secondsPlayed))}
+      </section>
+      <section class="raid-list">
+        ${rowsWithImages
+          .map(
+            ({ item, imageDataUrl }) => `
+              <div class="raid-card-row">
+                <div class="raid-thumb ${imageDataUrl ? "" : "empty"}">
+                  ${imageDataUrl ? `<img src="${escapeHtml(imageDataUrl)}" />` : `<span>${escapeHtml((item.name || "?").slice(0, 2))}</span>`}
+                </div>
+                <div class="raid-title-block">
+                  <strong>${escapeHtml(item.name || "Unknown")}</strong>
+                  <span>${pill(`Hash ${item.activityHashes?.[0] || "-"}`, "muted")} ${item.lastClearedAt ? pill(`最近 ${dateOnly(item.lastClearedAt)}`, "green") : pill("近期未扫到", "muted")}</span>
+                </div>
+                ${raidMetric("通关", int(item.clears), "blue")}
+                ${raidMetric("最快", item.fastestCompletionDisplay || "-", "green")}
+                ${raidMetric("时长", duration(item.secondsPlayed), "purple")}
+                ${raidMetric("击杀", int(item.kills), "red")}
+              </div>
+            `,
+          )
+          .join("")}
+      </section>
+      <footer class="card-footer">通关 / 最快来自 Bungie 全量聚合统计；最近通关来自近 ${int(overview?.scan?.historyPages)} 页公开历史扫描。</footer>
+    `,
+  });
+}
+
+function renderHeatmapHtml(player, heatmap) {
+  const days = Array.isArray(heatmap?.days) ? heatmap.days.slice(-28) : [];
+  const hours = Array.isArray(heatmap?.hours) ? heatmap.hours : [];
+  const maxDay = Math.max(1, ...days.map((item) => Number(item.activities || 0)));
+  const maxHour = Math.max(1, ...hours.map((item) => Number(item.activities || 0)));
+  return cardPage({
+    title: formatPlayerName(player),
+    eyebrow: "DESTINY 2 ACTIVITY HEATMAP",
+    subtitle: `${heatmap?.modeLabel || "全部"}活跃 · ${escapeHtml(heatmap?.timezone || "Asia/Shanghai")}`,
+    body: `
+      <section class="metrics metrics-4">
+        ${metric("扫描活动", int(heatmap?.activitiesScanned))}
+        ${metric("完成", int(days.reduce((sum, item) => sum + Number(item.completed || 0), 0)))}
+        ${metric("击杀", int(days.reduce((sum, item) => sum + Number(item.kills || 0), 0)))}
+        ${metric("时长", duration(days.reduce((sum, item) => sum + Number(item.secondsPlayed || 0), 0)))}
+      </section>
+      <section class="heatmap-panel">
+        <h2>最近日期</h2>
+        <div class="heatmap-days">
+          ${days
+            .map((item) => {
+              const width = Math.max(4, Math.round((Number(item.activities || 0) / maxDay) * 100));
+              return `
+                <div class="heatmap-row">
+                  <span>${escapeHtml(item.key)}</span>
+                  <b><i style="width:${width}%"></i></b>
+                  <strong>${int(item.activities)}</strong>
+                </div>
+              `;
+            })
+            .join("")}
+        </div>
+      </section>
+      <section class="heatmap-panel hours">
+        <h2>小时分布</h2>
+        <div class="hour-bars">
+          ${hours
+            .map((item) => {
+              const height = Math.max(6, Math.round((Number(item.activities || 0) / maxHour) * 86));
+              return `<div class="hour-bar"><b style="height:${height}px"></b><span>${escapeHtml(item.key)}</span></div>`;
+            })
+            .join("")}
+        </div>
+      </section>
     `,
   });
 }
@@ -554,41 +994,40 @@ function cardPage({ eyebrow, title, subtitle, body }) {
     #d2-card {
       width: ${CARD_WIDTH}px;
       min-height: 620px;
-      padding: 42px 48px 36px;
+      padding: 34px 36px 34px;
       background:
-        linear-gradient(135deg, rgba(121, 168, 255, 0.12), transparent 34%),
-        radial-gradient(circle at 88% 12%, rgba(202, 171, 111, 0.16), transparent 24%),
-        linear-gradient(180deg, #07101a 0%, #0a121b 54%, #111a20 100%);
-      border: 1px solid rgba(163, 185, 210, 0.42);
+        radial-gradient(circle at 8% 0%, rgba(85, 114, 255, 0.18), transparent 28%),
+        radial-gradient(circle at 95% 4%, rgba(32, 201, 151, 0.11), transparent 24%),
+        linear-gradient(180deg, #202020 0%, #1c1c1c 100%);
+      border: 1px solid rgba(255, 255, 255, 0.05);
       position: relative;
       overflow: hidden;
     }
     #d2-card::before {
       content: "";
       position: absolute;
-      inset: 12px;
-      border: 1px solid rgba(171, 194, 222, 0.22);
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+      background-size: 42px 42px;
+      mask-image: linear-gradient(180deg, rgba(0,0,0,0.7), transparent 72%);
       pointer-events: none;
     }
     #d2-card::after {
-      content: "";
-      position: absolute;
-      inset: 0;
-      background:
-        linear-gradient(90deg, transparent 0 31px, rgba(151, 180, 210, 0.08) 32px, transparent 33px),
-        linear-gradient(0deg, transparent 0 31px, rgba(151, 180, 210, 0.05) 32px, transparent 33px);
-      opacity: 0.35;
-      pointer-events: none;
+      content: none;
     }
     .content { position: relative; z-index: 1; }
     .header {
-      padding-bottom: 26px;
-      border-bottom: 1px solid rgba(180, 205, 232, 0.32);
-      margin-bottom: 30px;
+      padding: 18px 22px 20px;
+      border: 1px solid rgba(255, 255, 255, 0.04);
+      background: rgba(20, 20, 20, 0.78);
+      border-radius: 8px;
+      margin-bottom: 18px;
     }
     .eyebrow {
-      color: #8db7ff;
-      font-size: 24px;
+      color: #7db3ff;
+      font-size: 22px;
       font-weight: 800;
       letter-spacing: 0;
       text-transform: uppercase;
@@ -596,7 +1035,7 @@ function cardPage({ eyebrow, title, subtitle, body }) {
     }
     h1 {
       margin: 0;
-      font-size: 56px;
+      font-size: 54px;
       line-height: 1.05;
       font-weight: 800;
       letter-spacing: 0;
@@ -607,29 +1046,30 @@ function cardPage({ eyebrow, title, subtitle, body }) {
     }
     .subtitle {
       margin-top: 14px;
-      color: #b9c6d5;
-      font-size: 28px;
+      color: #b7bec8;
+      font-size: 26px;
       line-height: 1.15;
     }
     .subtitle::after {
       content: "";
       display: block;
       width: 198px;
-      border-bottom: 2px solid #c8a76b;
+      border-bottom: 3px solid #21d07a;
       margin-top: 10px;
     }
     .metrics {
       display: grid;
       gap: 14px;
-      margin-bottom: 24px;
+      margin-bottom: 18px;
     }
     .metrics-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
     .metrics-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
     .metric {
-      min-height: 112px;
+      min-height: 106px;
       padding: 18px 20px;
-      border: 1px solid rgba(172, 197, 225, 0.24);
-      background: rgba(5, 12, 20, 0.54);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      background: rgba(16, 16, 16, 0.86);
+      border-radius: 8px;
       position: relative;
     }
     .metric::before {
@@ -639,21 +1079,11 @@ function cardPage({ eyebrow, title, subtitle, body }) {
       left: 16px;
       width: 54px;
       height: 1px;
-      background: #b9c9da;
-    }
-    .metric::after {
-      content: "";
-      position: absolute;
-      bottom: -8px;
-      left: 50%;
-      margin-left: -9px;
-      border-left: 9px solid transparent;
-      border-right: 9px solid transparent;
-      border-top: 8px solid #c8a76b;
+      background: #21d07a;
     }
     .metric-label {
-      color: #aebdcb;
-      font-size: 24px;
+      color: #a8a8a8;
+      font-size: 22px;
       font-weight: 800;
       line-height: 1.1;
       margin-bottom: 8px;
@@ -662,7 +1092,7 @@ function cardPage({ eyebrow, title, subtitle, body }) {
       white-space: nowrap;
     }
     .metric-value {
-      font-size: 44px;
+      font-size: 40px;
       line-height: 1;
       font-weight: 850;
       white-space: nowrap;
@@ -690,8 +1120,10 @@ function cardPage({ eyebrow, title, subtitle, body }) {
     .kv span:last-child { font-weight: 800; }
     .table {
       margin-top: 12px;
-      border: 1px solid rgba(172, 197, 225, 0.24);
-      background: rgba(5, 12, 20, 0.48);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      background: rgba(17, 17, 17, 0.82);
+      border-radius: 8px;
+      overflow: hidden;
     }
     .table-head,
     .table-row {
@@ -702,16 +1134,16 @@ function cardPage({ eyebrow, title, subtitle, body }) {
     }
     .table-head {
       min-height: 50px;
-      color: #aebdcb;
-      font-size: 24px;
+      color: #bababa;
+      font-size: 23px;
       font-weight: 850;
-      border-bottom: 1px solid rgba(172, 197, 225, 0.2);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
     }
     .table-row {
       min-height: 44px;
-      font-size: 24px;
+      font-size: 23px;
       font-weight: 760;
-      border-bottom: 1px solid rgba(172, 197, 225, 0.1);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.055);
     }
     .table-row:last-child { border-bottom: 0; }
     .table-row > div,
@@ -725,9 +1157,9 @@ function cardPage({ eyebrow, title, subtitle, body }) {
       color: #ffffff;
       font-weight: 900;
     }
-    .raid-grid { grid-template-columns: minmax(320px, 1.8fr) 90px 150px 155px 120px 135px; }
     .weapon-grid { grid-template-columns: minmax(420px, 1fr) 145px 145px 180px; }
     .activity-grid { grid-template-columns: minmax(340px, 1fr) 110px 110px 110px 110px 130px; }
+    .career-grid { grid-template-columns: minmax(220px, 1fr) 120px 120px 110px 110px 150px; }
     .list { display: grid; gap: 12px; }
     .list-row {
       display: grid;
@@ -778,9 +1210,282 @@ function cardPage({ eyebrow, title, subtitle, body }) {
     .membership strong { color: #f5f7fb; }
     .card-footer {
       margin-top: 16px;
-      color: #9daab9;
+      color: #a6a6a6;
       font-size: 18px;
       line-height: 1.35;
+    }
+    .command-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .command-panel,
+    .notice-panel {
+      background: rgba(18, 18, 18, 0.88);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 8px;
+      padding: 18px;
+    }
+    .command-panel h2 {
+      margin: 0 0 14px;
+      color: #a8a8a8;
+      font-size: 24px;
+      text-align: center;
+    }
+    .command-row {
+      display: grid;
+      grid-template-columns: 120px 1fr;
+      gap: 16px;
+      min-height: 54px;
+      align-items: center;
+      border-top: 1px solid rgba(255, 255, 255, 0.055);
+      font-size: 20px;
+    }
+    .command-row strong { color: #ffffff; }
+    .command-row span { color: #b9b9b9; }
+    .notice-panel {
+      margin-top: 14px;
+      display: grid;
+      grid-template-columns: 140px 1fr;
+      gap: 18px;
+      align-items: center;
+      font-size: 20px;
+      color: #b9b9b9;
+    }
+    .notice-panel strong { color: #21d07a; font-size: 22px; }
+    .activity-list {
+      display: grid;
+      gap: 8px;
+    }
+    .activity-card-row {
+      display: grid;
+      grid-template-columns: 58px minmax(0, 1fr) 92px 92px 92px 122px;
+      gap: 12px;
+      align-items: center;
+      min-height: 72px;
+      padding: 12px 16px;
+      background: rgba(17, 17, 17, 0.86);
+      border: 1px solid rgba(255, 255, 255, 0.045);
+      border-radius: 8px;
+    }
+    .activity-mark {
+      width: 46px;
+      height: 46px;
+      display: grid;
+      place-items: center;
+      border-radius: 6px;
+      background: linear-gradient(135deg, #2e3238, #151515);
+      color: #ffffff;
+      font-size: 26px;
+      font-weight: 900;
+    }
+    .activity-main strong {
+      display: block;
+      color: #ffffff;
+      font-size: 22px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .activity-main span {
+      display: block;
+      color: #a8a8a8;
+      font-size: 16px;
+      margin-top: 2px;
+    }
+    .tag-line { margin-top: 6px; display: flex; gap: 6px; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      height: 24px;
+      padding: 0 8px;
+      border-radius: 4px;
+      font-size: 14px;
+      font-weight: 800;
+      color: #cccccc;
+      background: rgba(255, 255, 255, 0.08);
+    }
+    .pill.green { color: #21d07a; background: rgba(33, 208, 122, 0.1); }
+    .pill.red { color: #ff675f; background: rgba(255, 103, 95, 0.11); }
+    .pill.muted { color: #a8a8a8; }
+    .activity-stat {
+      text-align: right;
+      min-width: 0;
+    }
+    .activity-stat small {
+      display: block;
+      color: #8d8d8d;
+      font-size: 14px;
+      font-weight: 800;
+    }
+    .activity-stat b {
+      display: block;
+      color: #ffffff;
+      font-size: 22px;
+      line-height: 1.2;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .heatmap-panel {
+      margin-top: 14px;
+      padding: 16px 18px;
+      background: rgba(17, 17, 17, 0.86);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 8px;
+    }
+    .heatmap-panel h2 {
+      margin: 0 0 12px;
+      color: #a8a8a8;
+      font-size: 22px;
+      line-height: 1.2;
+    }
+    .heatmap-days {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px 18px;
+    }
+    .heatmap-row {
+      display: grid;
+      grid-template-columns: 126px minmax(0, 1fr) 48px;
+      gap: 10px;
+      align-items: center;
+      min-width: 0;
+      font-size: 17px;
+      font-weight: 800;
+    }
+    .heatmap-row span {
+      color: #c8d2de;
+      white-space: nowrap;
+    }
+    .heatmap-row b {
+      display: block;
+      height: 10px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+    .heatmap-row i {
+      display: block;
+      height: 100%;
+      background: linear-gradient(90deg, #21d07a, #7db3ff);
+      border-radius: inherit;
+    }
+    .heatmap-row strong {
+      text-align: right;
+      color: #ffffff;
+    }
+    .hour-bars {
+      display: grid;
+      grid-template-columns: repeat(24, minmax(0, 1fr));
+      gap: 7px;
+      align-items: end;
+      min-height: 124px;
+    }
+    .hour-bar {
+      display: grid;
+      justify-items: center;
+      gap: 8px;
+      color: #a8a8a8;
+      font-size: 14px;
+      font-weight: 800;
+    }
+    .hour-bar b {
+      display: block;
+      width: 100%;
+      min-height: 6px;
+      border-radius: 4px 4px 0 0;
+      background: linear-gradient(180deg, #7db3ff, #21d07a);
+    }
+    .raid-list {
+      display: grid;
+      gap: 12px;
+    }
+    .raid-card-row {
+      display: grid;
+      grid-template-columns: 214px minmax(0, 1.2fr) 128px 154px 146px 146px;
+      gap: 18px;
+      align-items: center;
+      min-height: 116px;
+      padding: 14px 18px;
+      background: rgba(17, 17, 17, 0.88);
+      border: 1px solid rgba(255, 255, 255, 0.045);
+      border-radius: 8px;
+    }
+    .raid-thumb {
+      width: 214px;
+      height: 86px;
+      border-radius: 8px;
+      overflow: hidden;
+      background: linear-gradient(135deg, #2f3741, #111111);
+      position: relative;
+    }
+    .raid-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      filter: saturate(1.05) contrast(1.04);
+    }
+    .raid-thumb::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(90deg, rgba(0,0,0,0.38), transparent 68%);
+    }
+    .raid-thumb.empty {
+      display: grid;
+      place-items: center;
+      color: #ffffff;
+      font-size: 30px;
+      font-weight: 900;
+    }
+    .raid-title-block {
+      min-width: 0;
+    }
+    .raid-title-block strong {
+      display: block;
+      color: #ffffff;
+      font-size: 25px;
+      font-weight: 900;
+      line-height: 1.15;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .raid-title-block span {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+      flex-wrap: wrap;
+    }
+    .raid-mini-metric {
+      min-width: 0;
+      text-align: right;
+    }
+    .raid-mini-metric small {
+      color: #a6a6a6;
+      font-size: 15px;
+      font-weight: 800;
+    }
+    .raid-mini-metric .metric-bar {
+      height: 5px;
+      margin: 7px 0 8px auto;
+      width: 96px;
+      border-radius: 999px;
+      background: #6b7cff;
+    }
+    .raid-mini-metric.green .metric-bar { background: #2ec988; }
+    .raid-mini-metric.purple .metric-bar { background: #b45ad8; }
+    .raid-mini-metric.red .metric-bar { background: #ff6675; }
+    .raid-mini-metric b {
+      display: block;
+      color: #ffffff;
+      font-size: 25px;
+      line-height: 1.15;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
   </style>
 </head>
@@ -852,9 +1557,9 @@ function membershipBlock(membershipType, membershipId) {
   return `<div class="membership">Membership <strong>${escapeHtml(`${membershipType}:${membershipId}`)}</strong></div>`;
 }
 
-function statusBadge(status) {
+function statusBadge(status, confirmedLabel = "确认") {
   if (status === "confirmed") {
-    return badge("确认", "ok");
+    return badge(confirmedLabel, "ok");
   }
   if (status === "not_found_in_scanned_pgcr") {
     return badge("未发现", "");
@@ -864,6 +1569,51 @@ function statusBadge(status) {
 
 function badge(label, tone) {
   return `<span class="badge ${tone === "ok" ? "ok" : ""}">${escapeHtml(label)}</span>`;
+}
+
+function raidMetric(label, value, tone) {
+  return `
+    <div class="raid-mini-metric ${tone}">
+      <small>${escapeHtml(label)}</small>
+      <div class="metric-bar"></div>
+      <b>${escapeHtml(String(value))}</b>
+    </div>
+  `;
+}
+
+function bungieAssetUrl(path) {
+  const value = String(path || "");
+  if (/^https?:\/\//iu.test(value)) {
+    return value;
+  }
+  return `https://www.bungie.net${value.startsWith("/") ? "" : "/"}${value}`;
+}
+
+async function imageDataUrl(url, config, options = {}) {
+  if (imageDataUrlCache.has(url)) {
+    return imageDataUrlCache.get(url);
+  }
+  try {
+    const response = await fetchWithTimeout(url, {
+      method: "GET",
+      timeoutMs: Math.min(config.timeoutMs, 12000),
+      signal: options.signal,
+      fetchImpl: options.fetchImpl,
+      headers: { "user-agent": "Mozilla/5.0 OpenClaw-D2Stats" },
+    });
+    if (!response.ok) {
+      imageDataUrlCache.set(url, "");
+      return "";
+    }
+    const contentType = response.headers.get("content-type") || "image/jpeg";
+    const bytes = Buffer.from(await response.arrayBuffer());
+    const dataUrl = `data:${contentType};base64,${bytes.toString("base64")}`;
+    imageDataUrlCache.set(url, dataUrl);
+    return dataUrl;
+  } catch {
+    imageDataUrlCache.set(url, "");
+    return "";
+  }
 }
 
 function playerFromBinding(binding) {
@@ -923,6 +1673,68 @@ function classLabel(classType) {
   if (classType === 1) return "猎人";
   if (classType === 2) return "术士";
   return "角色";
+}
+
+function inferCardFromCommand(value) {
+  const command = String(value || "").trim().toLowerCase();
+  if (!command) {
+    return "";
+  }
+  if (/帮助|菜单|help|command|指令/u.test(command)) {
+    return "help";
+  }
+  if (/生涯|career/u.test(command)) {
+    return "career";
+  }
+  if (/热力图|活跃|heatmap/u.test(command)) {
+    return "heatmap";
+  }
+  if (/地牢|dungeon/u.test(command)) {
+    return "dungeon_overview";
+  }
+  if (/pvp|试炼|trials|熔炉/u.test(command)) {
+    return "pvp";
+  }
+  if (/raid|突袭|无暇|day\s*one|dayone/u.test(command)) {
+    return "raid_overview";
+  }
+  if (/最近|活动|历史|activity|history/u.test(command)) {
+    return "activities";
+  }
+  if (/单局|pgcr|carnage/u.test(command)) {
+    return "activity";
+  }
+  if (/武器|weapon/u.test(command)) {
+    return "weapons";
+  }
+  if (/名片|namecard/u.test(command)) {
+    return "namecard";
+  }
+  if (/资料|角色|profile|光等/u.test(command)) {
+    return "profile";
+  }
+  if (/智谋|gambit|战绩|summary/u.test(command)) {
+    return "summary";
+  }
+  return "";
+}
+
+function activityModeIcon(value) {
+  const text = String(value || "").toLowerCase();
+  if (/raid|突袭/u.test(text)) return "◆";
+  if (/dungeon|地牢/u.test(text)) return "◇";
+  if (/trial|试炼/u.test(text)) return "△";
+  if (/crucible|熔炉|pvp/u.test(text)) return "×";
+  if (/gambit|智谋/u.test(text)) return "◎";
+  return "✦";
+}
+
+function statValue(values, key) {
+  return Number(values?.[key]?.basic?.value || 0);
+}
+
+function pill(label, tone = "muted") {
+  return `<span class="pill ${tone}">${escapeHtml(label)}</span>`;
 }
 
 function normalizeCard(value, fallback) {

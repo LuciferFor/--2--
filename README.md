@@ -50,10 +50,20 @@ ADMIN_SESSION_SECRET=replace-with-a-long-random-session-secret
 - `GET /api/d2/search?bungieName=Name%231234`
 - `GET /api/d2/profile/:membershipType/:membershipId`
 - `GET /api/d2/summary/:membershipType/:membershipId?mode=all|raid|dungeon|trials|pvp|gambit`
+- `GET /api/d2/career/:membershipType/:membershipId`
+- `GET /api/d2/pvp/:membershipType/:membershipId?count=10`
 - `GET /api/d2/raids/:membershipType/:membershipId?historyPages=1&pgcrLimit=20`
+- `GET /api/d2/dungeons/:membershipType/:membershipId?historyPages=1`
 - `GET /api/d2/activities/:membershipType/:membershipId?mode=raid&count=10&page=0`
+- `GET /api/d2/heatmap/:membershipType/:membershipId?mode=all&pages=2&timezone=Asia%2FShanghai`
+- `GET /api/d2/namecard/:membershipType/:membershipId`
 - `GET /api/d2/pgcr/:activityId`
 - `GET /api/d2/weapons/:membershipType/:membershipId`
+- `GET /api/d2/vault/:membershipType/:membershipId/search?q=...`：需要 OAuth，当前返回 `OAUTH_REQUIRED`
+- `GET /api/d2/inventory/:membershipType/:membershipId/weapons`：需要 OAuth，当前返回 `OAUTH_REQUIRED`
+- `GET /api/d2/catalysts/:membershipType/:membershipId`：需要 OAuth，当前返回 `OAUTH_REQUIRED`
+- `GET /api/d2/titles/:membershipType/:membershipId`：需要 OAuth，当前返回 `OAUTH_REQUIRED`
+- `GET /api/d2/skins/:membershipType/:membershipId`：需要 OAuth，当前返回 `OAUTH_REQUIRED`
 - `GET /api/d2/cards/summary.png?bungieName=Name%231234&mode=raid`
 - `GET /api/d2/cards/summary.png?qq=607972716&mode=raid`
 - `GET /api/d2/cards/summary.png?membershipType=3&membershipId=461168...&mode=raid`
@@ -112,6 +122,8 @@ JSON 响应统一为：
 ```
 
 `/api/d2/summary?mode=raid` 是 Bungie raid 模式累计统计；`/api/d2/raids/...` 才是突袭总览，会按每个 raid 返回 clears、最快通关、击杀/死亡/时长、最近通关，以及从扫描到的 PGCR 中确认 flawless/day one。`historyPages` 和 `pgcrLimit` 越大越接近完整历史，但请求更慢。
+
+`/api/d2/dungeons/...` 和 `/api/d2/heatmap/...` 使用公开历史/聚合统计生成机器人友好的业务数据；仓库、私有库存、催化进度、称号/凯旋进度、皮肤拥有情况需要玩家 OAuth 授权，当前先以稳定接口返回 `OAUTH_REQUIRED`，后续接 OAuth 后可在同一路径补全真实数据。
 
 ## 测试
 
