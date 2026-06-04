@@ -15,9 +15,15 @@ Install on the OpenClaw host:
 
 ```bash
 cd /path/to/clients/openclaw-d2stats
-python3 install.py
+python3 install.py --base-url http://YOUR_BACKEND_HOST:3011
 docker restart openclaw-openclaw-gateway-1
 ```
+
+The installer copies:
+
+- the plugin to `~/.openclaw/plugins/d2stats`
+- the skill instructions to `~/.openclaw/plugin-skills/d2stats/SKILL.md`
+- the runtime config into `~/.openclaw/openclaw.json`
 
 The tool accepts QQ numbers, `BungieName#1234`, `membershipType:membershipId`,
 or a bare long membership ID using `defaultMembershipType`.

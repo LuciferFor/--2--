@@ -24,6 +24,18 @@ def copy_plugin(source_dir: Path, install_dir: Path) -> None:
     shutil.copytree(source_dir, install_dir, ignore=ignore)
 
 
+def copy_plugin_skills(source_dir: Path, openclaw_home: Path, skill_id: str = "d2stats") -> Path | None:
+    skills_source = source_dir / "plugin-skills" / skill_id
+    if not skills_source.exists():
+        return None
+    install_dir = openclaw_home / "plugin-skills" / skill_id
+    if install_dir.exists():
+        shutil.rmtree(install_dir)
+    ignore = shutil.ignore_patterns("__pycache__", "*.pyc")
+    shutil.copytree(skills_source, install_dir, ignore=ignore)
+    return install_dir
+
+
 def load_json(path: Path) -> dict:
     if not path.exists():
         return {}
@@ -94,9 +106,12 @@ def main() -> int:
         raise SystemExit(f"source-dir is not a d2stats OpenClaw plugin: {source_dir}")
 
     copy_plugin(source_dir, install_dir)
+    skills_dir = copy_plugin_skills(source_dir, openclaw_home)
     backup = update_openclaw_config(config_path, args)
 
     print(f"installed: {install_dir}")
+    if skills_dir:
+        print(f"skills: {skills_dir}")
     print(f"config: {config_path}")
     if backup:
         print(f"backup: {backup}")
