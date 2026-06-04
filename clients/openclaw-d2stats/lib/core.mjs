@@ -1227,12 +1227,13 @@ function renderHelpHtml() {
       ],
     },
     {
-      title: "后续补齐",
+      title: "授权功能",
       items: [
         ["/武器查询", "按武器名查 perk / 推荐组合"],
         ["/perk查询", "按 perk 查数据与武器"],
-        ["/仓库搜索", "需要 OAuth 才能看私有仓库"],
-        ["/催化", "催化完成情况"],
+        ["/仓库搜索", "OAuth 私有仓库 / 背包查询"],
+        ["/装备", "确认后装备 / 转移 / 锁定物品"],
+        ["/催化", "OAuth 催化完成情况"],
         ["/称号", "称号/凯旋进度"],
       ],
     },
@@ -1266,7 +1267,7 @@ function renderHelpHtml() {
       </section>
       <section class="notice-panel">
         <strong>当前策略</strong>
-        <span>公开接口直接出图；涉及库存、仓库、装备、催化细节和皮肤收藏的能力，需要后续加 OAuth 授权后才完整。</span>
+        <span>公开战绩直接出图；仓库、装备、催化等私有能力会先要求 QQ 绑定并完成 Bungie OAuth 登录。</span>
       </section>
     `,
   });
