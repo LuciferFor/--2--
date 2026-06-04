@@ -73,6 +73,27 @@ describe("d2stats core", () => {
               },
             });
           }
+          if (String(url).includes("/namecard/")) {
+            return jsonResponse({
+              success: true,
+              data: {
+                membershipType: 3,
+                membershipId: "4611686018428939884",
+                profile: {
+                  profile: { dateLastPlayed: "2026-06-03T00:00:00.000Z" },
+                  characters: [
+                    {
+                      className: "Warlock",
+                      light: 2020,
+                      dateLastPlayed: "2026-06-03T00:00:00.000Z",
+                      emblemPath: "/common/destiny2_content/icons/current-icon.jpg",
+                      emblemBackgroundPath: "/common/destiny2_content/icons/current-card.jpg",
+                    },
+                  ],
+                },
+              },
+            });
+          }
           return jsonResponse({
             success: true,
             data: {
@@ -99,6 +120,8 @@ describe("d2stats core", () => {
         renderHtmlToPng: async (html) => {
           assert.match(html, /DESTINY 2 RAID OVERVIEW/);
           assert.match(html, /玻璃拱顶/);
+          assert.match(html, /ID 3:4611686018428939884/);
+          assert.match(html, /current-card\.jpg/);
           return Buffer.from("png-bytes");
         },
       },
@@ -106,6 +129,7 @@ describe("d2stats core", () => {
 
     assert.deepEqual(seenUrls, [
       "http://d2.local/api/d2/bindings/qq/607972716",
+      "http://d2.local/api/d2/namecard/3/4611686018428939884",
       "http://d2.local/api/d2/raids/3/4611686018428939884?historyPages=2&pgcrLimit=50",
     ]);
     assert.equal(result.content[0].type, "image");
@@ -323,7 +347,10 @@ describe("d2stats core", () => {
       },
     );
 
-    assert.deepEqual(calls, ["http://d2.local/api/d2/dungeons/3/4611686018428939884?historyPages=2"]);
+    assert.deepEqual(calls, [
+      "http://d2.local/api/d2/namecard/3/4611686018428939884",
+      "http://d2.local/api/d2/dungeons/3/4611686018428939884?historyPages=2",
+    ]);
     assert.equal(result.content[0].type, "image");
     assert.equal(result.details.card, "dungeon_overview");
   });

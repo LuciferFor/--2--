@@ -310,7 +310,7 @@ async function renderCardFromPublicJson(card, params, config, options) {
     };
   }
 
-  const resolved = await resolveTargetMembership(params.target, config, options);
+  const resolved = await withCardIdentity(await resolveTargetMembership(params.target, config, options), config, options);
 
   if (card === "summary") {
     const sourceUrl = buildPublicDataUrl("summary", resolved, params, config);
@@ -402,7 +402,7 @@ async function renderCardFromPublicJson(card, params, config, options) {
       width: CARD_WIDTH,
       height: 650,
       sourceUrl,
-      html: renderActivityHtml(pgcr),
+      html: renderActivityHtml(pgcr, resolved.player),
     };
   }
 
@@ -478,6 +478,19 @@ async function resolveTargetMembership(targetInput, config, options) {
     membershipId: String(player.membershipId),
     player: playerFromSearch(player),
   };
+}
+
+async function withCardIdentity(resolved, config, options = {}) {
+  try {
+    const sourceUrl = buildPublicDataUrl("namecard", resolved, {}, config);
+    const namecard = await fetchEnvelope(sourceUrl, config, options);
+    return {
+      ...resolved,
+      player: mergePlayerCardIdentity(resolved.player, namecard),
+    };
+  } catch {
+    return resolved;
+  }
 }
 
 async function fetchEnvelope(url, config, options = {}) {
@@ -586,6 +599,7 @@ function renderSummaryHtml(player, summary) {
     ["游玩时长", duration(stats.secondsPlayed)],
   ];
   return cardPage({
+    player,
     title: formatPlayerName(player),
     eyebrow: "DESTINY 2 PUBLIC STATS",
     subtitle: `${summary?.modeLabel || MODE_LABELS[summary?.mode] || "总览"} · ${dateOnly(summary?.updatedAt)}`,
@@ -615,6 +629,7 @@ function renderCareerHtml(player, career) {
   const topModes = rows.filter((item) => item.mode !== "all" && Number(item?.stats?.secondsPlayed || 0) > 0).slice(0, 14);
   const primaryCharacter = characters[0] || {};
   return cardPage({
+    player,
     title: formatPlayerName(player),
     eyebrow: "DESTINY 2 CAREER",
     subtitle: `生涯数据 · ${dateOnly(career?.updatedAt)}`,
@@ -769,6 +784,7 @@ function renderPvpHtml(player, pvp) {
   const modes = Array.isArray(pvp?.modeBreakdown) ? pvp.modeBreakdown.slice(0, 4) : [];
   const maxKd = Math.max(1, ...kdPoints.flatMap((item) => [Number(item.playerKd || 0), Number(item.teamKd || 0), Number(item.opponentKd || 0)]));
   return cardPage({
+    player,
     title: formatPlayerName(player),
     eyebrow: "DESTINY 2 PVP",
     subtitle: `近期 ${int(aggregate.matchesScanned)} 场 PVP · ${dateOnly(pvp?.updatedAt)}`,
@@ -886,6 +902,7 @@ function renderNamecardHtml(player, namecard) {
   const summary = namecard?.summary?.stats || {};
   const characters = Array.isArray(profile?.characters) ? profile.characters.slice(0, 3) : [];
   return cardPage({
+    player,
     title: formatPlayerName(player),
     eyebrow: "DESTINY 2 NAMECARD",
     subtitle: `名片资料 · ${dateOnly(namecard?.updatedAt)}`,
@@ -993,6 +1010,7 @@ function renderActivitiesHtml(player, activities, params) {
   const rows = Array.isArray(activities) ? activities.slice(0, 18) : [];
   const mode = MODE_LABELS[params?.mode] || "最近";
   return cardPage({
+    player,
     title: formatPlayerName(player),
     eyebrow: "DESTINY 2 ACTIVITY HISTORY",
     subtitle: `${mode}活动 · 最近 ${rows.length} 场`,
@@ -1026,6 +1044,7 @@ function renderActivitiesHtml(player, activities, params) {
 function renderProfileHtml(player, profile) {
   const characters = Array.isArray(profile?.characters) ? profile.characters.slice(0, 3) : [];
   return cardPage({
+    player,
     title: formatPlayerName(player),
     eyebrow: "DESTINY 2 PROFILE",
     subtitle: `角色档案 · ${dateOnly(profile?.profile?.dateLastPlayed)}`,
@@ -1061,6 +1080,7 @@ function renderProfileHtml(player, profile) {
 function renderWeaponsHtml(player, weapons) {
   const rows = Array.isArray(weapons?.weapons) ? weapons.weapons.slice(0, 10) : [];
   return cardPage({
+    player,
     title: formatPlayerName(player),
     eyebrow: "DESTINY 2 WEAPONS",
     subtitle: `武器使用 · ${dateOnly(weapons?.updatedAt)}`,
@@ -1087,9 +1107,10 @@ function renderWeaponsHtml(player, weapons) {
   });
 }
 
-function renderActivityHtml(pgcr) {
+function renderActivityHtml(pgcr, player) {
   const players = Array.isArray(pgcr?.players) ? pgcr.players.slice(0, 8) : [];
   return cardPage({
+    player,
     title: pgcr?.activityName || `Activity ${pgcr?.activityId || ""}`,
     eyebrow: "DESTINY 2 ACTIVITY",
     subtitle: `${pgcr?.modeName || "单局详情"} · ${dateOnly(pgcr?.period)}`,
@@ -1131,6 +1152,7 @@ async function renderRaidOverviewHtml(player, overview, config, options) {
     })),
   );
   return cardPage({
+    player,
     title: formatPlayerName(player),
     eyebrow: "DESTINY 2 RAID OVERVIEW",
     subtitle: `突袭总览 · ${dateOnly(overview?.updatedAt)}`,
@@ -1185,6 +1207,7 @@ async function renderDungeonOverviewHtml(player, overview, config, options) {
     })),
   );
   return cardPage({
+    player,
     title: formatPlayerName(player),
     eyebrow: "DESTINY 2 DUNGEON OVERVIEW",
     subtitle: `地牢总览 · ${dateOnly(overview?.updatedAt)}`,
@@ -1227,6 +1250,7 @@ function renderHeatmapHtml(player, heatmap) {
   const maxDay = Math.max(1, ...days.map((item) => Number(item.activities || 0)));
   const maxHour = Math.max(1, ...hours.map((item) => Number(item.activities || 0)));
   return cardPage({
+    player,
     title: formatPlayerName(player),
     eyebrow: "DESTINY 2 ACTIVITY HEATMAP",
     subtitle: `${heatmap?.modeLabel || "全部"}活跃 · ${escapeHtml(heatmap?.timezone || "Asia/Shanghai")}`,
@@ -1269,7 +1293,10 @@ function renderHeatmapHtml(player, heatmap) {
   });
 }
 
-function cardPage({ eyebrow, title, subtitle, body }) {
+function cardPage({ eyebrow, title, subtitle, body, player }) {
+  const headerStyle = playerHeaderStyle(player);
+  const emblem = playerEmblemHtml(player);
+  const identity = playerIdentityHtml(player);
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -1310,11 +1337,48 @@ function cardPage({ eyebrow, title, subtitle, body }) {
     }
     .content { position: relative; z-index: 1; }
     .header {
+      min-height: 144px;
+      display: grid;
+      grid-template-columns: ${player ? "88px minmax(0, 1fr)" : "minmax(0, 1fr)"};
+      gap: 18px;
+      align-items: center;
       padding: 18px 22px 20px;
       border: 1px solid rgba(255, 255, 255, 0.04);
       background: rgba(20, 20, 20, 0.78);
+      background-size: cover;
+      background-position: center;
       border-radius: 8px;
       margin-bottom: 18px;
+      overflow: hidden;
+      position: relative;
+    }
+    .header::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(90deg, rgba(12, 12, 12, 0.92), rgba(12, 12, 12, 0.66) 52%, rgba(12, 12, 12, 0.82));
+      pointer-events: none;
+    }
+    .header > * {
+      position: relative;
+      z-index: 1;
+    }
+    .player-emblem {
+      width: 76px;
+      height: 76px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.08);
+      background-size: cover;
+      background-position: center;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.30);
+    }
+    .player-emblem.empty {
+      display: grid;
+      place-items: center;
+      color: #8fa3bb;
+      font-size: 32px;
+      font-weight: 900;
     }
     .eyebrow {
       color: #7db3ff;
@@ -1331,6 +1395,28 @@ function cardPage({ eyebrow, title, subtitle, body }) {
       font-weight: 800;
       letter-spacing: 0;
       max-width: 940px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .identity-line {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 12px;
+      align-items: center;
+      margin-top: 10px;
+      color: #d8e1ec;
+      font-size: 15px;
+      font-weight: 800;
+    }
+    .identity-line span {
+      display: inline-flex;
+      min-width: 0;
+      max-width: 100%;
+      padding: 5px 8px;
+      border-radius: 4px;
+      background: rgba(0, 0, 0, 0.30);
+      border: 1px solid rgba(255, 255, 255, 0.08);
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -2426,16 +2512,67 @@ function cardPage({ eyebrow, title, subtitle, body }) {
 <body>
   <main id="d2-card">
     <div class="content">
-      <header class="header">
-        <div class="eyebrow">${escapeHtml(eyebrow)}</div>
-        <h1>${escapeHtml(title)}</h1>
-        <div class="subtitle">${escapeHtml(subtitle)}</div>
+      <header class="header" style="${headerStyle}">
+        ${emblem}
+        <div class="header-main">
+          <div class="eyebrow">${escapeHtml(eyebrow)}</div>
+          <h1>${escapeHtml(title)}</h1>
+          <div class="subtitle">${escapeHtml(subtitle)}</div>
+          ${identity}
+        </div>
       </header>
       ${body}
     </div>
   </main>
 </body>
 </html>`;
+}
+
+function playerHeaderStyle(player) {
+  const url = player?.emblemBackgroundPath ? bungieAssetUrl(player.emblemBackgroundPath) : "";
+  if (!url) {
+    return "";
+  }
+  return `background-image:url('${escapeHtml(url)}')`;
+}
+
+function playerEmblemHtml(player) {
+  if (!player) {
+    return "";
+  }
+  const url = player?.emblemPath ? bungieAssetUrl(player.emblemPath) : "";
+  if (!url) {
+    return `<div class="player-emblem empty">${escapeHtml(playerInitial(player))}</div>`;
+  }
+  return `<div class="player-emblem" style="background-image:url('${escapeHtml(url)}')"></div>`;
+}
+
+function playerIdentityHtml(player) {
+  if (!player) {
+    return "";
+  }
+  const membership = playerMembershipId(player);
+  const details = [
+    membership ? `ID ${membership}` : "",
+    player.currentClassName && player.currentLight ? `${player.currentClassName} ${int(player.currentLight)}光` : "",
+    player.lastPlayedAt ? `最后在线 ${dateOnly(player.lastPlayedAt)}` : "",
+  ].filter(Boolean);
+  if (details.length === 0) {
+    return "";
+  }
+  return `<div class="identity-line">${details.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div>`;
+}
+
+function playerMembershipId(player) {
+  if (!player?.membershipType || !player?.membershipId) {
+    return "";
+  }
+  return `${player.membershipType}:${player.membershipId}`;
+}
+
+function playerInitial(player) {
+  const name = formatPlayerName(player);
+  return name.slice(0, 1).toUpperCase() || "G";
 }
 
 function fontFaceCss() {
@@ -2678,6 +2815,32 @@ function playerFromBinding(binding) {
     membershipType: Number(binding.membershipType),
     membershipId: String(binding.membershipId),
   };
+}
+
+function mergePlayerCardIdentity(player, namecard) {
+  const profile = namecard?.profile || {};
+  const character = pickCurrentCharacter(profile?.characters);
+  const summaryMembershipType = namecard?.membershipType ?? profile?.membershipType;
+  const summaryMembershipId = namecard?.membershipId ?? profile?.membershipId;
+  return {
+    ...player,
+    membershipType: Number(player?.membershipType || summaryMembershipType || 0),
+    membershipId: String(player?.membershipId || summaryMembershipId || ""),
+    emblemPath: character?.emblemPath || player?.emblemPath,
+    emblemBackgroundPath: character?.emblemBackgroundPath || player?.emblemBackgroundPath,
+    currentClassName: character ? displayClassName(character) : player?.currentClassName,
+    currentLight: Number(character?.light || player?.currentLight || 0),
+    lastPlayedAt: character?.dateLastPlayed || profile?.profile?.dateLastPlayed || player?.lastPlayedAt,
+  };
+}
+
+function pickCurrentCharacter(characters) {
+  const rows = Array.isArray(characters) ? characters.filter(Boolean) : [];
+  return [...rows].sort((a, b) => {
+    const right = new Date(b?.dateLastPlayed || 0).getTime();
+    const left = new Date(a?.dateLastPlayed || 0).getTime();
+    return (Number.isFinite(right) ? right : 0) - (Number.isFinite(left) ? left : 0);
+  })[0];
 }
 
 function playerFromSearch(player) {
