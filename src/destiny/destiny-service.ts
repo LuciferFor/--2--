@@ -739,7 +739,7 @@ export class DestinyService {
       activityId: pgcr.activityId,
       period: pgcr.period,
       activityName: pgcr.activityName,
-      modeName: pgcr.modeName,
+      modeName: normalizeActivityModeName(pgcr.modeName, pgcr.mode),
       result,
       score: formatPvpScore(pgcr.teams, team),
       kills: own.kills,
@@ -1444,6 +1444,19 @@ function firstDefined<T>(values: Array<T | undefined>): T | undefined {
 
 function fallbackActivityModeName(modeNumber: number): string | undefined {
   return ACTIVITY_MODE_LABELS.get(modeNumber);
+}
+
+function normalizeActivityModeName(modeName: string | undefined, modeNumber: number | undefined): string | undefined {
+  const numericMode = Number.isFinite(modeNumber) ? modeNumber : undefined;
+  const text = modeName?.trim();
+  if (numericMode !== undefined && (!text || /^Mode\s+[0-9]+$/iu.test(text))) {
+    return fallbackActivityModeName(numericMode) ?? text;
+  }
+  const match = /^Mode\s+([0-9]+)$/iu.exec(text ?? "");
+  if (match) {
+    return fallbackActivityModeName(Number(match[1])) ?? text;
+  }
+  return text;
 }
 
 const ACTIVITY_MODE_LABELS = new Map<number, string>([
