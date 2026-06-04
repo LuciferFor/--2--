@@ -30,6 +30,39 @@ const MODE_LABELS = {
   gambit: "智谋",
 };
 
+const ACTIVITY_MODE_LABELS = new Map([
+  [5, "全部 PVP"],
+  [10, "占领"],
+  [12, "冲突"],
+  [19, "铁旗"],
+  [25, "狂欢"],
+  [31, "霸权"],
+  [37, "生存"],
+  [38, "倒计时"],
+  [39, "九之试炼"],
+  [48, "混战"],
+  [59, "决战"],
+  [60, "封锁"],
+  [61, "灼烧"],
+  [65, "突破"],
+  [69, "竞技"],
+  [70, "快速比赛"],
+  [71, "冲突"],
+  [72, "竞技冲突"],
+  [73, "占领"],
+  [74, "竞技占领"],
+  [80, "淘汰"],
+  [81, "动量控制"],
+  [84, "奥西里斯试炼"],
+  [88, "裂隙"],
+  [89, "区域控制"],
+  [90, "铁旗裂隙"],
+  [91, "铁旗区域控制"],
+  [92, "圣物"],
+  [93, "倒计时突袭"],
+  [94, "将死"],
+]);
+
 export function resolveConfig(raw = {}) {
   return {
     enabled: raw.enabled !== false,
@@ -90,7 +123,7 @@ export function buildPublicDataUrl(kind, target, params = {}, config = resolveCo
   }
 
   if (kind === "pvp") {
-    query.set("count", String(clampInteger(params.count, 10, 1, 50)));
+    query.set("count", String(clampInteger(params.count, 50, 1, 50)));
     return `${config.baseUrl}/api/d2/pvp/${target.membershipType}/${target.membershipId}?${query.toString()}`;
   }
 
@@ -306,7 +339,7 @@ async function renderCardFromPublicJson(card, params, config, options) {
     const pvp = await fetchEnvelope(sourceUrl, config, options);
     return {
       width: CARD_WIDTH,
-      height: 760,
+      height: 2050,
       sourceUrl,
       html: renderPvpHtml(resolved.player, pvp),
     };
@@ -560,41 +593,121 @@ function renderCareerHtml(player, career) {
 function renderPvpHtml(player, pvp) {
   const stats = pvp?.summary?.stats || {};
   const trials = pvp?.trials?.stats || {};
-  const recent = Array.isArray(pvp?.recent) ? pvp.recent.slice(0, 6) : [];
+  const aggregate = pvp?.aggregates || {};
+  const kdPoints = Array.isArray(pvp?.kdComparison) ? pvp.kdComparison.slice(0, 20).reverse() : [];
+  const recentWeapons = Array.isArray(pvp?.recentWeapons) ? pvp.recentWeapons.slice(0, 12) : [];
+  const matches = Array.isArray(pvp?.matches) ? pvp.matches.slice(0, 18) : [];
+  const modes = Array.isArray(pvp?.modeBreakdown) ? pvp.modeBreakdown.slice(0, 4) : [];
+  const maxKd = Math.max(1, ...kdPoints.flatMap((item) => [Number(item.playerKd || 0), Number(item.teamKd || 0), Number(item.opponentKd || 0)]));
   return cardPage({
     title: formatPlayerName(player),
     eyebrow: "DESTINY 2 PVP",
-    subtitle: `熔炉 / 试炼 · ${dateOnly(pvp?.updatedAt)}`,
+    subtitle: `近期 ${int(aggregate.matchesScanned)} 场 PVP · ${dateOnly(pvp?.updatedAt)}`,
     body: `
-      <section class="metrics metrics-4">
-        ${metric("PVP 场次", int(stats.activitiesEntered))}
-        ${metric("PVP KD", fixed(stats.kd))}
-        ${metric("试炼胜率", percent(trials.winRate))}
-        ${metric("试炼 KD", fixed(trials.kd))}
+      <section class="pvp-hero-grid">
+        ${pvpHeroMetric("已击败对手", int(stats.kills), "熔炉竞技场 / 职业生涯", "cross")}
+        ${pvpHeroMetric("胜场", int(stats.activitiesWon), `胜率 ${percent(stats.winRate)}`, "crown")}
+        ${pvpHeroMetric("近期 KD", fixed(aggregate.kd), `${int(aggregate.kills)} / ${int(aggregate.deaths)} / ${int(aggregate.assists)}`, "triangle")}
+        ${pvpHeroMetric("试炼 KD", fixed(trials.kd), `试炼胜率 ${percent(trials.winRate)}`, "eye")}
+        ${pvpHeroMetric("近期胜场", int(aggregate.wins), `${int(aggregate.wins)} 胜 / ${int(aggregate.losses)} 负`, "cross")}
+        ${pvpHeroMetric("最佳击杀", int(aggregate.bestKills), `最佳 KD ${fixed(aggregate.bestKd)}`, "spark")}
+        ${pvpHeroMetric("无死场", int(aggregate.flawlessMatches), "近期无死亡且有击杀", "shield")}
+        ${pvpHeroMetric("KDA", fixed(aggregate.kda), "近期 KDA", "moon")}
       </section>
-      <section class="activity-list compact">
-        ${recent
-          .map((item) => {
-            const values = item?.values || {};
-            const completed = Number(values?.completed?.basic?.value || 0) > 0;
-            return `
-              <div class="activity-card-row">
-                <div class="activity-mark">×</div>
-                <div class="activity-main">
-                  <strong>${escapeHtml(item?.activityName || "Unknown Activity")}</strong>
-                  <span>${escapeHtml(item?.modeName || "PVP")} · ${dateOnly(item?.period)}</span>
-                  <div class="tag-line">${completed ? pill("胜/完成", "green") : pill("记录", "muted")} ${pill(`PGCR ${item?.activityId || "-"}`, "muted")}</div>
+
+      <section class="pvp-panel">
+        <h2>近期模式表现</h2>
+        <div class="pvp-mode-grid">
+          ${modes
+            .map(
+              (mode) => {
+                const modeName = displayActivityModeName(mode.modeName);
+                return `
+                <div class="pvp-mode-card">
+                  <strong>${escapeHtml(modeName || "PVP")}</strong>
+                  <span>${int(mode.matches)} 场 · ${int(mode.wins)} 胜</span>
+                  <b>${fixed(mode.kd)}</b>
+                  <small>KD · 胜率 ${percent(mode.winRate)}</small>
                 </div>
-                <div class="activity-stat"><small>击杀</small><b>${int(statValue(values, "kills"))}</b></div>
-                <div class="activity-stat"><small>死亡</small><b>${int(statValue(values, "deaths"))}</b></div>
-                <div class="activity-stat"><small>KD</small><b>${fixed(statValue(values, "killsDeathsRatio"))}</b></div>
-                <div class="activity-stat"><small>时长</small><b>${duration(statValue(values, "activityDurationSeconds"))}</b></div>
+              `;
+              },
+            )
+            .join("")}
+        </div>
+      </section>
+
+      <section class="pvp-panel">
+        <h2>玩家近期 20 场 KD 对比柱形图</h2>
+        <div class="pvp-chart-legend">
+          <span class="blue"></span>玩家 KD <span class="green"></span>队友 KD <span class="red"></span>对手 KD
+        </div>
+        <div class="pvp-kd-chart">
+          ${kdPoints
+            .map(
+              (point) => `
+                <div class="pvp-kd-group">
+                  ${pvpBar(point.playerKd, maxKd, "blue")}
+                  ${pvpBar(point.teamKd, maxKd, "green")}
+                  ${pvpBar(point.opponentKd, maxKd, "red")}
+                  <span>${escapeHtml(shortMapName(point.activityName))}</span>
+                </div>
+              `,
+            )
+            .join("")}
+        </div>
+      </section>
+
+      <section class="pvp-panel">
+        <h2>玩家近期 50 场武器击杀记录</h2>
+        <div class="pvp-weapon-grid">
+          ${recentWeapons
+            .map(
+              (weapon) => `
+                <div class="pvp-weapon-tile">
+                  ${weaponIconHtml(weapon)}
+                  <div>
+                    <strong>${escapeHtml(weapon.name || "Unknown")}</strong>
+                    <span>${int(weapon.kills)} 击杀 · ${int(weapon.matchesUsed)} 场</span>
+                    <small>精准 ${percent(weapon.kills > 0 ? (weapon.precisionKills / weapon.kills) * 100 : 0)}</small>
+                  </div>
+                </div>
+              `,
+            )
+            .join("")}
+        </div>
+      </section>
+
+      <section class="pvp-panel">
+        <h2>最近比赛</h2>
+        <div class="pvp-match-list">
+          ${matches
+          .map((item) => {
+            const modeName = displayActivityModeName(item?.modeName);
+            return `
+              <div class="pvp-match-row">
+                <div class="pvp-match-icon">${pvpModeGlyph(modeName)}</div>
+                <div class="pvp-match-main">
+                  <strong>${escapeHtml(modeName || "PVP")}</strong>
+                  <span>${escapeHtml(item?.activityName || "Unknown")} · ${dateOnly(item?.period)}</span>
+                </div>
+                <div class="pvp-result ${item?.result === "win" ? "win" : item?.result === "loss" ? "loss" : ""}">
+                  ${item?.result === "win" ? "胜利" : item?.result === "loss" ? "失败" : "记录"}
+                  <span>${escapeHtml(item?.score || "")}</span>
+                </div>
+                <div class="pvp-kda"><b>${int(item?.kills)}/${int(item?.deaths)}/${int(item?.assists)}</b><span>KD ${fixed(item?.kd)}</span></div>
+                <div class="pvp-match-weapons">
+                  ${(Array.isArray(item?.weapons) ? item.weapons.slice(0, 4) : [])
+                    .map((weapon) => `<div class="pvp-mini-weapon">${weaponIconHtml(weapon)}<span>${int(weapon.kills)} / ${percent(weapon.precisionRate || 0)}</span></div>`)
+                    .join("")}
+                </div>
               </div>
             `;
           })
           .join("")}
+        </div>
       </section>
-      <footer class="card-footer">武器榜来自 Bungie UniqueWeapons 公开生涯统计；PVP 分模式武器需要更深的 PGCR 扫描或 OAuth 数据。</footer>
+
+      <footer class="card-footer">PVP 详情来自最近 ${int(aggregate.matchesScanned)} 场公开 PGCR；武器命中类百分比使用公开 PGCR 中的精准击杀占比近似。</footer>
     `,
   });
 }
@@ -1064,6 +1177,283 @@ function cardPage({ eyebrow, title, subtitle, body }) {
     }
     .metrics-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
     .metrics-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+    .pvp-hero-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+      margin-bottom: 18px;
+    }
+    .pvp-hero-metric {
+      display: grid;
+      grid-template-columns: 44px minmax(0, 1fr);
+      gap: 12px;
+      min-height: 92px;
+      padding: 16px 18px;
+      background: rgba(18, 18, 18, 0.88);
+      border: 1px solid rgba(255, 255, 255, 0.045);
+      border-radius: 8px;
+      align-items: center;
+    }
+    .pvp-hero-icon {
+      width: 38px;
+      height: 38px;
+      display: grid;
+      place-items: center;
+      color: #dfe7f0;
+      font-size: 28px;
+      line-height: 1;
+    }
+    .pvp-hero-metric b {
+      display: block;
+      color: #ffffff;
+      font-size: 28px;
+      line-height: 1;
+      font-weight: 900;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .pvp-hero-metric strong {
+      display: block;
+      margin-top: 5px;
+      color: #ff5f4c;
+      font-size: 16px;
+      line-height: 1.1;
+      font-weight: 900;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .pvp-hero-metric span {
+      display: block;
+      margin-top: 5px;
+      color: #a8a8a8;
+      font-size: 13px;
+      line-height: 1.2;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .pvp-panel {
+      margin-top: 18px;
+      padding: 18px 20px;
+      background: rgba(18, 18, 18, 0.88);
+      border: 1px solid rgba(255, 255, 255, 0.045);
+      border-radius: 8px;
+    }
+    .pvp-panel h2 {
+      margin: 0 0 14px;
+      color: #c6c6c6;
+      font-size: 22px;
+      line-height: 1.2;
+      text-align: center;
+    }
+    .pvp-mode-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .pvp-mode-card {
+      min-height: 102px;
+      padding: 14px 16px;
+      border-radius: 8px;
+      background: rgba(10, 10, 10, 0.72);
+      border: 1px solid rgba(255, 255, 255, 0.035);
+    }
+    .pvp-mode-card strong,
+    .pvp-mode-card span,
+    .pvp-mode-card small {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .pvp-mode-card strong { font-size: 20px; color: #ffffff; }
+    .pvp-mode-card span { margin-top: 5px; font-size: 15px; color: #a8a8a8; }
+    .pvp-mode-card b { display: block; margin-top: 7px; font-size: 28px; line-height: 1; color: #21d07a; }
+    .pvp-mode-card small { margin-top: 4px; font-size: 13px; color: #a8a8a8; }
+    .pvp-chart-legend {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 10px;
+      color: #c8d2de;
+      font-size: 16px;
+      font-weight: 800;
+      margin-bottom: 10px;
+    }
+    .pvp-chart-legend span {
+      width: 14px;
+      height: 14px;
+      border-radius: 3px;
+      display: inline-block;
+    }
+    .pvp-chart-legend .blue { background: #5667ff; }
+    .pvp-chart-legend .green { background: #21d07a; }
+    .pvp-chart-legend .red { background: #e55b50; }
+    .pvp-kd-chart {
+      height: 150px;
+      display: grid;
+      grid-template-columns: repeat(20, minmax(0, 1fr));
+      gap: 8px;
+      align-items: end;
+      padding: 8px 4px 0;
+    }
+    .pvp-kd-group {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 2px;
+      align-items: end;
+      min-width: 0;
+    }
+    .pvp-kd-group b {
+      display: block;
+      min-height: 4px;
+      border-radius: 3px 3px 0 0;
+    }
+    .pvp-kd-group b.blue { background: #5667ff; }
+    .pvp-kd-group b.green { background: #21d07a; }
+    .pvp-kd-group b.red { background: #e55b50; }
+    .pvp-kd-group span {
+      grid-column: 1 / -1;
+      display: block;
+      margin-top: 7px;
+      color: #a8a8a8;
+      font-size: 11px;
+      text-align: center;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .pvp-weapon-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px 12px;
+    }
+    .pvp-weapon-tile {
+      display: grid;
+      grid-template-columns: 48px minmax(0, 1fr);
+      gap: 10px;
+      align-items: center;
+      min-height: 72px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: rgba(10, 10, 10, 0.72);
+      border: 1px solid rgba(255, 255, 255, 0.035);
+    }
+    .weapon-icon {
+      width: 48px;
+      height: 48px;
+      object-fit: cover;
+      border-radius: 4px;
+      background: rgba(255,255,255,0.08);
+      display: block;
+    }
+    .weapon-icon.empty {
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    .pvp-weapon-tile strong,
+    .pvp-weapon-tile span,
+    .pvp-weapon-tile small {
+      display: block;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .pvp-weapon-tile strong { color: #ffffff; font-size: 17px; line-height: 1.15; }
+    .pvp-weapon-tile span { color: #c8d2de; font-size: 13px; margin-top: 3px; }
+    .pvp-weapon-tile small { color: #21d07a; font-size: 13px; margin-top: 3px; font-weight: 850; }
+    .pvp-match-list {
+      display: grid;
+      gap: 7px;
+    }
+    .pvp-match-row {
+      display: grid;
+      grid-template-columns: 50px minmax(0, 1fr) 84px 104px 430px;
+      gap: 12px;
+      align-items: center;
+      min-height: 74px;
+      padding: 10px 12px;
+      background: rgba(10, 10, 10, 0.72);
+      border: 1px solid rgba(255, 255, 255, 0.03);
+      border-radius: 7px;
+    }
+    .pvp-match-icon {
+      width: 40px;
+      height: 40px;
+      display: grid;
+      place-items: center;
+      color: #e5eaf0;
+      font-size: 26px;
+    }
+    .pvp-match-main,
+    .pvp-kda,
+    .pvp-mini-weapon {
+      min-width: 0;
+    }
+    .pvp-match-main strong {
+      display: block;
+      color: #ffffff;
+      font-size: 19px;
+      line-height: 1.1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .pvp-match-main span,
+    .pvp-kda span,
+    .pvp-result span,
+    .pvp-mini-weapon span {
+      display: block;
+      color: #a8a8a8;
+      font-size: 12px;
+      line-height: 1.2;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .pvp-result {
+      display: grid;
+      align-content: center;
+      justify-items: center;
+      min-height: 40px;
+      border-radius: 4px;
+      color: #c8d2de;
+      background: rgba(255,255,255,0.08);
+      font-size: 15px;
+      font-weight: 900;
+    }
+    .pvp-result.win { color: #ffffff; background: rgba(33, 208, 122, 0.68); }
+    .pvp-result.loss { color: #ffffff; background: rgba(229, 91, 80, 0.76); }
+    .pvp-kda b {
+      display: block;
+      color: #ffffff;
+      font-size: 18px;
+      line-height: 1.1;
+      white-space: nowrap;
+    }
+    .pvp-kda span { color: #21d07a; margin-top: 5px; font-weight: 850; }
+    .pvp-match-weapons {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .pvp-mini-weapon {
+      display: grid;
+      grid-template-columns: 38px minmax(0, 1fr);
+      gap: 6px;
+      align-items: center;
+    }
+    .pvp-mini-weapon .weapon-icon {
+      width: 38px;
+      height: 38px;
+    }
+    .pvp-mini-weapon span {
+      color: #c8d2de;
+      font-size: 11px;
+      font-weight: 800;
+    }
     .metric {
       min-height: 106px;
       padding: 18px 20px;
@@ -1540,6 +1930,77 @@ function metric(label, value) {
       <div class="metric-value">${escapeHtml(String(value))}</div>
     </div>
   `;
+}
+
+function pvpHeroMetric(label, value, note, icon) {
+  return `
+    <div class="pvp-hero-metric">
+      <div class="pvp-hero-icon">${escapeHtml(pvpIconGlyph(icon))}</div>
+      <div>
+        <b>${escapeHtml(String(value))}</b>
+        <strong>${escapeHtml(label)}</strong>
+        <span>${escapeHtml(note)}</span>
+      </div>
+    </div>
+  `;
+}
+
+function pvpBar(value, max, tone) {
+  const height = Math.max(4, Math.round((Number(value || 0) / Math.max(1, max)) * 94));
+  return `<b class="${tone}" style="height:${height}px"></b>`;
+}
+
+function weaponIconHtml(weapon) {
+  const url = weapon?.iconPath ? bungieAssetUrl(weapon.iconPath) : "";
+  if (!url) {
+    return `<span class="weapon-icon empty"></span>`;
+  }
+  return `<img class="weapon-icon" src="${escapeHtml(url)}" />`;
+}
+
+function shortMapName(value) {
+  const text = String(value || "-");
+  return text.length > 5 ? text.slice(0, 5) : text;
+}
+
+function displayActivityModeName(value) {
+  const text = String(value || "").trim();
+  const modeMatch = /^Mode\s+([0-9]+)$/iu.exec(text);
+  if (modeMatch) {
+    return ACTIVITY_MODE_LABELS.get(Number(modeMatch[1])) || text;
+  }
+  if (/^[0-9]+$/u.test(text)) {
+    return ACTIVITY_MODE_LABELS.get(Number(text)) || `Mode ${text}`;
+  }
+  return text;
+}
+
+function pvpModeGlyph(value) {
+  const text = String(value || "").toLowerCase();
+  if (/trial|试炼|osiris/u.test(text)) return "◎";
+  if (/rumble|混战/u.test(text)) return "◇";
+  if (/control|占领/u.test(text)) return "×";
+  if (/competitive|竞技|survival|生存/u.test(text)) return "△";
+  return "×";
+}
+
+function pvpIconGlyph(value) {
+  switch (value) {
+    case "crown":
+      return "♛";
+    case "triangle":
+      return "△";
+    case "eye":
+      return "◎";
+    case "spark":
+      return "✦";
+    case "shield":
+      return "▣";
+    case "moon":
+      return "◑";
+    default:
+      return "×";
+  }
 }
 
 function keyValueGrid(rows) {

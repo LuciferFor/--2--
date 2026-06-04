@@ -81,6 +81,70 @@ const fakeDestinyService = {
       summary: await fakeDestinyService.getSummary(),
       trials: await fakeDestinyService.getSummary(),
       recent: [],
+      aggregates: {
+        matchesScanned: 2,
+        wins: 1,
+        losses: 1,
+        kills: 30,
+        deaths: 10,
+        assists: 8,
+        kd: 3,
+        kda: 3.4,
+        winRate: 50,
+        bestKills: 20,
+        bestKd: 5,
+        flawlessMatches: 0
+      },
+      kdComparison: [
+        {
+          activityId: "123",
+          activityName: "Javelin-4",
+          result: "win",
+          playerKd: 3,
+          teamKd: 1.4,
+          opponentKd: 1.1
+        }
+      ],
+      recentWeapons: [
+        {
+          referenceId: "1",
+          name: "Rose",
+          kills: 12,
+          precisionKills: 6,
+          secondsUsed: 0,
+          matchesUsed: 2
+        }
+      ],
+      modeBreakdown: [
+        {
+          modeName: "Control",
+          matches: 2,
+          wins: 1,
+          losses: 1,
+          kills: 30,
+          deaths: 10,
+          assists: 8,
+          kd: 3,
+          winRate: 50
+        }
+      ],
+      matches: [
+        {
+          activityId: "123",
+          activityName: "Javelin-4",
+          modeName: "Control",
+          result: "win",
+          kills: 20,
+          deaths: 4,
+          assists: 5,
+          kd: 5,
+          kda: 5.63,
+          completed: true,
+          teamKd: 1.4,
+          opponentKd: 1.1,
+          weapons: []
+        }
+      ],
       weapons: [],
       weaponScope: "all-time unique weapon history",
       updatedAt: "2026-06-03T00:00:00.000Z"
@@ -433,7 +497,14 @@ describe("Fastify routes", () => {
     expect(career.statusCode).toBe(200);
     expect(career.json()).toMatchObject({ success: true, data: { modes: [{ mode: "all" }] } });
     expect(pvp.statusCode).toBe(200);
-    expect(pvp.json()).toMatchObject({ success: true, data: { weaponScope: expect.any(String) } });
+    expect(pvp.json()).toMatchObject({
+      success: true,
+      data: {
+        weaponScope: expect.any(String),
+        aggregates: { matchesScanned: 2 },
+        matches: [{ activityName: "Javelin-4" }]
+      }
+    });
     expect(dungeons.statusCode).toBe(200);
     expect(dungeons.json()).toMatchObject({ success: true, data: { totals: { clears: 2 } } });
     expect(heatmap.statusCode).toBe(200);

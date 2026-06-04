@@ -19,7 +19,12 @@ import type {
   PgcrSummary,
   PlayerSearchResult,
   ProfileSummary,
+  PvpAggregateStats,
+  PvpMatchSummary,
+  PvpMatchWeaponSummary,
+  PvpModeBreakdown,
   PvpOverview,
+  PvpRecentWeaponSummary,
   RaidOverview,
   RaidOverviewActivity,
   WeaponUsageSummary,
@@ -28,7 +33,7 @@ import type {
 import type { ManifestService } from "./manifest-service.js";
 import { parsePublicMode, type ModeInfo, type PublicMode } from "./modes.js";
 import { findRaidReleaseWindow } from "./raid-release-windows.js";
-import { aggregatePgcrPlayerValues, statBasicValue, summarizeHistoricalStats } from "./stat-utils.js";
+import { aggregatePgcrPlayerValues, round, statBasicValue, summarizeHistoricalStats } from "./stat-utils.js";
 
 const RAID_MODE_TYPE = 4;
 const RAID_HISTORY_PAGE_SIZE = 250;
@@ -183,6 +188,17 @@ export class DestinyService {
       this.getActivities(membershipType, membershipId, "pvp", count, 0),
       this.getWeapons(membershipType, membershipId)
     ]);
+    const pgcrs = await mapLimit(recent.slice(0, count), 5, async (activity) => {
+      try {
+        return await this.getPgcr(activity.activityId);
+      } catch {
+        return null;
+      }
+    });
+    const matches = pgcrs
+      .filter((pgcr): pgcr is PgcrSummary => pgcr !== null)
+      .map((pgcr) => this.toPvpMatchSummary(pgcr, membershipId))
+      .filter((match): match is PvpMatchSummary => match !== null);
 
     const result: PvpOverview = {
       membershipType,
@@ -190,8 +206,21 @@ export class DestinyService {
       summary,
       trials,
       recent,
+      aggregates: aggregatePvpMatches(matches),
+      kdComparison: matches.slice(0, 20).map((match) => ({
+        activityId: match.activityId,
+        activityName: match.activityName,
+        period: match.period,
+        result: match.result,
+        playerKd: match.kd,
+        teamKd: match.teamKd,
+        opponentKd: match.opponentKd
+      })),
+      recentWeapons: aggregatePvpWeapons(matches).slice(0, 12),
+      modeBreakdown: aggregatePvpModes(matches).slice(0, 4),
+      matches,
       weapons: weapons.weapons.slice(0, 25),
-      weaponScope: "all-time unique weapon history; Bungie public API does not expose mode-scoped weapon totals here",
+      weaponScope: `recent ${matches.length} public PvP PGCRs plus all-time unique weapon fallback`,
       updatedAt: new Date().toISOString()
     };
 
@@ -692,6 +721,39 @@ export class DestinyService {
     };
   }
 
+  private toPvpMatchSummary(pgcr: PgcrSummary, membershipId: string): PvpMatchSummary | null {
+    const ownEntries = pgcr.players.filter((player) => player.membershipId === membershipId);
+    if (ownEntries.length === 0) {
+      return null;
+    }
+
+    const own = combinePgcrPlayers(ownEntries);
+    const team = firstDefined(ownEntries.map((player) => player.team));
+    const standing = firstDefined(ownEntries.map((player) => player.standing));
+    const teamPlayers = team === undefined ? ownEntries : pgcr.players.filter((player) => player.team === team);
+    const opponentPlayers = team === undefined ? pgcr.players.filter((player) => player.membershipId !== membershipId) : pgcr.players.filter((player) => player.team !== team);
+    const result = standing === 0 ? "win" : standing === 1 ? "loss" : "unknown";
+    const weapons = aggregateMatchWeapons(ownEntries.flatMap((entry) => entry.weapons));
+
+    return {
+      activityId: pgcr.activityId,
+      period: pgcr.period,
+      activityName: pgcr.activityName,
+      modeName: pgcr.modeName,
+      result,
+      score: formatPvpScore(pgcr.teams, team),
+      kills: own.kills,
+      deaths: own.deaths,
+      assists: own.assists,
+      kd: own.kd,
+      kda: own.kda,
+      completed: ownEntries.some((entry) => entry.completed),
+      teamKd: kdForPlayers(teamPlayers),
+      opponentKd: kdForPlayers(opponentPlayers),
+      weapons
+    };
+  }
+
   private async toWeaponUsage(weapon: Record<string, unknown>): Promise<WeaponUsageSummary> {
     const referenceId = String(weapon.referenceId ?? weapon.itemHash ?? "0");
     const name = await this.manifest.getDisplayName("DestinyInventoryItemDefinition", referenceId, `Weapon ${referenceId}`);
@@ -713,7 +775,9 @@ export class DestinyService {
     if (!Number.isFinite(modeNumber)) {
       return undefined;
     }
-    return this.manifest.getDisplayName("DestinyActivityModeDefinition", modeNumber, `Mode ${modeNumber}`);
+    const fallback = `Mode ${modeNumber}`;
+    const displayName = await this.manifest.getDisplayName("DestinyActivityModeDefinition", modeNumber, fallback);
+    return displayName === fallback ? fallbackActivityModeName(modeNumber) ?? fallback : displayName;
   }
 
   private fallbackClassName(classType: number): string {
@@ -1210,6 +1274,210 @@ function fallbackPgcrDisplayName(membershipId: string | undefined): string {
   }
   return `ID ${membershipId.slice(-6)}`;
 }
+
+function combinePgcrPlayers(players: PgcrPlayerSummary[]): {
+  kills: number;
+  deaths: number;
+  assists: number;
+  kd: number;
+  kda: number;
+} {
+  const kills = players.reduce((sum, player) => sum + player.kills, 0);
+  const deaths = players.reduce((sum, player) => sum + player.deaths, 0);
+  const assists = players.reduce((sum, player) => sum + player.assists, 0);
+  const deathsForRatio = deaths === 0 ? 1 : deaths;
+  return {
+    kills,
+    deaths,
+    assists,
+    kd: round(kills / deathsForRatio),
+    kda: round((kills + assists / 2) / deathsForRatio)
+  };
+}
+
+function kdForPlayers(players: PgcrPlayerSummary[]): number {
+  const kills = players.reduce((sum, player) => sum + player.kills, 0);
+  const deaths = players.reduce((sum, player) => sum + player.deaths, 0);
+  if (players.length === 0) {
+    return 0;
+  }
+  return round(kills / (deaths === 0 ? 1 : deaths));
+}
+
+function aggregateMatchWeapons(weapons: WeaponUsageSummary[]): PvpMatchWeaponSummary[] {
+  const merged = new Map<string, PvpMatchWeaponSummary>();
+  for (const weapon of weapons) {
+    const existing = merged.get(weapon.referenceId);
+    if (existing) {
+      existing.kills += weapon.kills;
+      existing.precisionKills += weapon.precisionKills;
+      existing.secondsUsed += weapon.secondsUsed;
+    } else {
+      merged.set(weapon.referenceId, {
+        ...weapon,
+        precisionRate: 0
+      });
+    }
+  }
+
+  return [...merged.values()]
+    .map((weapon) => ({
+      ...weapon,
+      precisionRate: weapon.kills > 0 ? round((weapon.precisionKills / weapon.kills) * 100, 1) : 0
+    }))
+    .sort((a, b) => b.kills - a.kills);
+}
+
+function aggregatePvpMatches(matches: PvpMatchSummary[]): PvpAggregateStats {
+  const kills = matches.reduce((sum, match) => sum + match.kills, 0);
+  const deaths = matches.reduce((sum, match) => sum + match.deaths, 0);
+  const assists = matches.reduce((sum, match) => sum + match.assists, 0);
+  const wins = matches.filter((match) => match.result === "win").length;
+  const losses = matches.filter((match) => match.result === "loss").length;
+  const deathsForRatio = deaths === 0 ? 1 : deaths;
+  return {
+    matchesScanned: matches.length,
+    wins,
+    losses,
+    kills,
+    deaths,
+    assists,
+    kd: round(kills / deathsForRatio),
+    kda: round((kills + assists / 2) / deathsForRatio),
+    winRate: matches.length > 0 ? round((wins / matches.length) * 100) : 0,
+    bestKills: Math.max(0, ...matches.map((match) => match.kills)),
+    bestKd: Math.max(0, ...matches.map((match) => match.kd)),
+    flawlessMatches: matches.filter((match) => match.deaths === 0 && match.kills > 0).length
+  };
+}
+
+function aggregatePvpWeapons(matches: PvpMatchSummary[]): PvpRecentWeaponSummary[] {
+  const merged = new Map<string, PvpRecentWeaponSummary>();
+  for (const match of matches) {
+    const usedInMatch = new Set<string>();
+    for (const weapon of match.weapons) {
+      const existing = merged.get(weapon.referenceId);
+      if (existing) {
+        existing.kills += weapon.kills;
+        existing.precisionKills += weapon.precisionKills;
+        existing.secondsUsed += weapon.secondsUsed;
+        if (!usedInMatch.has(weapon.referenceId)) {
+          existing.matchesUsed += 1;
+        }
+      } else {
+        merged.set(weapon.referenceId, {
+          referenceId: weapon.referenceId,
+          name: weapon.name,
+          iconPath: weapon.iconPath,
+          kills: weapon.kills,
+          precisionKills: weapon.precisionKills,
+          secondsUsed: weapon.secondsUsed,
+          matchesUsed: 1
+        });
+      }
+      usedInMatch.add(weapon.referenceId);
+    }
+  }
+  return [...merged.values()].sort((a, b) => b.kills - a.kills || b.matchesUsed - a.matchesUsed);
+}
+
+function aggregatePvpModes(matches: PvpMatchSummary[]): PvpModeBreakdown[] {
+  const groups = new Map<string, PvpModeBreakdown>();
+  for (const match of matches) {
+    const modeName = match.modeName ?? "PVP";
+    const group = groups.get(modeName) ?? {
+      modeName,
+      matches: 0,
+      wins: 0,
+      losses: 0,
+      kills: 0,
+      deaths: 0,
+      assists: 0,
+      kd: 0,
+      winRate: 0
+    };
+    group.matches += 1;
+    group.wins += match.result === "win" ? 1 : 0;
+    group.losses += match.result === "loss" ? 1 : 0;
+    group.kills += match.kills;
+    group.deaths += match.deaths;
+    group.assists += match.assists;
+    groups.set(modeName, group);
+  }
+
+  return [...groups.values()]
+    .map((group) => ({
+      ...group,
+      kd: round(group.kills / (group.deaths === 0 ? 1 : group.deaths)),
+      winRate: group.matches > 0 ? round((group.wins / group.matches) * 100) : 0
+    }))
+    .sort((a, b) => b.matches - a.matches);
+}
+
+function formatPvpScore(teams: unknown[], teamId: number | undefined): string | undefined {
+  if (teamId === undefined || teams.length === 0) {
+    return undefined;
+  }
+  const scores = teams
+    .map((team) => asRecord(team))
+    .map((team) => ({
+      teamId: teamIdFromRecord(team),
+      score: statBasicValue(team, "score")
+    }))
+    .filter((team) => Number.isFinite(team.teamId));
+  const own = scores.find((team) => team.teamId === teamId);
+  const other = scores.find((team) => team.teamId !== teamId);
+  if (!own || !other) {
+    return undefined;
+  }
+  return `${own.score} - ${other.score}`;
+}
+
+function teamIdFromRecord(team: Record<string, unknown>): number {
+  const teamId = numberFrom(team.teamId, Number.NaN);
+  return Number.isFinite(teamId) ? teamId : numberFrom(team.team, Number.NaN);
+}
+
+function firstDefined<T>(values: Array<T | undefined>): T | undefined {
+  return values.find((value) => value !== undefined);
+}
+
+function fallbackActivityModeName(modeNumber: number): string | undefined {
+  return ACTIVITY_MODE_LABELS.get(modeNumber);
+}
+
+const ACTIVITY_MODE_LABELS = new Map<number, string>([
+  [5, "全部 PVP"],
+  [10, "占领"],
+  [12, "冲突"],
+  [19, "铁旗"],
+  [25, "狂欢"],
+  [31, "霸权"],
+  [37, "生存"],
+  [38, "倒计时"],
+  [39, "九之试炼"],
+  [48, "混战"],
+  [59, "决战"],
+  [60, "封锁"],
+  [61, "灼烧"],
+  [65, "突破"],
+  [69, "竞技"],
+  [70, "快速比赛"],
+  [71, "冲突"],
+  [72, "竞技冲突"],
+  [73, "占领"],
+  [74, "竞技占领"],
+  [80, "淘汰"],
+  [81, "动量控制"],
+  [84, "奥西里斯试炼"],
+  [88, "裂隙"],
+  [89, "区域控制"],
+  [90, "铁旗裂隙"],
+  [91, "铁旗区域控制"],
+  [92, "圣物"],
+  [93, "倒计时突袭"],
+  [94, "将死"]
+]);
 
 function uniqueActivity<T extends { activityId: string }>(): (activity: T) => boolean {
   const seen = new Set<string>();

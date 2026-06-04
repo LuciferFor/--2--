@@ -154,7 +154,7 @@ const queryPresets: QueryPreset[] = [
   { label: "账号 Profile", path: "/api/d2/profile/3/4611686018", query: {} },
   { label: "总览战绩", path: "/api/d2/summary/3/4611686018", query: { mode: "all" } },
   { label: "生涯总览", path: "/api/d2/career/3/4611686018", query: {} },
-  { label: "PVP 总览", path: "/api/d2/pvp/3/4611686018", query: { count: "10" } },
+  { label: "PVP 详情", path: "/api/d2/pvp/3/4611686018", query: { count: "50" } },
   { label: "突袭总览", path: "/api/d2/raids/3/4611686018", query: { historyPages: "1", pgcrLimit: "20" } },
   { label: "地牢总览", path: "/api/d2/dungeons/3/4611686018", query: { historyPages: "1" } },
   { label: "最近活动", path: "/api/d2/activities/3/4611686018", query: { mode: "raid", count: "10", page: "0" } },

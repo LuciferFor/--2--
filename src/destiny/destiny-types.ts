@@ -110,9 +110,77 @@ export interface PvpOverview {
   summary: AccountSummary;
   trials: AccountSummary;
   recent: ActivitySummary[];
+  aggregates: PvpAggregateStats;
+  kdComparison: PvpKdComparisonPoint[];
+  recentWeapons: PvpRecentWeaponSummary[];
+  modeBreakdown: PvpModeBreakdown[];
+  matches: PvpMatchSummary[];
   weapons: WeaponUsageSummary[];
   weaponScope: string;
   updatedAt: string;
+}
+
+export interface PvpAggregateStats {
+  matchesScanned: number;
+  wins: number;
+  losses: number;
+  kills: number;
+  deaths: number;
+  assists: number;
+  kd: number;
+  kda: number;
+  winRate: number;
+  bestKills: number;
+  bestKd: number;
+  flawlessMatches: number;
+}
+
+export interface PvpKdComparisonPoint {
+  activityId: string;
+  activityName: string;
+  period?: string;
+  result: "win" | "loss" | "unknown";
+  playerKd: number;
+  teamKd: number;
+  opponentKd: number;
+}
+
+export interface PvpRecentWeaponSummary extends WeaponUsageSummary {
+  matchesUsed: number;
+}
+
+export interface PvpModeBreakdown {
+  modeName: string;
+  matches: number;
+  wins: number;
+  losses: number;
+  kills: number;
+  deaths: number;
+  assists: number;
+  kd: number;
+  winRate: number;
+}
+
+export interface PvpMatchWeaponSummary extends WeaponUsageSummary {
+  precisionRate: number;
+}
+
+export interface PvpMatchSummary {
+  activityId: string;
+  period?: string;
+  activityName: string;
+  modeName?: string;
+  result: "win" | "loss" | "unknown";
+  score?: string;
+  kills: number;
+  deaths: number;
+  assists: number;
+  kd: number;
+  kda: number;
+  completed: boolean;
+  teamKd: number;
+  opponentKd: number;
+  weapons: PvpMatchWeaponSummary[];
 }
 
 export interface ActivityModeOverviewActivity {

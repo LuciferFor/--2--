@@ -88,7 +88,7 @@ export async function registerD2Routes(app: FastifyInstance, deps: D2RouteDeps):
     const started = Date.now();
     const { membershipType, membershipId } = parseMembershipParams(request.params as Params);
     const query = request.query as Query;
-    const count = parseBoundedInteger(query.count, "count", 1, 50, 10);
+    const count = parseBoundedInteger(query.count, "count", 1, 50, 50);
     const data = await deps.destinyService.getPvpOverview(membershipType, membershipId, count);
     await recordQuery(deps.store, request, false);
     return ok(data, { count, tookMs: Date.now() - started });

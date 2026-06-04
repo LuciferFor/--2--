@@ -156,6 +156,73 @@ describe("d2stats core", () => {
     assert.equal(result.details.sourceUrl, "http://d2.local/api/d2/summary/3/4611686018428939884?mode=raid");
   });
 
+  it("renders detailed PvP cards from recent PGCR aggregates", async () => {
+    const result = await queryCard(
+      { target: "3:4611686018428939884", card: "pvp", count: 50 },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async (url) => {
+          assert.equal(String(url), "http://d2.local/api/d2/pvp/3/4611686018428939884?count=50");
+          return jsonResponse({
+            success: true,
+            data: {
+              membershipType: 3,
+              membershipId: "4611686018428939884",
+              summary: {
+                stats: { kills: 12721, activitiesWon: 419, activitiesEntered: 2932, kd: 1.4, winRate: 43.8 },
+              },
+              trials: { stats: { kd: 0, winRate: 0 } },
+              aggregates: {
+                matchesScanned: 50,
+                wins: 30,
+                losses: 20,
+                kills: 500,
+                deaths: 250,
+                assists: 100,
+                kd: 2,
+                kda: 2.2,
+                bestKills: 35,
+                bestKd: 8.75,
+                flawlessMatches: 3,
+              },
+              modeBreakdown: [{ modeName: "Control", matches: 20, wins: 12, kd: 2.1, winRate: 60 }],
+              kdComparison: [{ activityId: "1", activityName: "Javelin-4", playerKd: 2, teamKd: 1.2, opponentKd: 1.1, result: "win" }],
+              recentWeapons: [{ referenceId: "1", name: "Rose", kills: 68, precisionKills: 42, secondsUsed: 0, matchesUsed: 10 }],
+              matches: [
+                {
+                  activityId: "1",
+                  activityName: "Javelin-4",
+                  modeName: "Control",
+                  result: "win",
+                  score: "150 - 120",
+                  kills: 20,
+                  deaths: 4,
+                  assists: 8,
+                  kd: 5,
+                  kda: 6,
+                  teamKd: 1.5,
+                  opponentKd: 1.1,
+                  weapons: [{ referenceId: "1", name: "Rose", kills: 10, precisionKills: 7, precisionRate: 70 }],
+                },
+              ],
+              updatedAt: "2026-06-03T00:00:00.000Z",
+            },
+          });
+        },
+        renderHtmlToPng: async (html) => {
+          assert.match(html, /DESTINY 2 PVP/);
+          assert.match(html, /玩家近期 20 场 KD 对比柱形图/);
+          assert.match(html, /玩家近期 50 场武器击杀记录/);
+          assert.match(html, /Javelin-4/);
+          return Buffer.from("png-bytes");
+        },
+      },
+    );
+
+    assert.equal(result.content[0].type, "image");
+    assert.equal(result.details.card, "pvp");
+  });
+
   it("renders a help menu without target", async () => {
     const result = await queryCard(
       { card: "help" },
