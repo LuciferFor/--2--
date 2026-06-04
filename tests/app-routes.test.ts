@@ -19,6 +19,9 @@ const fakeDestinyService = {
     return {
       membershipType: 3,
       membershipId: "4611686018",
+      bungieName: "Guardian#7",
+      displayName: "Guardian",
+      displayNameCode: 7,
       profile: {
         characterIds: ["2305843009"],
         minutesPlayedTotal: 10
@@ -202,9 +205,49 @@ const fakeDestinyService = {
       mode: "all",
       modeLabel: "全部",
       timezone: "Asia/Shanghai",
+      range: "all",
       activitiesScanned: 1,
       days: [{ key: "2026-06-03", activities: 1, completed: 1, kills: 10, deaths: 1, secondsPlayed: 100 }],
       hours: [{ key: "20", activities: 1, completed: 1, kills: 10, deaths: 1, secondsPlayed: 100 }],
+      calendar: [
+        {
+          year: 2026,
+          totals: { key: "2026", activities: 1, completed: 1, kills: 10, deaths: 1, secondsPlayed: 100 },
+          months: [
+            {
+              key: "2026-06",
+              year: 2026,
+              month: 6,
+              label: "2026年6月",
+              firstWeekday: 0,
+              daysInMonth: 30,
+              totals: { key: "2026-06", activities: 1, completed: 1, kills: 10, deaths: 1, secondsPlayed: 100 },
+              days: [
+                {
+                  key: "2026-06-03",
+                  date: "2026-06-03",
+                  day: 3,
+                  weekday: 2,
+                  week: 0,
+                  intensity: 4,
+                  activities: 1,
+                  completed: 1,
+                  kills: 10,
+                  deaths: 1,
+                  secondsPlayed: 100
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      scan: {
+        range: "all",
+        pagesPerCharacter: 1,
+        maxPagesPerCharacter: 100,
+        truncated: false,
+        note: "test"
+      },
       updatedAt: "2026-06-03T00:00:00.000Z"
     };
   },
@@ -638,7 +681,7 @@ describe("Fastify routes", () => {
     const dungeons = await app.inject({ method: "GET", url: "/api/d2/dungeons/3/4611686018?historyPages=1" });
     const heatmap = await app.inject({
       method: "GET",
-      url: "/api/d2/heatmap/3/4611686018?mode=all&pages=1&timezone=Asia%2FShanghai"
+      url: "/api/d2/heatmap/3/4611686018?mode=all&range=all&timezone=Asia%2FShanghai"
     });
     const namecard = await app.inject({ method: "GET", url: "/api/d2/namecard/3/4611686018" });
 
@@ -656,7 +699,7 @@ describe("Fastify routes", () => {
     expect(dungeons.statusCode).toBe(200);
     expect(dungeons.json()).toMatchObject({ success: true, data: { totals: { clears: 2 } } });
     expect(heatmap.statusCode).toBe(200);
-    expect(heatmap.json()).toMatchObject({ success: true, data: { timezone: "Asia/Shanghai" } });
+    expect(heatmap.json()).toMatchObject({ success: true, data: { timezone: "Asia/Shanghai", range: "all", calendar: [{ year: 2026 }] } });
     expect(namecard.statusCode).toBe(200);
     expect(namecard.json()).toMatchObject({ success: true, data: { membershipId: "4611686018" } });
     await app.close();

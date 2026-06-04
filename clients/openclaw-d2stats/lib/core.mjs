@@ -17,6 +17,7 @@ const CARDS = new Set([
   "activity",
 ]);
 const CARD_WIDTH = 1200;
+const HEATMAP_CARD_WIDTH = 900;
 const CJK_FONT_URL = new URL("../assets/NotoSansSC-VF.ttf", import.meta.url).href;
 let cachedFontFaceCss;
 const imageDataUrlCache = new Map();
@@ -159,7 +160,14 @@ export function buildPublicDataUrl(kind, target, params = {}, config = resolveCo
 
   if (kind === "heatmap") {
     query.set("mode", normalizeMode(params.mode, config.defaultMode));
-    query.set("pages", String(clampInteger(params.pages, 2, 1, 10)));
+    const range = normalizeHeatmapRange(params.range);
+    query.set("range", range);
+    if (range === "recent") {
+      query.set("pages", String(clampInteger(params.pages, 2, 1, 10)));
+    }
+    if (range === "year" && params.year !== undefined) {
+      query.set("year", String(clampInteger(params.year, new Date().getFullYear(), 2017, 2100)));
+    }
     query.set("timezone", String(params.timezone || "Asia/Shanghai"));
     return `${config.baseUrl}/api/d2/heatmap/${target.membershipType}/${target.membershipId}?${query.toString()}`;
   }
@@ -432,8 +440,8 @@ async function renderCardFromPublicJson(card, params, config, options) {
     const sourceUrl = buildPublicDataUrl("heatmap", resolved, params, config);
     const heatmap = await fetchEnvelope(sourceUrl, config, options);
     return {
-      width: CARD_WIDTH,
-      height: 720,
+      width: HEATMAP_CARD_WIDTH,
+      height: estimateHeatmapHeight(heatmap),
       sourceUrl,
       html: renderHeatmapHtml(resolved.player, heatmap),
     };
@@ -1245,55 +1253,177 @@ async function renderDungeonOverviewHtml(player, overview, config, options) {
 }
 
 function renderHeatmapHtml(player, heatmap) {
-  const days = Array.isArray(heatmap?.days) ? heatmap.days.slice(-28) : [];
-  const hours = Array.isArray(heatmap?.hours) ? heatmap.hours : [];
-  const maxDay = Math.max(1, ...days.map((item) => Number(item.activities || 0)));
-  const maxHour = Math.max(1, ...hours.map((item) => Number(item.activities || 0)));
+  const days = Array.isArray(heatmap?.days) ? heatmap.days : [];
+  const calendar = normalizeHeatmapCalendar(heatmap);
+  const totals = sumClientHeatmapBuckets(calendar.map((year) => year.totals));
+  const activeDays = days.filter((item) => Number(item.activities || 0) > 0).length;
+  const yearLabel =
+    heatmap?.range === "year" && heatmap?.year ? `${heatmap.year} 年` : `${calendar[0]?.year || "-"}-${calendar.at(-1)?.year || "-"}`;
   return cardPage({
+    width: HEATMAP_CARD_WIDTH,
     player,
     title: formatPlayerName(player),
     eyebrow: "DESTINY 2 ACTIVITY HEATMAP",
-    subtitle: `${heatmap?.modeLabel || "全部"}活跃 · ${escapeHtml(heatmap?.timezone || "Asia/Shanghai")}`,
+    subtitle: `${heatmap?.modeLabel || "全部"}活跃 · ${yearLabel} · ${escapeHtml(heatmap?.timezone || "Asia/Shanghai")}`,
     body: `
       <section class="metrics metrics-4">
         ${metric("扫描活动", int(heatmap?.activitiesScanned))}
-        ${metric("完成", int(days.reduce((sum, item) => sum + Number(item.completed || 0), 0)))}
-        ${metric("击杀", int(days.reduce((sum, item) => sum + Number(item.kills || 0), 0)))}
-        ${metric("时长", duration(days.reduce((sum, item) => sum + Number(item.secondsPlayed || 0), 0)))}
+        ${metric("活跃天数", int(activeDays))}
+        ${metric("击杀", compactNumber(totals.kills))}
+        ${metric("游玩时长", duration(totals.secondsPlayed))}
       </section>
-      <section class="heatmap-panel">
-        <h2>最近日期</h2>
-        <div class="heatmap-days">
-          ${days
-            .map((item) => {
-              const width = Math.max(4, Math.round((Number(item.activities || 0) / maxDay) * 100));
-              return `
-                <div class="heatmap-row">
-                  <span>${escapeHtml(item.key)}</span>
-                  <b><i style="width:${width}%"></i></b>
-                  <strong>${int(item.activities)}</strong>
-                </div>
-              `;
-            })
-            .join("")}
-        </div>
+      <section class="heatmap-legend">
+        <span>低活跃</span>
+        <i class="heatmap-day i0"></i>
+        <i class="heatmap-day i1"></i>
+        <i class="heatmap-day i2"></i>
+        <i class="heatmap-day i3"></i>
+        <i class="heatmap-day i4"></i>
+        <span>高活跃</span>
+        <b>${escapeHtml(heatmap?.scan?.truncated ? "扫描达到上限，结果可能不完整" : heatmap?.scan?.note || "")}</b>
       </section>
-      <section class="heatmap-panel hours">
-        <h2>小时分布</h2>
-        <div class="hour-bars">
-          ${hours
-            .map((item) => {
-              const height = Math.max(6, Math.round((Number(item.activities || 0) / maxHour) * 86));
-              return `<div class="hour-bar"><b style="height:${height}px"></b><span>${escapeHtml(item.key)}</span></div>`;
-            })
-            .join("")}
-        </div>
+      <section class="heatmap-years">
+        ${calendar.map((year) => renderHeatmapYear(year)).join("") || emptyState("没有可显示的公开活动历史。")}
       </section>
+      <footer class="card-footer">
+        每个格子代表一天；颜色按当天活动数量相对强度计算。扫描 ${int(heatmap?.scan?.pagesPerCharacter)} / ${int(heatmap?.scan?.maxPagesPerCharacter)} 页每角色。
+      </footer>
     `,
   });
 }
 
-function cardPage({ eyebrow, title, subtitle, body, player }) {
+function renderHeatmapYear(year) {
+  return `
+    <section class="heatmap-year-panel">
+      <div class="heatmap-year-title">
+        <h2>${escapeHtml(String(year.year))}</h2>
+        <span>${int(year.totals?.activities)} 场活动 · ${duration(year.totals?.secondsPlayed)} · ${int(year.totals?.kills)} 击杀</span>
+      </div>
+      <div class="heatmap-month-grid">
+        ${year.months.map((month) => renderHeatmapMonth(month)).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderHeatmapMonth(month) {
+  const placeholders = Array.from({ length: Number(month.firstWeekday || 0) }, () => `<i class="heatmap-day spacer"></i>`).join("");
+  return `
+    <div class="heatmap-month">
+      <div class="heatmap-month-title">
+        <strong>${escapeHtml(month.label || `${month.year}年${month.month}月`)}</strong>
+        <span>${int(month.totals?.activities)} 场 · ${duration(month.totals?.secondsPlayed)}</span>
+      </div>
+      <div class="heatmap-weekdays"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span></div>
+      <div class="heatmap-calendar-grid">
+        ${placeholders}
+        ${month.days
+          .map(
+            (day) =>
+              `<i class="heatmap-day i${clampInteger(day.intensity, 0, 0, 4)}" title="${escapeHtml(day.date || day.key)} · ${int(day.activities)} 场"></i>`,
+          )
+          .join("")}
+      </div>
+    </div>
+  `;
+}
+
+function normalizeHeatmapCalendar(heatmap) {
+  if (Array.isArray(heatmap?.calendar) && heatmap.calendar.length > 0) {
+    return heatmap.calendar;
+  }
+  const days = Array.isArray(heatmap?.days) ? heatmap.days : [];
+  const buckets = new Map(days.map((day) => [day.key, day]));
+  const years = [...new Set(days.map((day) => Number(String(day.key || "").slice(0, 4))).filter(Number.isFinite))].sort((a, b) => a - b);
+  const maxActivities = Math.max(1, ...days.map((day) => Number(day.activities || 0)));
+  return years.map((year) => {
+    const months = [...new Set(days
+      .filter((day) => Number(String(day.key || "").slice(0, 4)) === year)
+      .map((day) => Number(String(day.key || "").slice(5, 7)))
+      .filter(Number.isFinite))]
+      .sort((a, b) => a - b)
+      .map((month) => buildClientHeatmapMonth(year, month, buckets, maxActivities));
+    return {
+      year,
+      totals: sumClientHeatmapBuckets(months.map((month) => month.totals)),
+      months,
+    };
+  });
+}
+
+function buildClientHeatmapMonth(year, month, buckets, maxActivities) {
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const firstWeekday = clientMondayWeekday(year, month, 1);
+  const days = Array.from({ length: daysInMonth }, (_, index) => {
+    const day = index + 1;
+    const date = `${year}-${pad2(month)}-${pad2(day)}`;
+    const bucket = buckets.get(date) || emptyClientHeatmapBucket(date);
+    return {
+      ...bucket,
+      date,
+      day,
+      weekday: clientMondayWeekday(year, month, day),
+      week: Math.floor((firstWeekday + index) / 7),
+      intensity: clientHeatmapIntensity(Number(bucket.activities || 0), maxActivities),
+    };
+  });
+  return {
+    key: `${year}-${pad2(month)}`,
+    year,
+    month,
+    label: `${year}年${month}月`,
+    firstWeekday,
+    daysInMonth,
+    totals: sumClientHeatmapBuckets(days),
+    days,
+  };
+}
+
+function estimateHeatmapHeight(heatmap) {
+  const calendar = normalizeHeatmapCalendar(heatmap);
+  const yearPanels = calendar.reduce((height, year) => height + 78 + Math.ceil(Math.max(1, year.months.length) / 4) * 214, 0);
+  return Math.max(720, 300 + yearPanels);
+}
+
+function sumClientHeatmapBuckets(buckets) {
+  return buckets.reduce(
+    (total, bucket = {}) => ({
+      activities: total.activities + Number(bucket.activities || 0),
+      completed: total.completed + Number(bucket.completed || 0),
+      kills: total.kills + Number(bucket.kills || 0),
+      deaths: total.deaths + Number(bucket.deaths || 0),
+      secondsPlayed: total.secondsPlayed + Number(bucket.secondsPlayed || 0),
+    }),
+    emptyClientHeatmapBucket("total"),
+  );
+}
+
+function emptyClientHeatmapBucket(key) {
+  return { key, activities: 0, completed: 0, kills: 0, deaths: 0, secondsPlayed: 0 };
+}
+
+function clientHeatmapIntensity(activities, maxActivities) {
+  if (activities <= 0) return 0;
+  const ratio = activities / Math.max(1, maxActivities);
+  if (ratio >= 0.8) return 4;
+  if (ratio >= 0.45) return 3;
+  if (ratio >= 0.2) return 2;
+  return 1;
+}
+
+function clientMondayWeekday(year, month, day) {
+  return (new Date(Date.UTC(year, month - 1, day)).getUTCDay() + 6) % 7;
+}
+
+function pad2(value) {
+  return String(value).padStart(2, "0");
+}
+
+function emptyState(message) {
+  return `<div class="empty-state">${escapeHtml(message)}</div>`;
+}
+
+function cardPage({ eyebrow, title, subtitle, body, player, width = CARD_WIDTH }) {
   const headerStyle = playerHeaderStyle(player);
   const emblem = playerEmblemHtml(player);
   const identity = playerIdentityHtml(player);
@@ -1310,7 +1440,7 @@ function cardPage({ eyebrow, title, subtitle, body, player }) {
       color: #f5f7fb;
     }
     #d2-card {
-      width: ${CARD_WIDTH}px;
+      width: ${width}px;
       min-height: 620px;
       padding: 34px 36px 34px;
       background:
@@ -2204,75 +2334,136 @@ function cardPage({ eyebrow, title, subtitle, body, player }) {
       overflow: hidden;
       text-overflow: ellipsis;
     }
-    .heatmap-panel {
-      margin-top: 14px;
-      padding: 16px 18px;
+    .heatmap-legend {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0 0 16px;
+      padding: 12px 16px;
       background: rgba(17, 17, 17, 0.86);
       border: 1px solid rgba(255, 255, 255, 0.05);
       border-radius: 8px;
-    }
-    .heatmap-panel h2 {
-      margin: 0 0 12px;
       color: #a8a8a8;
-      font-size: 22px;
-      line-height: 1.2;
-    }
-    .heatmap-days {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 8px 18px;
-    }
-    .heatmap-row {
-      display: grid;
-      grid-template-columns: 126px minmax(0, 1fr) 48px;
-      gap: 10px;
-      align-items: center;
-      min-width: 0;
-      font-size: 17px;
+      font-size: 16px;
       font-weight: 800;
     }
-    .heatmap-row span {
-      color: #c8d2de;
+    .heatmap-legend b {
+      margin-left: auto;
+      max-width: 540px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: #d7dde6;
+      font-weight: 800;
+    }
+    .heatmap-years {
+      display: grid;
+      gap: 18px;
+    }
+    .heatmap-year-panel {
+      padding: 20px 22px 22px;
+      background: rgba(17, 17, 17, 0.88);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 8px;
+    }
+    .heatmap-year-title {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+    .heatmap-year-title h2 {
+      margin: 0;
+      color: #ffffff;
+      font-size: 26px;
+      line-height: 1.1;
+      font-weight: 950;
+    }
+    .heatmap-year-title span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: #aeb7c2;
+      font-size: 16px;
+      font-weight: 850;
+    }
+    .heatmap-month-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 18px;
+    }
+    .heatmap-month {
+      min-height: 194px;
+      padding: 14px 14px 16px;
+      background: rgba(10, 10, 10, 0.78);
+      border: 1px solid rgba(255, 255, 255, 0.035);
+      border-radius: 8px;
+    }
+    .heatmap-month-title {
+      display: grid;
+      gap: 4px;
+      margin-bottom: 10px;
+      text-align: center;
+    }
+    .heatmap-month-title strong,
+    .heatmap-month-title span {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
       white-space: nowrap;
     }
-    .heatmap-row b {
-      display: block;
-      height: 10px;
-      background: rgba(255, 255, 255, 0.08);
-      border-radius: 999px;
-      overflow: hidden;
-    }
-    .heatmap-row i {
-      display: block;
-      height: 100%;
-      background: linear-gradient(90deg, #21d07a, #7db3ff);
-      border-radius: inherit;
-    }
-    .heatmap-row strong {
-      text-align: right;
+    .heatmap-month-title strong {
       color: #ffffff;
+      font-size: 18px;
+      font-weight: 950;
     }
-    .hour-bars {
-      display: grid;
-      grid-template-columns: repeat(24, minmax(0, 1fr));
-      gap: 7px;
-      align-items: end;
-      min-height: 124px;
-    }
-    .hour-bar {
-      display: grid;
-      justify-items: center;
-      gap: 8px;
-      color: #a8a8a8;
-      font-size: 14px;
+    .heatmap-month-title span {
+      color: #8d98a6;
+      font-size: 12px;
       font-weight: 800;
     }
-    .hour-bar b {
+    .heatmap-weekdays,
+    .heatmap-calendar-grid {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 5px;
+    }
+    .heatmap-weekdays {
+      margin-bottom: 6px;
+      color: #777f89;
+      font-size: 11px;
+      font-weight: 900;
+      text-align: center;
+    }
+    .heatmap-day {
       display: block;
-      width: 100%;
-      min-height: 6px;
-      border-radius: 4px 4px 0 0;
-      background: linear-gradient(180deg, #7db3ff, #21d07a);
+      aspect-ratio: 1 / 1;
+      min-width: 0;
+      border-radius: 3px;
+      background: #2a2a2a;
+      border: 1px solid rgba(255, 255, 255, 0.025);
+    }
+    .heatmap-day.spacer {
+      background: transparent;
+      border-color: transparent;
+    }
+    .heatmap-day.i0 { background: #2b2b2b; }
+    .heatmap-day.i1 { background: #3767d6; }
+    .heatmap-day.i2 { background: #2fcb82; }
+    .heatmap-day.i3 { background: #ff8a3d; }
+    .heatmap-day.i4 { background: #ffd0a4; box-shadow: 0 0 12px rgba(255, 138, 61, 0.42); }
+    .empty-state {
+      min-height: 180px;
+      display: grid;
+      place-items: center;
+      color: #aeb7c2;
+      font-size: 22px;
+      font-weight: 900;
+      background: rgba(17, 17, 17, 0.88);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 8px;
     }
     .raid-rank-row {
       display: grid;
@@ -2822,10 +3013,22 @@ function mergePlayerCardIdentity(player, namecard) {
   const character = pickCurrentCharacter(profile?.characters);
   const summaryMembershipType = namecard?.membershipType ?? profile?.membershipType;
   const summaryMembershipId = namecard?.membershipId ?? profile?.membershipId;
+  const parsed = parseBoundBungieName(profile?.bungieName || namecard?.bungieName);
+  const displayName = profile?.displayName || namecard?.displayName || parsed.displayName || player?.displayName;
+  const displayNameCode = Number(profile?.displayNameCode ?? namecard?.displayNameCode ?? parsed.displayNameCode ?? player?.displayNameCode ?? 0);
+  const bungieName =
+    profile?.bungieName ||
+    namecard?.bungieName ||
+    (displayName && displayNameCode > 0 ? `${displayName}#${displayNameCode}` : displayName) ||
+    player?.bungieName;
   return {
     ...player,
+    bungieName,
+    displayName,
+    displayNameCode,
     membershipType: Number(player?.membershipType || summaryMembershipType || 0),
     membershipId: String(player?.membershipId || summaryMembershipId || ""),
+    iconPath: profile?.iconPath || namecard?.iconPath || player?.iconPath,
     emblemPath: character?.emblemPath || player?.emblemPath,
     emblemBackgroundPath: character?.emblemBackgroundPath || player?.emblemBackgroundPath,
     currentClassName: character ? displayClassName(character) : player?.currentClassName,
@@ -2977,6 +3180,14 @@ function normalizeMode(value, fallback) {
     return mode;
   }
   throw new D2StatsInputError("不支持的查询模式。");
+}
+
+function normalizeHeatmapRange(value) {
+  const range = String(value || "all").trim();
+  if (range === "all" || range === "year" || range === "recent") {
+    return range;
+  }
+  throw new D2StatsInputError("热力图 range 只支持 all、year、recent。");
 }
 
 async function fetchWithTimeout(url, options = {}) {

@@ -199,9 +199,13 @@ export async function registerD2Routes(app: FastifyInstance, deps: D2RouteDeps):
     const started = Date.now();
     const { membershipType, membershipId } = parseMembershipParams(request.params as Params);
     const query = request.query as Query;
+    const timezone = parseTimezone(query.timezone);
+    const range = parseHeatmapRange(query.range);
     const data = await deps.destinyService.getHeatmap(membershipType, membershipId, query.mode, {
       pages: parseBoundedInteger(query.pages, "pages", 1, 10, 2),
-      timezone: parseTimezone(query.timezone)
+      timezone,
+      range,
+      year: range === "year" ? parseHeatmapYear(query.year, timezone) : undefined
     });
     await recordQuery(deps.store, request, false);
     return ok(data, { tookMs: Date.now() - started });
@@ -358,10 +362,11 @@ async function resolveCardTarget(query: Query, deps: D2RouteDeps): Promise<CardT
   if (query.membershipType !== undefined || query.membershipId !== undefined) {
     const membershipType = parseMembershipType(query.membershipType);
     const membershipId = parseId(query.membershipId, "membershipId");
+    const profile = await deps.destinyService.getProfile(membershipType, membershipId);
     return {
       membershipType,
       membershipId,
-      player: fallbackPlayer(membershipType, membershipId),
+      player: playerFromProfile(profile) ?? fallbackPlayer(membershipType, membershipId),
       cacheKey: `membership:${membershipType}:${membershipId}`
     };
   }
@@ -396,6 +401,30 @@ function fallbackPlayer(membershipType: number, membershipId: string): PlayerSea
     displayNameCode: 0,
     membershipType,
     membershipId
+  };
+}
+
+function playerFromProfile(profile: {
+  membershipType: number;
+  membershipId: string;
+  bungieName?: string;
+  displayName?: string;
+  displayNameCode?: number;
+  iconPath?: string;
+}): PlayerSearchResult | null {
+  const parsed = parseBoundBungieName(profile.bungieName);
+  const displayName = profile.displayName ?? parsed.displayName;
+  if (!displayName) {
+    return null;
+  }
+  const displayNameCode = profile.displayNameCode ?? parsed.displayNameCode ?? 0;
+  return {
+    bungieName: profile.bungieName ?? (displayNameCode > 0 ? `${displayName}#${displayNameCode}` : displayName),
+    displayName,
+    displayNameCode,
+    membershipType: profile.membershipType,
+    membershipId: profile.membershipId,
+    iconPath: profile.iconPath
   };
 }
 
@@ -458,6 +487,30 @@ function parseTimezone(value: unknown): string {
   } catch {
     throw new BadRequestError("Invalid timezone");
   }
+}
+
+function parseHeatmapRange(value: unknown): "all" | "year" | "recent" {
+  const range = typeof value === "string" && value.trim().length > 0 ? value.trim() : "all";
+  if (range === "all" || range === "year" || range === "recent") {
+    return range;
+  }
+  throw new BadRequestError("range must be one of all, year, recent");
+}
+
+function parseHeatmapYear(value: unknown, timezone: string): number {
+  if (value === undefined || value === null || value === "") {
+    return Number(
+      new Intl.DateTimeFormat("en-US", {
+        timeZone: timezone,
+        year: "numeric"
+      }).format(new Date())
+    );
+  }
+  const year = Number(value);
+  if (!Number.isInteger(year) || year < 2017 || year > 2100) {
+    throw new BadRequestError("year must be an integer between 2017 and 2100");
+  }
+  return year;
 }
 
 function oauthRequired(feature: string): (request: FastifyRequest) => Promise<never> {

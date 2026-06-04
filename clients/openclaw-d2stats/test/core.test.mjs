@@ -49,7 +49,7 @@ describe("d2stats core", () => {
       { mode: "raid", pages: 4, timezone: "Asia/Shanghai" },
       resolveConfig({ baseUrl: "http://d2.local" }),
     );
-    assert.equal(heatmap, "http://d2.local/api/d2/heatmap/3/4611686018428939884?mode=raid&pages=4&timezone=Asia%2FShanghai");
+    assert.equal(heatmap, "http://d2.local/api/d2/heatmap/3/4611686018428939884?mode=raid&range=all&timezone=Asia%2FShanghai");
   });
 
   it("returns an image result from OpenClaw-rendered raid HTML", async () => {
@@ -356,15 +356,37 @@ describe("d2stats core", () => {
   });
 
   it("renders heatmap cards from public JSON", async () => {
+    const calls = [];
     const result = await queryCard(
       { target: "3:4611686018428939884", command: "/热力图", mode: "all", pages: 2 },
       { baseUrl: "http://d2.local" },
       {
         fetchImpl: async (url) => {
-          assert.equal(
-            String(url),
-            "http://d2.local/api/d2/heatmap/3/4611686018428939884?mode=all&pages=2&timezone=Asia%2FShanghai",
-          );
+          calls.push(String(url));
+          if (String(url).includes("/namecard/")) {
+            return jsonResponse({
+              success: true,
+              data: {
+                membershipType: 3,
+                membershipId: "4611686018428939884",
+                bungieName: "Lucifer#8571",
+                displayName: "Lucifer",
+                displayNameCode: 8571,
+                profile: {
+                  characters: [
+                    {
+                      className: "Warlock",
+                      light: 2020,
+                      dateLastPlayed: "2026-06-03T00:00:00.000Z",
+                      emblemPath: "/common/destiny2_content/icons/current-icon.jpg",
+                      emblemBackgroundPath: "/common/destiny2_content/icons/current-card.jpg",
+                    },
+                  ],
+                },
+              },
+            });
+          }
+          assert.equal(String(url), "http://d2.local/api/d2/heatmap/3/4611686018428939884?mode=all&range=all&timezone=Asia%2FShanghai");
           return jsonResponse({
             success: true,
             data: {
@@ -373,24 +395,53 @@ describe("d2stats core", () => {
               mode: "all",
               modeLabel: "全部",
               timezone: "Asia/Shanghai",
+              range: "all",
               activitiesScanned: 2,
               days: [
                 { key: "2026-06-02", activities: 1, completed: 1, kills: 10, deaths: 1, secondsPlayed: 100 },
                 { key: "2026-06-03", activities: 1, completed: 1, kills: 20, deaths: 2, secondsPlayed: 200 },
               ],
               hours: [{ key: "20", activities: 2, completed: 2, kills: 30, deaths: 3, secondsPlayed: 300 }],
+              calendar: [
+                {
+                  year: 2026,
+                  totals: { key: "2026", activities: 2, completed: 2, kills: 30, deaths: 3, secondsPlayed: 300 },
+                  months: [
+                    {
+                      key: "2026-06",
+                      year: 2026,
+                      month: 6,
+                      label: "2026年6月",
+                      firstWeekday: 0,
+                      daysInMonth: 30,
+                      totals: { key: "2026-06", activities: 2, completed: 2, kills: 30, deaths: 3, secondsPlayed: 300 },
+                      days: [
+                        { key: "2026-06-02", date: "2026-06-02", day: 2, weekday: 1, week: 0, intensity: 4, activities: 1, completed: 1, kills: 10, deaths: 1, secondsPlayed: 100 },
+                        { key: "2026-06-03", date: "2026-06-03", day: 3, weekday: 2, week: 0, intensity: 4, activities: 1, completed: 1, kills: 20, deaths: 2, secondsPlayed: 200 },
+                      ],
+                    },
+                  ],
+                },
+              ],
+              scan: { range: "all", pagesPerCharacter: 2, maxPagesPerCharacter: 100, truncated: false, note: "已扫描到公开活动历史空页" },
               updatedAt: "2026-06-03T00:00:00.000Z",
             },
           });
         },
         renderHtmlToPng: async (html) => {
           assert.match(html, /DESTINY 2 ACTIVITY HEATMAP/);
-          assert.match(html, /2026-06-03/);
+          assert.match(html, /Lucifer#8571/);
+          assert.match(html, /2026年6月/);
+          assert.match(html, /ID 3:4611686018428939884/);
           return Buffer.from("png-bytes");
         },
       },
     );
 
+    assert.deepEqual(calls, [
+      "http://d2.local/api/d2/namecard/3/4611686018428939884",
+      "http://d2.local/api/d2/heatmap/3/4611686018428939884?mode=all&range=all&timezone=Asia%2FShanghai",
+    ]);
     assert.equal(result.content[0].type, "image");
     assert.equal(result.details.card, "heatmap");
   });

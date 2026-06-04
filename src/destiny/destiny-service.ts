@@ -14,6 +14,8 @@ import type {
   CareerSummary,
   CharacterSummary,
   HeatmapBucket,
+  HeatmapCalendarYear,
+  HeatmapRange,
   HeatmapSummary,
   NamecardSummary,
   PgcrPlayerSummary,
@@ -44,6 +46,7 @@ import {
 
 const RAID_MODE_TYPE = 4;
 const RAID_HISTORY_PAGE_SIZE = 250;
+const HEATMAP_FULL_HISTORY_MAX_PAGES = 100;
 
 export class DestinyService {
   constructor(
@@ -107,8 +110,11 @@ export class DestinyService {
 
     const profileResponse = asRecord(response);
     const profileData = asRecord(asRecord(profileResponse.profile).data);
+    const userInfo = asRecord(profileData.userInfo);
     const charactersData = asRecord(asRecord(profileResponse.characters).data);
     const characterIds = asArray(profileData.characterIds).map(String);
+    const displayName = optionalString(userInfo.bungieGlobalDisplayName) || optionalString(userInfo.displayName);
+    const displayNameCode = optionalNumber(userInfo.bungieGlobalDisplayNameCode);
 
     const characters = await Promise.all(
       Object.entries(charactersData).map(([characterId, value]) =>
@@ -119,6 +125,14 @@ export class DestinyService {
     const result: ProfileSummary = {
       membershipType,
       membershipId,
+      ...(displayName
+        ? {
+            bungieName: displayNameCode !== undefined && displayNameCode > 0 ? `${displayName}#${displayNameCode}` : displayName,
+            displayName,
+            displayNameCode: displayNameCode ?? 0
+          }
+        : {}),
+      iconPath: optionalString(userInfo.iconPath),
       profile: {
         dateLastPlayed: optionalString(profileData.dateLastPlayed),
         minutesPlayedTotal: numberFrom(profileData.minutesPlayedTotal),
@@ -270,10 +284,12 @@ export class DestinyService {
     membershipType: number,
     membershipId: string,
     modeValue: unknown,
-    options: { pages: number; timezone: string }
+    options: { pages: number; timezone: string; range: HeatmapRange; year?: number }
   ): Promise<HeatmapSummary> {
     const mode = parsePublicMode(modeValue);
-    const cacheKey = `d2:heatmap:${membershipType}:${membershipId}:${mode.publicMode}:${options.pages}:${options.timezone}`;
+    const maxPagesPerCharacter = options.range === "recent" ? options.pages : HEATMAP_FULL_HISTORY_MAX_PAGES;
+    const yearKey = options.range === "year" ? options.year ?? "current" : "all";
+    const cacheKey = `d2:heatmap:v2:${membershipType}:${membershipId}:${mode.publicMode}:${options.range}:${yearKey}:${options.timezone}:${maxPagesPerCharacter}`;
     const cached = await this.cache.getJson<HeatmapSummary>(cacheKey);
     if (cached) {
       return cached;
@@ -281,18 +297,21 @@ export class DestinyService {
 
     const profile = await this.getProfile(membershipType, membershipId);
     const perCharacter = await Promise.all(
-      profile.characters.map(async (character) => {
-        const pages = await Promise.all(
-          Array.from({ length: options.pages }, (_, page) =>
-            this.getCharacterActivities(membershipType, membershipId, character.characterId, mode, RAID_HISTORY_PAGE_SIZE, page)
-          )
-        );
-        return pages.flat();
-      })
+      profile.characters.map((character) =>
+        this.getCharacterHeatmapActivities(
+          membershipType,
+          membershipId,
+          character.characterId,
+          mode,
+          maxPagesPerCharacter,
+          options.range
+        )
+      )
     );
     const activities = perCharacter
-      .flat()
+      .flatMap((result) => result.activities)
       .filter(uniqueActivity())
+      .filter((activity) => activityMatchesHeatmapRange(activity.period, options.timezone, options.range, options.year))
       .sort((a, b) => a.period.localeCompare(b.period));
 
     const dayBuckets = new Map<string, HeatmapBucket>();
@@ -306,6 +325,10 @@ export class DestinyService {
       addHeatmapBucket(dayBuckets, keys.day, completed, kills, deaths, secondsPlayed);
       addHeatmapBucket(hourBuckets, keys.hour, completed, kills, deaths, secondsPlayed);
     }
+    const days = [...dayBuckets.values()].sort((a, b) => a.key.localeCompare(b.key));
+    const hours = [...hourBuckets.values()].sort((a, b) => Number(a.key) - Number(b.key));
+    const pageCounts = perCharacter.map((result) => result.pagesScanned);
+    const truncated = options.range !== "recent" && perCharacter.some((result) => result.truncated);
 
     const result: HeatmapSummary = {
       membershipType,
@@ -313,13 +336,28 @@ export class DestinyService {
       mode: mode.publicMode,
       modeLabel: mode.label,
       timezone: options.timezone,
+      range: options.range,
+      ...(options.range === "year" && options.year !== undefined ? { year: options.year } : {}),
       activitiesScanned: activities.length,
-      days: [...dayBuckets.values()].sort((a, b) => a.key.localeCompare(b.key)),
-      hours: [...hourBuckets.values()].sort((a, b) => Number(a.key) - Number(b.key)),
+      days,
+      hours,
+      calendar: buildHeatmapCalendar(days, options.range, options.year),
+      scan: {
+        range: options.range,
+        pagesPerCharacter: pageCounts.length > 0 ? Math.max(...pageCounts) : 0,
+        maxPagesPerCharacter,
+        truncated,
+        note:
+          options.range === "recent"
+            ? `最近 ${options.pages} 页公开活动历史`
+            : truncated
+              ? `已达到每角色 ${HEATMAP_FULL_HISTORY_MAX_PAGES} 页扫描上限，结果可能不完整`
+              : "已扫描到公开活动历史空页"
+      },
       updatedAt: new Date().toISOString()
     };
 
-    await this.cache.setJson(cacheKey, result, CACHE_TTL.heatmap);
+    await this.cache.setJson(cacheKey, result, options.range === "recent" ? CACHE_TTL.heatmap : CACHE_TTL.heatmapLong);
     return result;
   }
 
@@ -660,6 +698,48 @@ export class DestinyService {
         this.toActivitySummary(characterId, asRecord(activity))
       )
     );
+  }
+
+  private async getCharacterHeatmapActivities(
+    membershipType: number,
+    membershipId: string,
+    characterId: string,
+    mode: ModeInfo,
+    maxPages: number,
+    range: HeatmapRange
+  ): Promise<{ activities: ActivitySummary[]; pagesScanned: number; truncated: boolean }> {
+    if (range === "recent") {
+      const pages = await Promise.all(
+        Array.from({ length: maxPages }, (_, page) =>
+          this.getCharacterActivities(membershipType, membershipId, characterId, mode, RAID_HISTORY_PAGE_SIZE, page)
+        )
+      );
+      return {
+        activities: pages.flat(),
+        pagesScanned: maxPages,
+        truncated: false
+      };
+    }
+
+    const activities: ActivitySummary[] = [];
+    let pagesScanned = 0;
+    for (let page = 0; page < maxPages; page += 1) {
+      const pageActivities = await this.getCharacterActivities(
+        membershipType,
+        membershipId,
+        characterId,
+        mode,
+        RAID_HISTORY_PAGE_SIZE,
+        page
+      );
+      pagesScanned += 1;
+      if (pageActivities.length === 0) {
+        return { activities, pagesScanned, truncated: false };
+      }
+      activities.push(...pageActivities);
+    }
+
+    return { activities, pagesScanned, truncated: true };
   }
 
   private async toCharacterSummary(characterId: string, character: Record<string, unknown>): Promise<CharacterSummary> {
@@ -1436,6 +1516,138 @@ function addHeatmapBucket(
   bucket.deaths += deaths;
   bucket.secondsPlayed += secondsPlayed;
   buckets.set(key, bucket);
+}
+
+function activityMatchesHeatmapRange(period: string, timezone: string, range: HeatmapRange, year: number | undefined): boolean {
+  if (range !== "year") {
+    return true;
+  }
+  if (year === undefined) {
+    return true;
+  }
+  return Number(heatmapKeys(period, timezone).day.slice(0, 4)) === year;
+}
+
+function buildHeatmapCalendar(days: HeatmapBucket[], range: HeatmapRange, targetYear: number | undefined): HeatmapCalendarYear[] {
+  const buckets = new Map(days.map((day) => [day.key, day]));
+  const years = calendarYearRange(days, range, targetYear);
+  const maxActivities = Math.max(1, ...days.map((day) => day.activities));
+  return years.map((year) => {
+    const months = calendarMonthsForYear(year, days, range, targetYear).map((month) =>
+      buildHeatmapCalendarMonth(year, month, buckets, maxActivities)
+    );
+    return {
+      year,
+      totals: sumHeatmapBuckets(`${year}`, months.map((month) => month.totals)),
+      months
+    };
+  });
+}
+
+function calendarYearRange(days: HeatmapBucket[], range: HeatmapRange, targetYear: number | undefined): number[] {
+  if (range === "year" && targetYear !== undefined) {
+    return [targetYear];
+  }
+  const years = days.map((day) => Number(day.key.slice(0, 4))).filter((year) => Number.isInteger(year));
+  if (years.length === 0) {
+    return [];
+  }
+  const minYear = Math.min(...years);
+  const maxYear = Math.max(...years);
+  return Array.from({ length: maxYear - minYear + 1 }, (_, index) => minYear + index);
+}
+
+function calendarMonthsForYear(year: number, days: HeatmapBucket[], range: HeatmapRange, targetYear: number | undefined): number[] {
+  if (range === "year" && targetYear !== undefined) {
+    return Array.from({ length: 12 }, (_, index) => index + 1);
+  }
+  const yearMonths = days
+    .filter((day) => Number(day.key.slice(0, 4)) === year)
+    .map((day) => Number(day.key.slice(5, 7)))
+    .filter((month) => Number.isInteger(month));
+  if (yearMonths.length === 0) {
+    return Array.from({ length: 12 }, (_, index) => index + 1);
+  }
+  const minMonth = Math.min(...yearMonths);
+  const maxMonth = Math.max(...yearMonths);
+  return Array.from({ length: maxMonth - minMonth + 1 }, (_, index) => minMonth + index);
+}
+
+function buildHeatmapCalendarMonth(
+  year: number,
+  month: number,
+  buckets: Map<string, HeatmapBucket>,
+  maxActivities: number
+): HeatmapCalendarYear["months"][number] {
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const firstWeekday = mondayWeekday(year, month, 1);
+  const days = Array.from({ length: daysInMonth }, (_, index) => {
+    const day = index + 1;
+    const date = `${year}-${pad2(month)}-${pad2(day)}`;
+    const bucket = buckets.get(date) ?? emptyHeatmapBucket(date);
+    return {
+      ...bucket,
+      date,
+      day,
+      weekday: mondayWeekday(year, month, day),
+      week: Math.floor((firstWeekday + index) / 7),
+      intensity: heatmapIntensity(bucket.activities, maxActivities)
+    };
+  });
+  return {
+    key: `${year}-${pad2(month)}`,
+    year,
+    month,
+    label: `${year}年${month}月`,
+    firstWeekday,
+    daysInMonth,
+    totals: sumHeatmapBuckets(`${year}-${pad2(month)}`, days),
+    days
+  };
+}
+
+function heatmapIntensity(activities: number, maxActivities: number): number {
+  if (activities <= 0) {
+    return 0;
+  }
+  const ratio = activities / Math.max(1, maxActivities);
+  if (ratio >= 0.8) return 4;
+  if (ratio >= 0.45) return 3;
+  if (ratio >= 0.2) return 2;
+  return 1;
+}
+
+function sumHeatmapBuckets(key: string, buckets: HeatmapBucket[]): HeatmapBucket {
+  return buckets.reduce(
+    (total, bucket) => ({
+      key,
+      activities: total.activities + bucket.activities,
+      completed: total.completed + bucket.completed,
+      kills: total.kills + bucket.kills,
+      deaths: total.deaths + bucket.deaths,
+      secondsPlayed: total.secondsPlayed + bucket.secondsPlayed
+    }),
+    emptyHeatmapBucket(key)
+  );
+}
+
+function emptyHeatmapBucket(key: string): HeatmapBucket {
+  return {
+    key,
+    activities: 0,
+    completed: 0,
+    kills: 0,
+    deaths: 0,
+    secondsPlayed: 0
+  };
+}
+
+function mondayWeekday(year: number, month: number, day: number): number {
+  return (new Date(Date.UTC(year, month - 1, day)).getUTCDay() + 6) % 7;
+}
+
+function pad2(value: number): string {
+  return String(value).padStart(2, "0");
 }
 
 function heatmapKeys(period: string, timezone: string): { day: string; hour: string } {

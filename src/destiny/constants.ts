@@ -13,6 +13,7 @@ export const CACHE_TTL = {
   career: 30 * 60,
   activityOverview: 30 * 60,
   heatmap: 30 * 60,
+  heatmapLong: 24 * 60 * 60,
   raidOverview: 30 * 60,
   weapons: 30 * 60,
   manifestDefinition: 30 * 24 * 60 * 60

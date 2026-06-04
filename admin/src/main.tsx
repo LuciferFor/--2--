@@ -166,7 +166,7 @@ const queryPresets: QueryPreset[] = [
   { label: "突袭总览", path: "/api/d2/raids/3/4611686018", query: { historyPages: "1", pgcrLimit: "20" } },
   { label: "地牢总览", path: "/api/d2/dungeons/3/4611686018", query: { historyPages: "1" } },
   { label: "最近活动", path: "/api/d2/activities/3/4611686018", query: { mode: "raid", count: "10", page: "0" } },
-  { label: "活跃热力图", path: "/api/d2/heatmap/3/4611686018", query: { mode: "all", pages: "2", timezone: "Asia/Shanghai" } },
+  { label: "活跃热力图", path: "/api/d2/heatmap/3/4611686018", query: { mode: "all", range: "all", timezone: "Asia/Shanghai" } },
   { label: "名片资料", path: "/api/d2/namecard/3/4611686018", query: {} },
   { label: "PGCR 单局", path: "/api/d2/pgcr/123", query: {} },
   { label: "武器统计", path: "/api/d2/weapons/3/4611686018", query: {} },

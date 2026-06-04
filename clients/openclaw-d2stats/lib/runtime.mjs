@@ -51,7 +51,16 @@ const cardQueryParameters = {
     },
     pages: {
       type: "number",
-      description: "Optional heatmap activity history pages to scan, default 2.",
+      description: "Optional heatmap recent activity history pages to scan when range=recent, default 2.",
+    },
+    range: {
+      type: "string",
+      enum: ["all", "year", "recent"],
+      description: "Optional heatmap range. Use all for career-long cached calendar, year for a single year, recent for the old quick scan.",
+    },
+    year: {
+      type: "number",
+      description: "Optional heatmap year when range=year.",
     },
     timezone: {
       type: "string",

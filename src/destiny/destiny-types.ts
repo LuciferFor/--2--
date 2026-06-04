@@ -24,6 +24,10 @@ export interface CharacterSummary {
 export interface ProfileSummary {
   membershipType: number;
   membershipId: string;
+  bungieName?: string;
+  displayName?: string;
+  displayNameCode?: number;
+  iconPath?: string;
   profile: {
     dateLastPlayed?: string;
     minutesPlayedTotal: number;
@@ -256,15 +260,52 @@ export interface HeatmapBucket {
   secondsPlayed: number;
 }
 
+export type HeatmapRange = "all" | "year" | "recent";
+
+export interface HeatmapCalendarDay extends HeatmapBucket {
+  date: string;
+  day: number;
+  weekday: number;
+  week: number;
+  intensity: number;
+}
+
+export interface HeatmapCalendarMonth {
+  key: string;
+  year: number;
+  month: number;
+  label: string;
+  firstWeekday: number;
+  daysInMonth: number;
+  totals: HeatmapBucket;
+  days: HeatmapCalendarDay[];
+}
+
+export interface HeatmapCalendarYear {
+  year: number;
+  totals: HeatmapBucket;
+  months: HeatmapCalendarMonth[];
+}
+
 export interface HeatmapSummary {
   membershipType: number;
   membershipId: string;
   mode: PublicMode;
   modeLabel: string;
   timezone: string;
+  range: HeatmapRange;
+  year?: number;
   activitiesScanned: number;
   days: HeatmapBucket[];
   hours: HeatmapBucket[];
+  calendar: HeatmapCalendarYear[];
+  scan: {
+    range: HeatmapRange;
+    pagesPerCharacter: number;
+    maxPagesPerCharacter: number;
+    truncated: boolean;
+    note: string;
+  };
   updatedAt: string;
 }
 
