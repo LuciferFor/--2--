@@ -23,9 +23,12 @@ Accept these target formats:
 
 If the user gives a QQ number and it is already bound, query directly. If it is not bound, return the 3-minute Bungie OAuth binding link from the tool result and include the Tencent warning text exactly as returned.
 
+For every stat query except `/帮助`, always pass a target to the tool. A command alone such as `/地牢` is incomplete unless the OpenClaw runtime exposes the sender QQ; in that case pass the sender QQ as `target` or `qq`. If no sender QQ is available, ask the user to send a command like `/地牢 1665240495`.
+
 ## Login / OAuth Behavior
 
 - If the user says `查我`, `我的`, `绑定命运2`, or asks for an OAuth-only feature and the sender QQ is available, use that QQ as the target.
+- If OpenClaw exposes the sender QQ as a separate field, pass it as `qq` or `target`; do not call `destiny2_card_query` with only `command=/地牢`, `command=/raid`, etc.
 - If a QQ target is not bound, or the bound QQ has not completed Bungie OAuth login for an OAuth-only feature, return the 3-minute Bungie OAuth binding/login link from the tool result.
 - For OAuth-only features (`/催化`, `/仓库搜索`, `/库存`, `/背包`, `/装备`, `/转移`, `/锁定`, `/解锁`, `/套装`), do not ask for BungieName or membershipId as a fallback. Tell the user to finish the QQ Bungie login link.
 - If the sender QQ is not available and the user says `查我`, ask for their QQ number.

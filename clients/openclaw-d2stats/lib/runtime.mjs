@@ -6,7 +6,13 @@ const cardQueryParameters = {
   properties: {
     target: {
       type: "string",
-      description: "QQ number, BungieName#1234, membershipType:membershipId, or a long membershipId. Not required for card=help.",
+      description:
+        "Required for every stat card except card=help. Use the target after the command, for example '/地牢 1665240495', '/raid Lucifer#8571', or '3:4611686018494693796'.",
+    },
+    qq: {
+      type: "string",
+      description:
+        "Optional sender QQ alias. If the user says '/地牢' or '查我' and OpenClaw knows the sender QQ, pass it here or as target.",
     },
     command: {
       type: "string",
@@ -75,6 +81,12 @@ const cardQueryParameters = {
       description: "Optional heatmap timezone, default Asia/Shanghai.",
     },
   },
+  anyOf: [
+    { required: ["target"] },
+    { required: ["qq"] },
+    { properties: { card: { const: "help" } }, required: ["card"] },
+    { properties: { command: { enum: ["/帮助", "帮助", "菜单", "help"] } }, required: ["command"] },
+  ],
   required: [],
 };
 
@@ -201,11 +213,11 @@ export function registerD2StatsRuntime(api, options = {}) {
     {
       name: "destiny2_card_query",
       description:
-        "Return Destiny 2 stat data as an OpenClaw-rendered HTML PNG card. Use card=help for the menu, card=career for career overview, card=crafting for craftable weapon patterns/锻造, card=catalysts for QQ OAuth catalyst progress/催化, card=grandmasters for Grandmaster Nightfall stats/宗师, card=pvp for PvP/trials, card=dungeon_overview for dungeon stats, card=heatmap for activity heatmap, card=activities for recent activity history, and card=raid_overview when the user asks for raid overview, per-raid clears, day-one, or flawless raid stats. Prefer this tool for Destiny 2 stats, PvP, trials, weapons, catalysts, crafting, grandmasters, profile, or recent activity. If a QQ number is unbound or lacks OAuth, the tool returns a 3-minute Bungie OAuth binding link.",
+        "Return Destiny 2 stat data as an OpenClaw-rendered HTML PNG card. Except for card=help, always pass target or qq; command alone like '/地牢' is not enough unless sender QQ is available and passed as qq. Use card=help for the menu, card=career for career overview, card=crafting for craftable weapon patterns/锻造, card=catalysts for QQ OAuth catalyst progress/催化, card=grandmasters for Grandmaster Nightfall stats/宗师, card=pvp for PvP/trials, card=dungeon_overview for dungeon stats, card=heatmap for activity heatmap, card=activities for recent activity history, and card=raid_overview when the user asks for raid overview, per-raid clears, day-one, or flawless raid stats. Prefer this tool for Destiny 2 stats, PvP, trials, weapons, catalysts, crafting, grandmasters, profile, or recent activity. If a QQ number is unbound or lacks OAuth, the tool returns a 3-minute Bungie OAuth binding link.",
       parameters: cardQueryParameters,
       async execute(_toolCallId, params, signal) {
         const config = getConfig();
-        logger.info("d2stats.card query", { card: params?.card, hasTarget: Boolean(params?.target) });
+        logger.info("d2stats.card query", { card: params?.card, hasTarget: Boolean(params?.target || params?.qq) });
         return queryCard(params, config, { signal, fetchImpl: options.fetchImpl });
       },
     },

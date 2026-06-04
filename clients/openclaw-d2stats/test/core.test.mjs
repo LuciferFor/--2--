@@ -282,6 +282,68 @@ describe("d2stats core", () => {
     assert.equal(result.details.card, "help");
   });
 
+  it("uses qq as a card query target alias", async () => {
+    const result = await queryCard(
+      { qq: "607972716", card: "summary" },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async (url) => {
+          if (String(url).includes("/bindings/qq/")) {
+            return jsonResponse({
+              success: true,
+              data: {
+                qq: "607972716",
+                membershipType: 3,
+                membershipId: "4611686018428939884",
+                displayName: "Lucifer",
+                displayNameCode: 8571,
+                bungieName: "Lucifer#8571",
+              },
+            });
+          }
+          assert.equal(String(url), "http://d2.local/api/d2/summary/3/4611686018428939884?mode=all");
+          return jsonResponse({
+            success: true,
+            data: {
+              membershipType: 3,
+              membershipId: "4611686018428939884",
+              mode: "all",
+              modeLabel: "总览",
+              stats: {
+                activities: 1,
+                wins: 1,
+                kills: 10,
+                deaths: 2,
+                assists: 1,
+                secondsPlayed: 300,
+                winRate: 100,
+                kd: 5,
+                kda: 5.25,
+                efficiency: 5.5,
+              },
+              updatedAt: "2026-06-03T00:00:00.000Z",
+            },
+          });
+        },
+        renderHtmlToPng: async (html) => {
+          assert.match(html, /Lucifer#8571/);
+          return Buffer.from("png-bytes");
+        },
+      },
+    );
+
+    assert.equal(result.content[0].type, "image");
+    assert.equal(result.details.card, "summary");
+  });
+
+  it("returns actionable guidance when a non-help command has no target", async () => {
+    const result = await queryCard({ command: "/地牢" }, { baseUrl: "http://d2.local" });
+
+    assert.equal(result.content[0].type, "text");
+    assert.match(result.content[0].text, /这条命令缺少查询目标/);
+    assert.match(result.content[0].text, /\/地牢 1665240495/);
+  });
+
   it("routes command aliases to activity history cards", async () => {
     const result = await queryCard(
       { target: "3:4611686018428939884", command: "/最近", mode: "raid" },
@@ -402,6 +464,9 @@ describe("d2stats core", () => {
           assert.match(html, /二象性/);
           assert.match(html, /Flawless Solo/);
           assert.match(html, /地牢全程次数/);
+          assert.match(html, /担任导师次数/);
+          assert.match(html, /<strong>0<\/strong>/);
+          assert.doesNotMatch(html, /未公开/);
           return Buffer.from("png-bytes");
         },
       },

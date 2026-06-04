@@ -82,7 +82,7 @@ export function resolveConfig(raw = {}) {
 export function parseTarget(target, config = resolveConfig()) {
   const value = String(target || "").trim();
   if (!value) {
-    throw new D2StatsInputError("请提供 QQ 号、BungieName#1234 或 membershipType:membershipId。");
+    throw new D2StatsInputError(missingTargetMessage());
   }
 
   const membershipPair = /^([0-9]{1,3})[:/\s]+([0-9]{8,30})$/u.exec(value);
@@ -246,13 +246,14 @@ function buildInventoryActionUrl(qq, action, config = resolveConfig()) {
 
 export async function queryCard(params = {}, rawConfig = {}, options = {}) {
   const config = resolveConfig(rawConfig);
+  const normalizedParams = normalizeCardParams(params);
   if (!config.enabled) {
     return textResult("命运2查询工具当前未启用。", { status: "disabled" });
   }
 
   let card;
   try {
-    card = normalizeCard(params.card || inferCardFromCommand(params.command || params.query), config.defaultCard);
+    card = normalizeCard(normalizedParams.card || inferCardFromCommand(normalizedParams.command || normalizedParams.query), config.defaultCard);
   } catch (error) {
     if (error instanceof D2StatsInputError) {
       return textResult(error.message, { status: "invalid_input" });
@@ -261,7 +262,7 @@ export async function queryCard(params = {}, rawConfig = {}, options = {}) {
   }
 
   try {
-    const rendered = await renderCardFromPublicJson(card, params, config, options);
+    const rendered = await renderCardFromPublicJson(card, normalizedParams, config, options);
     const png = await renderHtmlToPng(rendered.html, {
       width: rendered.width,
       height: rendered.height,
@@ -299,6 +300,22 @@ export async function queryCard(params = {}, rawConfig = {}, options = {}) {
       error: String(error?.stack || error),
     });
   }
+}
+
+function normalizeCardParams(params = {}) {
+  const normalized = { ...params };
+  if (!String(normalized.target || "").trim() && String(normalized.qq || "").trim()) {
+    normalized.target = String(normalized.qq).trim();
+  }
+  return normalized;
+}
+
+function missingTargetMessage() {
+  return [
+    "这条命令缺少查询目标，请在命令后面带 QQ 号、BungieName#1234 或 membershipType:membershipId。",
+    "示例：/地牢 1665240495、/raid Lucifer#8571、/战绩 3:4611686018494693796。",
+    "如果你想查自己，需要 OpenClaw 能把发送者 QQ 传给工具；当前这次调用没有传到。",
+  ].join("\n");
 }
 
 export async function bindQq(params = {}, rawConfig = {}, options = {}) {
@@ -834,8 +851,28 @@ async function renderHtmlToPng(html, options = {}) {
       deviceScaleFactor: 1,
     });
     options.signal?.throwIfAborted?.();
-    await page.setContent(html, { waitUntil: "networkidle" });
-    await page.evaluate(() => document.fonts?.ready);
+    await page.setContent(html, { waitUntil: "domcontentloaded" });
+    await page.evaluate(() => document.fonts?.ready).catch(() => {});
+    await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
+    await page
+      .evaluate(
+        () =>
+          Promise.race([
+            Promise.all(
+              Array.from(document.images)
+                .filter((image) => !image.complete)
+                .map(
+                  (image) =>
+                    new Promise((resolve) => {
+                      image.addEventListener("load", resolve, { once: true });
+                      image.addEventListener("error", resolve, { once: true });
+                    }),
+                ),
+            ),
+            new Promise((resolve) => setTimeout(resolve, 3000)),
+          ]),
+      )
+      .catch(() => {});
     const card = page.locator("#d2-card");
     return await card.screenshot({ type: "png" });
   } finally {
@@ -4047,7 +4084,7 @@ function raidMetric(label, value, tone) {
 }
 
 function raidProgressMetric(label, value, tone, raw = false) {
-  const display = raw ? String(value || "-") : int(value);
+  const display = raw ? String(value === undefined || value === null || value === "" ? "-" : value) : int(value);
   return `
     <div class="raid-progress-metric ${tone}">
       <span>${escapeHtml(label)}</span>
@@ -4058,8 +4095,8 @@ function raidProgressMetric(label, value, tone, raw = false) {
 }
 
 function raidSherpaDisplay(item) {
-  const value = Number(item?.sherpaCompletions || 0);
-  return value > 0 ? int(value) : "未公开";
+  const value = Number(item?.sherpaCompletions ?? 0);
+  return Number.isFinite(value) && value >= 0 ? int(value) : "0";
 }
 
 function raidTags(item) {

@@ -30,6 +30,18 @@ The installer copies:
 The tool accepts QQ numbers, `BungieName#1234`, `membershipType:membershipId`,
 or a bare long membership ID using `defaultMembershipType`.
 
+Every stat card except the help menu needs a target. For example:
+
+```text
+/地牢 1665240495
+/raid Lucifer#8571
+/战绩 3:4611686018494693796
+```
+
+If an OpenClaw adapter exposes the sender QQ separately, pass it as `qq` or
+`target`; calling the card tool with only `command=/地牢` is intentionally
+treated as missing input.
+
 When a QQ number is not bound, `destiny2_card_query` calls the backend OAuth start
 endpoint and returns the binding link text instead of asking the user to provide
 JSON or backend details.
