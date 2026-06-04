@@ -11,6 +11,7 @@ const CARDS = new Set([
   "weapons",
   "crafting",
   "catalysts",
+  "grandmasters",
   "raid_overview",
   "dungeon_overview",
   "heatmap",
@@ -168,8 +169,16 @@ export function buildPublicDataUrl(kind, target, params = {}, config = resolveCo
   }
 
   if (kind === "dungeons") {
-    query.set("historyPages", String(clampInteger(params.historyPages, 1, 1, 10)));
+    query.set("historyPages", String(clampInteger(params.historyPages, 10, 1, 10)));
+    query.set("pgcrLimit", String(clampInteger(params.pgcrLimit, 100, 0, 200)));
     return `${config.baseUrl}/api/d2/dungeons/${target.membershipType}/${target.membershipId}?${query.toString()}`;
+  }
+
+  if (kind === "grandmasters") {
+    query.set("historyPages", String(clampInteger(params.historyPages, 10, 1, 10)));
+    query.set("pgcrLimit", String(clampInteger(params.pgcrLimit, 50, 0, 200)));
+    query.set("season", normalizeGrandmasterSeason(params.season));
+    return `${config.baseUrl}/api/d2/grandmasters/${target.membershipType}/${target.membershipId}?${query.toString()}`;
   }
 
   if (kind === "heatmap") {
@@ -478,10 +487,21 @@ async function renderCardFromPublicJson(card, params, config, options) {
     const sourceUrl = buildPublicDataUrl("dungeons", resolved, params, config);
     const overview = await fetchEnvelope(sourceUrl, config, options);
     return {
-      width: CARD_WIDTH,
-      height: 760,
+      width: HEATMAP_CARD_WIDTH,
+      height: estimateDungeonHeight(overview),
       sourceUrl,
       html: await renderDungeonOverviewHtml(resolved.player, overview, config, options),
+    };
+  }
+
+  if (card === "grandmasters") {
+    const sourceUrl = buildPublicDataUrl("grandmasters", resolved, params, config);
+    const overview = await fetchEnvelope(sourceUrl, config, options);
+    return {
+      width: HEATMAP_CARD_WIDTH,
+      height: estimateGrandmastersHeight(overview),
+      sourceUrl,
+      html: await renderGrandmastersHtml(resolved.player, overview, config, options),
     };
   }
 
@@ -1406,8 +1426,15 @@ async function renderRaidOverviewHtml(player, overview, config, options) {
 }
 
 async function renderDungeonOverviewHtml(player, overview, config, options) {
-  const rows = Array.isArray(overview?.activities) ? overview.activities.slice(0, 10) : [];
+  const rows = Array.isArray(overview?.dungeons)
+    ? overview.dungeons
+    : Array.isArray(overview?.activities)
+      ? overview.activities
+      : [];
   const totals = overview?.totals || {};
+  const bestSpeed = rows
+    .filter((item) => Number(item?.fastestCompletionMs || 0) > 0)
+    .sort((a, b) => Number(a.fastestCompletionMs || Infinity) - Number(b.fastestCompletionMs || Infinity))[0];
   const rowsWithImages = await Promise.all(
     rows.map(async (item) => ({
       item,
@@ -1415,41 +1442,160 @@ async function renderDungeonOverviewHtml(player, overview, config, options) {
     })),
   );
   return cardPage({
+    width: HEATMAP_CARD_WIDTH,
     player,
     title: formatPlayerName(player),
     eyebrow: "DESTINY 2 DUNGEON OVERVIEW",
     subtitle: `地牢总览 · ${dateOnly(overview?.updatedAt)}`,
     body: `
-      <section class="metrics metrics-4">
-        ${metric("地牢数", int(totals.activities))}
-        ${metric("通关", int(totals.clears))}
-        ${metric("击杀", int(totals.kills))}
-        ${metric("游玩时长", duration(totals.secondsPlayed))}
+      <section class="raid-rank-row">
+        <div class="raid-rank-pill teal">
+          <span>Full Clears</span>
+          <strong>${int(totals.fullClears ?? totals.clears)}</strong>
+          <small>${int(totals.completions)} 完成</small>
+        </div>
+        <div class="raid-rank-pill gold">
+          <span>Best Speed</span>
+          <strong>${escapeHtml(bestSpeed?.fastestCompletionDisplay || totals.fastestCompletionDisplay || "-")}</strong>
+          <small>${escapeHtml(bestSpeed?.displayName || bestSpeed?.name || "暂无")}</small>
+        </div>
       </section>
-      <section class="raid-list">
+      <section class="raid-detail-list">
         ${rowsWithImages
           .map(
             ({ item, imageDataUrl }) => `
-              <div class="raid-card-row">
-                <div class="raid-thumb ${imageDataUrl ? "" : "empty"}">
+              <div class="raid-detail-row dungeon-detail-row">
+                <div class="raid-detail-thumb ${imageDataUrl ? "" : "empty"}">
                   ${imageDataUrl ? `<img src="${escapeHtml(imageDataUrl)}" />` : `<span>${escapeHtml((item.name || "?").slice(0, 2))}</span>`}
+                  <b>${escapeHtml(item.displayName || `${item.name || "Unknown"}：${item.difficultyLabel || "普通"}`)}</b>
                 </div>
-                <div class="raid-title-block">
-                  <strong>${escapeHtml(item.name || "Unknown")}</strong>
-                  <span>${pill(`Hash ${item.activityHashes?.[0] || "-"}`, "muted")} ${item.lastClearedAt ? pill(`最近 ${dateOnly(item.lastClearedAt)}`, "green") : pill("近期未扫到", "muted")}</span>
+                <div class="raid-tag-stack">
+                  ${raidTags(item).join("")}
                 </div>
-                ${raidMetric("通关", int(item.clears), "blue")}
-                ${raidMetric("最快", item.fastestCompletionDisplay || "-", "green")}
-                ${raidMetric("时长", duration(item.secondsPlayed), "purple")}
-                ${raidMetric("击杀", int(item.kills), "red")}
+                <div class="raid-stat-pack">${raidProgressMetric("地牢全程次数", item.fullClears ?? item.clears, "blue")}</div>
+                <div class="raid-stat-pack">${raidProgressMetric("地牢完成次数", item.completions, "green")}</div>
+                <div class="raid-stat-pack">${raidProgressMetric("担任导师次数", raidSherpaDisplay(item), "purple", true)}</div>
+                <div class="raid-stat-pack">${raidProgressMetric("全程最短用时", item.fastestCompletionDisplay || "-", "pink", true)}</div>
               </div>
             `,
           )
-          .join("")}
+          .join("") || emptyState("没有可显示的地牢记录。")}
       </section>
-      <footer class="card-footer">通关 / 最快来自 Bungie 全量聚合统计；最近通关来自近 ${int(overview?.scan?.historyPages)} 页公开历史扫描。</footer>
+      <footer class="card-footer">
+        全程 / 完成 / 最快来自 Bungie 全量聚合统计；Solo/Duo/Trio、无暇只从最近 ${int(overview?.scan?.pgcrScanned)} 场地牢 PGCR 扫描确认；Bungie 官方公开接口不提供全量导师次数。
+      </footer>
+      ${membershipBlock(overview?.membershipType, overview?.membershipId)}
     `,
   });
+}
+
+async function renderGrandmastersHtml(player, overview, config, options) {
+  const strikes = Array.isArray(overview?.strikes) ? overview.strikes.slice(0, 18) : [];
+  const recent = Array.isArray(overview?.recent) ? overview.recent.slice(0, 18) : [];
+  const totals = overview?.totals || {};
+  const seasonLabel = overview?.season?.scope === "all"
+    ? "全部扫描"
+    : overview?.season?.currentSeasonReliable
+      ? overview?.season?.currentSeasonName || "当前赛季"
+      : "近期扫描";
+  const strikeImages = await Promise.all(
+    strikes.map(async (item) => ({
+      item,
+      imageDataUrl: item.pgcrImage ? await imageDataUrl(bungieAssetUrl(item.pgcrImage), config, options) : "",
+    })),
+  );
+  const recentImages = await Promise.all(
+    recent.map(async (item) => ({
+      item,
+      imageDataUrl: item.pgcrImage ? await imageDataUrl(bungieAssetUrl(item.pgcrImage), config, options) : "",
+    })),
+  );
+  return cardPage({
+    width: HEATMAP_CARD_WIDTH,
+    player,
+    title: formatPlayerName(player),
+    eyebrow: "DESTINY 2 GRANDMASTERS",
+    subtitle: `宗师夜幕 · ${escapeHtml(seasonLabel)} · ${dateOnly(overview?.updatedAt)}`,
+    body: `
+      <section class="metrics metrics-4">
+        ${metric("宗师数", int(totals.strikes))}
+        ${metric(seasonLabel, int(totals.currentSeasonClears))}
+        ${metric("生涯通关", int(totals.lifetimeClears))}
+        ${metric("最快", totals.fastestCompletionDisplay || "-")}
+      </section>
+      <section class="gm-grid">
+        ${strikeImages.map(({ item, imageDataUrl }) => renderGrandmasterStrikeCard(item, imageDataUrl, overview)).join("") || emptyState("没有可显示的宗师夜幕记录。")}
+      </section>
+      <section class="gm-recent-panel">
+        <h2>最近宗师队伍</h2>
+        <div class="gm-recent-list">
+          ${recentImages.map(({ item, imageDataUrl }) => renderGrandmasterRecentRow(item, imageDataUrl)).join("") || emptyState("没有扫描到最近宗师 PGCR。")}
+        </div>
+      </section>
+      <footer class="card-footer">${escapeHtml(overview?.scan?.note || "宗师数据来自公开 Nightfall 历史和 PGCR 扫描。")}</footer>
+      ${membershipBlock(overview?.membershipType, overview?.membershipId)}
+    `,
+  });
+}
+
+function renderGrandmasterStrikeCard(item, imageDataUrl, overview) {
+  const seasonLabel = overview?.season?.scope === "all"
+    ? "扫描通关"
+    : overview?.season?.currentSeasonReliable
+      ? "当前赛季通关"
+      : "近期通关";
+  return `
+    <div class="gm-card">
+      <strong>${escapeHtml(item?.name || "Unknown")}</strong>
+      <div class="gm-card-body">
+        <div class="gm-thumb ${imageDataUrl ? "" : "empty"}">
+          ${imageDataUrl ? `<img src="${escapeHtml(imageDataUrl)}" />` : `<span>${escapeHtml((item?.name || "?").slice(0, 2))}</span>`}
+          <b>${percent(item?.completionRate || 0)}</b>
+        </div>
+        <div class="gm-card-stats">
+          <span>${escapeHtml(seasonLabel)} <b>${int(item?.currentSeasonClears)}</b></span>
+          <span>生涯通关 <b>${int(item?.lifetimeClears)}</b></span>
+          <span>最快通关 <b>${escapeHtml(item?.fastestCompletionDisplay || "-")}</b></span>
+          <span>平均通关 <b>${item?.averageCompletionSeconds ? duration(item.averageCompletionSeconds) : "-"}</b></span>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderGrandmasterRecentRow(item, imageDataUrl) {
+  const players = Array.isArray(item?.players) ? item.players.slice(0, 3) : [];
+  return `
+    <div class="gm-recent-row">
+      <div class="gm-recent-activity">
+        <div class="gm-mini-thumb ${imageDataUrl ? "" : "empty"}">
+          ${imageDataUrl ? `<img src="${escapeHtml(imageDataUrl)}" />` : `<span>${escapeHtml((item?.activityName || "?").slice(0, 2))}</span>`}
+        </div>
+        <div>
+          <strong>${escapeHtml(item?.activityName || "Unknown")}</strong>
+          <span>${item?.completed ? badge("完成", "ok") : badge("失败", "")} ${duration(item?.durationSeconds)} · ${relativeYear(item?.period)}</span>
+        </div>
+      </div>
+      <div class="gm-fireteam">
+        ${players.map((player) => renderGrandmasterPlayer(player)).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderGrandmasterPlayer(player) {
+  const weapons = Array.isArray(player?.weapons) ? player.weapons.slice(0, 3) : [];
+  const emblem = player?.emblemPath ? bungieAssetUrl(player.emblemPath) : "";
+  return `
+    <div class="gm-player">
+      <div class="gm-player-head">
+        <span class="gm-emblem ${emblem ? "" : "empty"}">${emblem ? `<img src="${escapeHtml(emblem)}" />` : ""}</span>
+        <strong>${escapeHtml(player?.displayName || "Unknown")}</strong>
+      </div>
+      <div class="gm-player-stats">击败 ${int(player?.kills)}　死亡 ${int(player?.deaths)}　助攻 ${int(player?.assists)}　KD ${fixed(player?.kd)}</div>
+      <div class="gm-player-weapons">${weapons.map((weapon) => weaponIconHtml(weapon)).join("")}</div>
+    </div>
+  `;
 }
 
 function renderHeatmapHtml(player, heatmap) {
@@ -1601,6 +1747,21 @@ function estimateCatalystsHeight(catalysts) {
     return height + 78 + Math.ceil(Math.max(1, itemCount) / 3) * 148;
   }, 0);
   return Math.max(760, 330 + groupHeights);
+}
+
+function estimateDungeonHeight(overview) {
+  const rows = Array.isArray(overview?.dungeons)
+    ? overview.dungeons.length
+    : Array.isArray(overview?.activities)
+      ? overview.activities.length
+      : 0;
+  return Math.max(760, 360 + Math.max(1, rows) * 160);
+}
+
+function estimateGrandmastersHeight(overview) {
+  const strikes = Array.isArray(overview?.strikes) ? overview.strikes.length : 0;
+  const recent = Array.isArray(overview?.recent) ? Math.min(18, overview.recent.length) : 0;
+  return Math.max(860, 360 + Math.ceil(Math.max(1, strikes) / 3) * 170 + 70 + Math.max(1, recent) * 86);
 }
 
 function sumClientHeatmapBuckets(buckets) {
@@ -2416,6 +2577,204 @@ function cardPage({ eyebrow, title, subtitle, body, player, width = CARD_WIDTH }
       font-weight: 850;
       white-space: nowrap;
     }
+    .gm-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    .gm-card {
+      min-width: 0;
+      min-height: 150px;
+      padding: 12px;
+      border-radius: 8px;
+      background: rgba(14, 14, 14, 0.88);
+      border: 1px solid rgba(255, 255, 255, 0.045);
+    }
+    .gm-card > strong {
+      display: block;
+      margin-bottom: 9px;
+      color: #ffffff;
+      font-size: 15px;
+      line-height: 1.15;
+      font-weight: 950;
+      text-align: center;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .gm-card-body {
+      display: grid;
+      grid-template-columns: 112px minmax(0, 1fr);
+      gap: 10px;
+      align-items: center;
+    }
+    .gm-thumb {
+      width: 112px;
+      height: 70px;
+      position: relative;
+      overflow: hidden;
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.07);
+      display: grid;
+      place-items: center;
+      color: #9aa7b5;
+      font-weight: 900;
+    }
+    .gm-thumb img,
+    .gm-mini-thumb img,
+    .gm-emblem img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .gm-thumb b {
+      position: absolute;
+      right: 5px;
+      bottom: 5px;
+      padding: 3px 6px;
+      border-radius: 3px;
+      background: rgba(33, 208, 122, 0.88);
+      color: #ffffff;
+      font-size: 10px;
+      line-height: 1;
+      font-weight: 950;
+    }
+    .gm-card-stats {
+      display: grid;
+      gap: 5px;
+      min-width: 0;
+    }
+    .gm-card-stats span {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      color: #bcc6d1;
+      font-size: 12px;
+      line-height: 1.1;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    .gm-card-stats b { color: #ffffff; font-weight: 950; }
+    .gm-recent-panel {
+      margin-top: 18px;
+      padding: 18px 20px;
+      background: rgba(17, 17, 17, 0.88);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 8px;
+    }
+    .gm-recent-panel h2 {
+      margin: 0 0 14px;
+      color: #d5dde8;
+      font-size: 22px;
+      line-height: 1.2;
+      text-align: center;
+    }
+    .gm-recent-list {
+      display: grid;
+      gap: 8px;
+    }
+    .gm-recent-row {
+      display: grid;
+      grid-template-columns: 180px minmax(0, 1fr);
+      gap: 12px;
+      padding: 9px;
+      border-radius: 7px;
+      background: rgba(7, 7, 7, 0.48);
+    }
+    .gm-recent-activity {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: 72px minmax(0, 1fr);
+      gap: 9px;
+      align-items: center;
+    }
+    .gm-mini-thumb {
+      width: 72px;
+      height: 46px;
+      overflow: hidden;
+      border-radius: 5px;
+      background: rgba(255,255,255,0.07);
+      display: grid;
+      place-items: center;
+      color: #9aa7b5;
+      font-size: 13px;
+      font-weight: 900;
+    }
+    .gm-recent-activity strong,
+    .gm-recent-activity span {
+      display: block;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .gm-recent-activity strong {
+      color: #ffffff;
+      font-size: 15px;
+      font-weight: 950;
+    }
+    .gm-recent-activity span {
+      margin-top: 4px;
+      color: #aab4bf;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .gm-fireteam {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .gm-player {
+      min-width: 0;
+      padding: 7px 8px;
+      border-radius: 6px;
+      background: rgba(18, 18, 18, 0.76);
+    }
+    .gm-player-head {
+      display: grid;
+      grid-template-columns: 28px minmax(0, 1fr);
+      gap: 6px;
+      align-items: center;
+      margin-bottom: 4px;
+    }
+    .gm-emblem {
+      width: 28px;
+      height: 28px;
+      overflow: hidden;
+      border-radius: 4px;
+      background: rgba(255,255,255,0.08);
+    }
+    .gm-player-head strong,
+    .gm-player-stats {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .gm-player-head strong {
+      color: #ffffff;
+      font-size: 13px;
+      font-weight: 950;
+    }
+    .gm-player-stats {
+      color: #c7d0dc;
+      font-size: 11px;
+      font-weight: 850;
+      margin-bottom: 5px;
+    }
+    .gm-player-weapons {
+      display: flex;
+      gap: 4px;
+      min-height: 28px;
+    }
+    .gm-player-weapons .weapon-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 3px;
+    }
     .career-hero-strip,
     .career-season-panel,
     .career-breakdown-panel,
@@ -2982,6 +3341,12 @@ function cardPage({ eyebrow, title, subtitle, body, player, width = CARD_WIDTH }
       background: rgba(17, 17, 17, 0.9);
       border: 1px solid rgba(255,255,255,.035);
     }
+    .dungeon-detail-row {
+      grid-template-columns: 200px 116px repeat(4, minmax(0, 1fr));
+      gap: 14px;
+      min-height: 132px;
+      padding: 16px 18px;
+    }
     .raid-detail-thumb {
       position: relative;
       width: 230px;
@@ -2989,6 +3354,10 @@ function cardPage({ eyebrow, title, subtitle, body, player, width = CARD_WIDTH }
       overflow: hidden;
       border-radius: 9px;
       background: #171717;
+    }
+    .dungeon-detail-row .raid-detail-thumb {
+      width: 200px;
+      height: 92px;
     }
     .raid-detail-thumb img {
       width: 100%;
@@ -3080,6 +3449,9 @@ function cardPage({ eyebrow, title, subtitle, body, player, width = CARD_WIDTH }
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .dungeon-detail-row .raid-progress-metric span { font-size: 14px; }
+    .dungeon-detail-row .raid-progress-metric i { width: 84px; }
+    .dungeon-detail-row .raid-progress-metric strong { font-size: 24px; }
     .raid-list {
       display: grid;
       gap: 12px;
@@ -3296,10 +3668,11 @@ function pvpBar(value, max, tone) {
 
 function weaponIconHtml(weapon) {
   const url = weapon?.iconPath ? bungieAssetUrl(weapon.iconPath) : "";
+  const name = escapeHtml(weapon?.name || "Weapon");
   if (!url) {
-    return `<span class="weapon-icon empty"></span>`;
+    return `<span class="weapon-icon empty" title="${name}"></span>`;
   }
-  return `<img class="weapon-icon" src="${escapeHtml(url)}" />`;
+  return `<img class="weapon-icon" src="${escapeHtml(url)}" alt="${name}" title="${name}" />`;
 }
 
 function shortMapName(value) {
@@ -3589,6 +3962,9 @@ function inferCardFromCommand(value) {
   if (/地牢|dungeon/u.test(command)) {
     return "dungeon_overview";
   }
+  if (/宗师|日落|夜幕|grandmaster|\bgm\b/u.test(command)) {
+    return "grandmasters";
+  }
   if (/pvp|试炼|trials|熔炉/u.test(command)) {
     return "pvp";
   }
@@ -3666,6 +4042,14 @@ function normalizeHeatmapRange(value) {
     return range;
   }
   throw new D2StatsInputError("热力图 range 只支持 all、year、recent。");
+}
+
+function normalizeGrandmasterSeason(value) {
+  const season = String(value || "current").trim();
+  if (season === "current" || season === "all") {
+    return season;
+  }
+  throw new D2StatsInputError("宗师 season 只支持 current 或 all。");
 }
 
 async function fetchWithTimeout(url, options = {}) {
@@ -3807,6 +4191,21 @@ function dateOnly(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
     return String(value).slice(0, 10);
+  }
+  return date.toISOString().slice(0, 10);
+}
+
+function relativeYear(value) {
+  if (!value) {
+    return "-";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return String(value).slice(0, 10);
+  }
+  const years = Math.floor((Date.now() - date.getTime()) / 31536000000);
+  if (years >= 1) {
+    return `${years}年前`;
   }
   return date.toISOString().slice(0, 10);
 }

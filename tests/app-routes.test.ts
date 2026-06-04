@@ -172,27 +172,121 @@ const fakeDestinyService = {
       modeLabel: "地牢",
       totals: {
         activities: 1,
+        dungeons: 1,
         clears: 2,
+        fullClears: 2,
+        completions: 2,
+        sherpaCompletions: 0,
         kills: 50,
         deaths: 5,
-        secondsPlayed: 1800
+        secondsPlayed: 1800,
+        fastestCompletionDisplay: "15:00.000"
       },
       activities: [
         {
           name: "Duality",
+          displayName: "Duality：普通",
+          difficulty: "normal",
+          difficultyLabel: "普通",
           activityHashes: [2],
           clears: 2,
+          fullClears: 2,
           completions: 2,
           wins: 2,
           kills: 50,
           deaths: 5,
           secondsPlayed: 1800,
-          fastestCompletionDisplay: "15:00.000"
+          fastestCompletionDisplay: "15:00.000",
+          scannedCompletions: 0,
+          sherpaCompletions: 0,
+          fireteamSizes: { solo: 0, duo: 0, trio: 0 },
+          tags: [],
+          flawless: { status: "unknown", personal: false, fireteam: false },
+          sortOrder: 0
+        }
+      ],
+      dungeons: [
+        {
+          name: "Duality",
+          displayName: "Duality：普通",
+          difficulty: "normal",
+          difficultyLabel: "普通",
+          activityHashes: [2],
+          clears: 2,
+          fullClears: 2,
+          completions: 2,
+          wins: 2,
+          kills: 50,
+          deaths: 5,
+          secondsPlayed: 1800,
+          fastestCompletionDisplay: "15:00.000",
+          scannedCompletions: 0,
+          sherpaCompletions: 0,
+          fireteamSizes: { solo: 0, duo: 0, trio: 0 },
+          tags: [],
+          flawless: { status: "unknown", personal: false, fireteam: false },
+          sortOrder: 0
         }
       ],
       scan: {
         historyPages: 1,
+        pgcrLimit: 100,
         recentActivitiesScanned: 0,
+        pgcrScanned: 0,
+        note: "test"
+      },
+      updatedAt: "2026-06-03T00:00:00.000Z"
+    };
+  },
+  async getGrandmasterOverview() {
+    return {
+      membershipType: 3,
+      membershipId: "4611686018",
+      season: {
+        scope: "current",
+        currentSeasonName: "赛季：回响",
+        currentSeasonStart: "2026-01-01T00:00:00.000Z",
+        currentSeasonEnd: "2026-12-31T00:00:00.000Z",
+        currentSeasonReliable: true
+      },
+      totals: {
+        strikes: 1,
+        currentSeasonClears: 2,
+        lifetimeClears: 5,
+        attempts: 3,
+        completions: 5,
+        kills: 300,
+        deaths: 10,
+        secondsPlayed: 7200,
+        fastestCompletionMs: 1200000,
+        fastestCompletionDisplay: "20m 00s",
+        averageCompletionSeconds: 1440
+      },
+      strikes: [
+        {
+          name: "洞悉终界",
+          activityHashes: [7001],
+          currentSeasonClears: 2,
+          lifetimeClears: 5,
+          attempts: 3,
+          completions: 5,
+          kills: 300,
+          deaths: 10,
+          secondsPlayed: 7200,
+          fastestCompletionMs: 1200000,
+          fastestCompletionDisplay: "20m 00s",
+          averageCompletionSeconds: 1440,
+          completionRate: 66.67
+        }
+      ],
+      recent: [],
+      scan: {
+        historyPages: 10,
+        pgcrLimit: 50,
+        season: "current",
+        recentActivitiesScanned: 3,
+        pgcrScanned: 2,
+        currentSeasonReliable: true,
         note: "test"
       },
       updatedAt: "2026-06-03T00:00:00.000Z"
@@ -840,6 +934,10 @@ describe("Fastify routes", () => {
     const career = await app.inject({ method: "GET", url: "/api/d2/career/3/4611686018" });
     const pvp = await app.inject({ method: "GET", url: "/api/d2/pvp/3/4611686018?count=5" });
     const dungeons = await app.inject({ method: "GET", url: "/api/d2/dungeons/3/4611686018?historyPages=1" });
+    const grandmasters = await app.inject({
+      method: "GET",
+      url: "/api/d2/grandmasters/3/4611686018?historyPages=10&pgcrLimit=50&season=current"
+    });
     const heatmap = await app.inject({
       method: "GET",
       url: "/api/d2/heatmap/3/4611686018?mode=all&range=all&timezone=Asia%2FShanghai"
@@ -860,6 +958,11 @@ describe("Fastify routes", () => {
     });
     expect(dungeons.statusCode).toBe(200);
     expect(dungeons.json()).toMatchObject({ success: true, data: { totals: { clears: 2 } } });
+    expect(grandmasters.statusCode).toBe(200);
+    expect(grandmasters.json()).toMatchObject({
+      success: true,
+      data: { totals: { lifetimeClears: 5 }, strikes: [{ name: "洞悉终界" }] }
+    });
     expect(heatmap.statusCode).toBe(200);
     expect(heatmap.json()).toMatchObject({ success: true, data: { timezone: "Asia/Shanghai", range: "all", calendar: [{ year: 2026 }] } });
     expect(namecard.statusCode).toBe(200);

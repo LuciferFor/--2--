@@ -21,6 +21,13 @@ import type {
   CraftableWeaponGroup,
   CraftableWeaponSummary,
   CraftablesSummary,
+  DungeonOverview,
+  DungeonOverviewActivity,
+  GrandmasterOverview,
+  GrandmasterRecentActivity,
+  GrandmasterRecentPlayer,
+  GrandmasterSeasonScope,
+  GrandmasterStrikeSummary,
   HeatmapBucket,
   HeatmapCalendarYear,
   HeatmapRange,
@@ -53,6 +60,8 @@ import {
 } from "./stat-utils.js";
 
 const RAID_MODE_TYPE = 4;
+const DUNGEON_MODE_TYPE = 82;
+const NIGHTFALL_MODE_TYPE = 16;
 const RAID_HISTORY_PAGE_SIZE = 250;
 const HEATMAP_FULL_HISTORY_MAX_PAGES = 100;
 const KINETIC_BUCKET_HASHES = new Set([1498876634]);
@@ -293,9 +302,278 @@ export class DestinyService {
   async getDungeonOverview(
     membershipType: number,
     membershipId: string,
-    options: { historyPages: number }
-  ): Promise<ActivityModeOverview> {
-    return this.getActivityModeOverview(membershipType, membershipId, "dungeon", options);
+    options: { historyPages: number; pgcrLimit: number }
+  ): Promise<DungeonOverview> {
+    const cacheKey = `d2:dungeon-overview:${membershipType}:${membershipId}:${options.historyPages}:${options.pgcrLimit}`;
+    const cached = await this.cache.getJson<DungeonOverview>(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const profile = await this.getProfile(membershipType, membershipId);
+    const activityDefinitions = await this.manifest.getDefinitionMap<RaidActivityDefinition>(
+      "DestinyActivityDefinition"
+    );
+    const aggregateResponses = await Promise.all(
+      profile.characters.map((character) =>
+        this.client.get<unknown>(
+          `/Destiny2/${membershipType}/Account/${membershipId}/Character/${character.characterId}/Stats/AggregateActivityStats/`
+        )
+      )
+    );
+
+    const groups = new Map<string, DungeonOverviewGroup>();
+    for (const response of aggregateResponses) {
+      for (const activity of asArray(asRecord(response).activities)) {
+        this.addAggregateDungeonActivity(groups, asRecord(activity), activityDefinitions);
+      }
+    }
+
+    const dungeonMode = parsePublicMode("dungeon");
+    const recentActivities = await this.getRecentModeActivitiesForScan(
+      membershipType,
+      membershipId,
+      profile.characters.map((character) => character.characterId),
+      dungeonMode,
+      options.historyPages,
+      activityDefinitions
+    );
+
+    for (const activity of recentActivities) {
+      const group = this.groupForDungeonActivity(groups, activity.referenceId, activity.activityName, activityDefinitions);
+      if (!group) {
+        continue;
+      }
+      const completed = statBasicValue(activity.values, "completed") > 0;
+      if (completed && (!group.lastClearedAt || activity.period > group.lastClearedAt)) {
+        group.lastClearedAt = activity.period;
+        group.lastActivityId = activity.activityId;
+      }
+    }
+
+    const completedActivities = options.pgcrLimit > 0
+      ? recentActivities
+        .filter((activity) => statBasicValue(activity.values, "completed") > 0)
+        .filter(uniqueActivity())
+        .slice(0, options.pgcrLimit)
+      : [];
+
+    const scannedGroupNames = new Set<string>();
+    const pgcrResults = await mapLimit(completedActivities, 5, async (activity) => {
+      try {
+        const pgcr = await this.getPgcr(activity.activityId);
+        return { activity, pgcr };
+      } catch {
+        return null;
+      }
+    });
+
+    let pgcrScanned = 0;
+    for (const result of pgcrResults) {
+      if (!result) {
+        continue;
+      }
+      pgcrScanned += 1;
+      const group = this.groupForDungeonActivity(groups, result.activity.referenceId, result.pgcr.activityName, activityDefinitions);
+      if (!group) {
+        continue;
+      }
+      scannedGroupNames.add(group.key);
+      this.applyDungeonPgcrScan(group, result.pgcr, membershipId);
+    }
+
+    for (const group of groups.values()) {
+      if (scannedGroupNames.has(group.key) && !group.flawless.personal && group.flawless.status === "unknown") {
+        group.flawless.status = "not_found_in_scanned_pgcr";
+      }
+    }
+
+    const dungeons = [...groups.values()]
+      .map(finalizeDungeonGroup)
+      .filter((dungeon) => dungeon.fullClears > 0 || dungeon.completions > 0)
+      .sort((a, b) =>
+        b.fullClears - a.fullClears ||
+        b.completions - a.completions ||
+        difficultySort(a.difficulty) - difficultySort(b.difficulty) ||
+        a.name.localeCompare(b.name)
+      );
+    const fastestDungeon = dungeons
+      .filter((dungeon) => dungeon.fastestCompletionMs !== undefined)
+      .sort((a, b) => Number(a.fastestCompletionMs) - Number(b.fastestCompletionMs))[0];
+
+    const result: DungeonOverview = {
+      membershipType,
+      membershipId,
+      mode: "dungeon",
+      modeLabel: "地牢",
+      totals: {
+        activities: dungeons.length,
+        dungeons: dungeons.length,
+        clears: dungeons.reduce((sum, dungeon) => sum + dungeon.fullClears, 0),
+        fullClears: dungeons.reduce((sum, dungeon) => sum + dungeon.fullClears, 0),
+        completions: dungeons.reduce((sum, dungeon) => sum + dungeon.completions, 0),
+        sherpaCompletions: dungeons.reduce((sum, dungeon) => sum + dungeon.sherpaCompletions, 0),
+        kills: dungeons.reduce((sum, dungeon) => sum + dungeon.kills, 0),
+        deaths: dungeons.reduce((sum, dungeon) => sum + dungeon.deaths, 0),
+        secondsPlayed: dungeons.reduce((sum, dungeon) => sum + dungeon.secondsPlayed, 0),
+        fastestCompletionMs: fastestDungeon?.fastestCompletionMs,
+        fastestCompletionDisplay: fastestDungeon?.fastestCompletionDisplay
+      },
+      activities: dungeons,
+      dungeons,
+      scan: {
+        historyPages: options.historyPages,
+        pgcrLimit: options.pgcrLimit,
+        recentActivitiesScanned: recentActivities.length,
+        pgcrScanned,
+        note: "fullClears/completions/fastest are all-time aggregate stats; solo/duo/trio and flawless are only confirmed from scanned recent PGCRs; Bungie public APIs do not expose complete lifetime sherpa counts"
+      },
+      updatedAt: new Date().toISOString()
+    };
+
+    await this.cache.setJson(cacheKey, result, CACHE_TTL.dungeonOverview);
+    return result;
+  }
+
+  async getGrandmasterOverview(
+    membershipType: number,
+    membershipId: string,
+    options: { historyPages: number; pgcrLimit: number; season: GrandmasterSeasonScope }
+  ): Promise<GrandmasterOverview> {
+    const cacheKey = `d2:grandmasters:${membershipType}:${membershipId}:${options.historyPages}:${options.pgcrLimit}:${options.season}`;
+    const cached = await this.cache.getJson<GrandmasterOverview>(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const profile = await this.getProfile(membershipType, membershipId);
+    const activityDefinitions = await this.manifest.getDefinitionMap<RaidActivityDefinition>(
+      "DestinyActivityDefinition"
+    );
+    const activeSeason = await this.getActiveSeasonWindow();
+    const aggregateResponses = await Promise.all(
+      profile.characters.map((character) =>
+        this.client.get<unknown>(
+          `/Destiny2/${membershipType}/Account/${membershipId}/Character/${character.characterId}/Stats/AggregateActivityStats/`
+        )
+      )
+    );
+
+    const groups = new Map<string, GrandmasterOverviewGroup>();
+    for (const response of aggregateResponses) {
+      for (const activity of asArray(asRecord(response).activities)) {
+        this.addAggregateGrandmasterActivity(groups, asRecord(activity), activityDefinitions);
+      }
+    }
+
+    const recentActivities = await this.getRecentGrandmasterActivitiesForScan(
+      membershipType,
+      membershipId,
+      profile.characters.map((character) => character.characterId),
+      options.historyPages,
+      activityDefinitions
+    );
+    const seasonActivities = recentActivities.filter((activity) =>
+      grandmasterActivityInSeason(activity.period, options.season, activeSeason)
+    );
+
+    for (const activity of seasonActivities) {
+      const group = this.groupForGrandmasterActivity(groups, activity.referenceId, activity.activityName, activityDefinitions);
+      if (!group) {
+        continue;
+      }
+      const completed = statBasicValue(activity.values, "completed") > 0;
+      group.attempts += 1;
+      if (completed) {
+        group.currentSeasonClears += 1;
+        if (!group.lastClearedAt || activity.period > group.lastClearedAt) {
+          group.lastClearedAt = activity.period;
+          group.lastActivityId = activity.activityId;
+        }
+      }
+    }
+
+    const activitiesForPgcr = seasonActivities.length > 0 ? seasonActivities : recentActivities;
+    const pgcrCandidates = activitiesForPgcr.filter(uniqueActivity()).slice(0, options.pgcrLimit);
+    const pgcrResults = await mapLimit(pgcrCandidates, 5, async (activity) => {
+      try {
+        const pgcr = await this.getPgcr(activity.activityId);
+        return { activity, pgcr };
+      } catch {
+        return null;
+      }
+    });
+
+    const recent: GrandmasterRecentActivity[] = [];
+    let pgcrScanned = 0;
+    for (const result of pgcrResults) {
+      if (!result) {
+        continue;
+      }
+      pgcrScanned += 1;
+      const group = this.groupForGrandmasterActivity(
+        groups,
+        result.activity.referenceId,
+        result.pgcr.activityName,
+        activityDefinitions
+      );
+      if (group) {
+        this.applyGrandmasterPgcrScan(group, result.activity, result.pgcr, membershipId);
+      }
+      recent.push(this.toGrandmasterRecentActivity(result.activity, result.pgcr, activityDefinitions));
+    }
+
+    const strikes = [...groups.values()]
+      .map(finalizeGrandmasterGroup)
+      .filter((strike) => strike.lifetimeClears > 0 || strike.currentSeasonClears > 0 || strike.attempts > 0)
+      .sort((a, b) => b.currentSeasonClears - a.currentSeasonClears || b.lifetimeClears - a.lifetimeClears || a.name.localeCompare(b.name));
+    const fastest = strikes
+      .filter((strike) => Number(strike.fastestCompletionMs || 0) > 0)
+      .sort((a, b) => Number(a.fastestCompletionMs || Infinity) - Number(b.fastestCompletionMs || Infinity))[0];
+    const totalCompletions = strikes.reduce((sum, strike) => sum + strike.completions, 0);
+    const totalSeconds = strikes.reduce((sum, strike) => sum + strike.secondsPlayed, 0);
+    const currentSeasonReliable = Boolean(activeSeason);
+    const result: GrandmasterOverview = {
+      membershipType,
+      membershipId,
+      season: {
+        scope: options.season,
+        currentSeasonName: activeSeason?.name,
+        currentSeasonStart: activeSeason?.startDate,
+        currentSeasonEnd: activeSeason?.endDate,
+        currentSeasonReliable
+      },
+      totals: {
+        strikes: strikes.length,
+        currentSeasonClears: strikes.reduce((sum, strike) => sum + strike.currentSeasonClears, 0),
+        lifetimeClears: strikes.reduce((sum, strike) => sum + strike.lifetimeClears, 0),
+        attempts: strikes.reduce((sum, strike) => sum + strike.attempts, 0),
+        completions: totalCompletions,
+        kills: strikes.reduce((sum, strike) => sum + strike.kills, 0),
+        deaths: strikes.reduce((sum, strike) => sum + strike.deaths, 0),
+        secondsPlayed: totalSeconds,
+        fastestCompletionMs: fastest?.fastestCompletionMs,
+        fastestCompletionDisplay: fastest?.fastestCompletionDisplay,
+        averageCompletionSeconds: totalCompletions > 0 ? Math.round(totalSeconds / totalCompletions) : undefined
+      },
+      strikes,
+      recent: recent.slice(0, options.pgcrLimit),
+      scan: {
+        historyPages: options.historyPages,
+        pgcrLimit: options.pgcrLimit,
+        season: options.season,
+        recentActivitiesScanned: recentActivities.length,
+        pgcrScanned,
+        currentSeasonReliable,
+        note: currentSeasonReliable
+          ? "生涯通关/最快优先来自 Bungie 聚合统计；当前赛季与最近队伍来自公开 Nightfall 历史和 PGCR 扫描。"
+          : "无法从 Manifest 判定当前赛季，当前赛季字段按近期扫描结果展示。"
+      },
+      updatedAt: new Date().toISOString()
+    };
+
+    await this.cache.setJson(cacheKey, result, CACHE_TTL.grandmasterOverview);
+    return result;
   }
 
   async getHeatmap(
@@ -1318,6 +1596,40 @@ export class DestinyService {
     }
   }
 
+  private addAggregateDungeonActivity(
+    groups: Map<string, DungeonOverviewGroup>,
+    activity: Record<string, unknown>,
+    activityDefinitions: Record<string, RaidActivityDefinition>
+  ): void {
+    const activityHash = optionalNumber(activity.activityHash) ?? optionalString(activity.activityHash);
+    const definition = activityHash === undefined || activityHash === null ? undefined : activityDefinitions[String(activityHash)];
+    if (!definition || !isDungeonActivityDefinition(definition)) {
+      return;
+    }
+
+    const parsed = parseRaidActivityDisplayName(asString(definition.displayProperties?.name, `Dungeon ${activityHash}`));
+    const group = getOrCreateDungeonGroup(groups, parsed, definition);
+    const hashNumber = Number(activityHash);
+    if (Number.isFinite(hashNumber)) {
+      group.activityHashes.add(hashNumber);
+    }
+
+    const values = asRecord(activity.values);
+    group.completions += statBasicValue(values, "activityCompletions");
+    group.fullClears += statBasicValue(values, "activityWins");
+    group.wins = group.fullClears;
+    group.kills += statBasicValue(values, "activityKills");
+    group.deaths += statBasicValue(values, "activityDeaths");
+    group.secondsPlayed += statBasicValue(values, "activitySecondsPlayed");
+
+    const fastest = statBasicValue(values, "fastestCompletionMsForActivity");
+    if (fastest > 0 && (group.fastestCompletionMs === undefined || fastest < group.fastestCompletionMs)) {
+      group.fastestCompletionMs = fastest;
+      group.fastestCompletionDisplay = statDisplayValue(values, "fastestCompletionMsForActivity");
+      group.fastestActivityId = statActivityId(values, "fastestCompletionMsForActivity");
+    }
+  }
+
   private addAggregateModeActivity(
     groups: Map<string, ActivityOverviewGroup>,
     activity: Record<string, unknown>,
@@ -1423,6 +1735,41 @@ export class DestinyService {
       });
   }
 
+  private async getRecentGrandmasterActivitiesForScan(
+    membershipType: number,
+    membershipId: string,
+    characterIds: string[],
+    historyPages: number,
+    activityDefinitions: Record<string, RaidActivityDefinition>
+  ): Promise<ActivitySummary[]> {
+    const perCharacter = await Promise.all(
+      characterIds.map(async (characterId) => {
+        const pages = await Promise.all(
+          Array.from({ length: historyPages }, (_, page) =>
+            this.getCharacterActivitiesForGrandmasterScan(
+              membershipType,
+              membershipId,
+              characterId,
+              RAID_HISTORY_PAGE_SIZE,
+              page,
+              activityDefinitions
+            )
+          )
+        );
+        return pages.flat();
+      })
+    );
+
+    return perCharacter
+      .flat()
+      .filter(uniqueActivity())
+      .sort((a, b) => b.period.localeCompare(a.period))
+      .filter((activity) => {
+        const definition = activity.referenceId === undefined ? undefined : activityDefinitions[String(activity.referenceId)];
+        return definition !== undefined && isGrandmasterActivityDefinition(definition);
+      });
+  }
+
   private async getCharacterActivitiesForRaidScan(
     membershipType: number,
     membershipId: string,
@@ -1462,6 +1809,44 @@ export class DestinyService {
     });
   }
 
+  private async getCharacterActivitiesForGrandmasterScan(
+    membershipType: number,
+    membershipId: string,
+    characterId: string,
+    count: number,
+    page: number,
+    activityDefinitions: Record<string, RaidActivityDefinition>
+  ): Promise<ActivitySummary[]> {
+    const response = await this.client.get<unknown>(
+      `/Destiny2/${membershipType}/Account/${membershipId}/Character/${characterId}/Stats/Activities/`,
+      {
+        query: {
+          count,
+          page,
+          mode: NIGHTFALL_MODE_TYPE
+        }
+      }
+    );
+
+    return asArray(asRecord(response).activities).map((activity) => {
+      const record = asRecord(activity);
+      const activityDetails = asRecord(record.activityDetails);
+      const referenceId = optionalNumber(activityDetails.referenceId);
+      const modeNumber = optionalNumber(activityDetails.mode);
+      const definition = referenceId === undefined ? undefined : activityDefinitions[String(referenceId)];
+
+      return {
+        period: asString(record.period),
+        activityId: asString(activityDetails.instanceId),
+        referenceId,
+        activityName: grandmasterDisplayName(definition, `Activity ${referenceId}`),
+        mode: modeNumber,
+        characterId,
+        values: asRecord(record.values)
+      };
+    });
+  }
+
   private groupForActivity(
     groups: Map<string, RaidOverviewGroup>,
     referenceId: number | undefined,
@@ -1477,6 +1862,18 @@ export class DestinyService {
       (definition && isRaidActivityDefinition(definition) ? getOrCreateRaidGroup(groups, parsed, definition) : null);
   }
 
+  private groupForDungeonActivity(
+    groups: Map<string, DungeonOverviewGroup>,
+    referenceId: number | undefined,
+    fallbackName: string,
+    activityDefinitions: Record<string, RaidActivityDefinition>
+  ): DungeonOverviewGroup | null {
+    const definition = referenceId === undefined ? undefined : activityDefinitions[String(referenceId)];
+    const parsed = parseRaidActivityDisplayName(asString(definition?.displayProperties?.name, fallbackName));
+    return groups.get(parsed.key) ??
+      (definition && isDungeonActivityDefinition(definition) ? getOrCreateDungeonGroup(groups, parsed, definition) : null);
+  }
+
   private groupForModeActivity(
     groups: Map<string, ActivityOverviewGroup>,
     referenceId: number | undefined,
@@ -1489,6 +1886,20 @@ export class DestinyService {
     return groups.get(name) ??
       (definition && isActivityDefinitionForMode(definition, modeType)
         ? getOrCreateActivityGroup(groups, name, definition)
+        : null);
+  }
+
+  private groupForGrandmasterActivity(
+    groups: Map<string, GrandmasterOverviewGroup>,
+    referenceId: number | undefined,
+    fallbackName: string,
+    activityDefinitions: Record<string, RaidActivityDefinition>
+  ): GrandmasterOverviewGroup | null {
+    const definition = referenceId === undefined ? undefined : activityDefinitions[String(referenceId)];
+    const name = grandmasterDisplayName(definition, fallbackName);
+    return groups.get(name) ??
+      (definition && isGrandmasterActivityDefinition(definition)
+        ? getOrCreateGrandmasterGroup(groups, name, definition)
         : null);
   }
 
@@ -1533,14 +1944,149 @@ export class DestinyService {
       };
     }
   }
+
+  private applyDungeonPgcrScan(group: DungeonOverviewGroup, pgcr: PgcrSummary, membershipId: string): void {
+    const playerEntries = pgcr.players.filter((player) => player.membershipId === membershipId);
+    const playerCompleted = playerEntries.some((player) => player.completed);
+    if (!playerCompleted) {
+      return;
+    }
+
+    group.scannedCompletions += 1;
+    const completedPlayers = pgcr.players.filter((player) => player.completed);
+    const fireteamSize = completedPlayers.length || pgcr.players.length;
+    if (fireteamSize === 1) {
+      group.fireteamSizes.solo += 1;
+      group.tags.add("Solo");
+    } else if (fireteamSize === 2) {
+      group.fireteamSizes.duo += 1;
+      group.tags.add("Duo");
+    } else if (fireteamSize === 3) {
+      group.fireteamSizes.trio += 1;
+      group.tags.add("Trio");
+    }
+
+    const personalFlawless = playerEntries.some((player) => player.completed && player.deaths === 0);
+    const fireteamFlawless = completedPlayers.length > 0 && completedPlayers.every((player) => player.deaths === 0);
+    if (personalFlawless) {
+      group.flawless = {
+        status: "confirmed",
+        personal: true,
+        fireteam: fireteamFlawless,
+        activityId: pgcr.activityId,
+        period: pgcr.period
+      };
+      if (fireteamSize === 1) {
+        group.tags.add("Flawless Solo");
+      }
+    }
+  }
+
+  private addAggregateGrandmasterActivity(
+    groups: Map<string, GrandmasterOverviewGroup>,
+    activity: Record<string, unknown>,
+    activityDefinitions: Record<string, RaidActivityDefinition>
+  ): void {
+    const activityHash = optionalNumber(activity.activityHash) ?? optionalString(activity.activityHash);
+    const definition = activityHash === undefined || activityHash === null ? undefined : activityDefinitions[String(activityHash)];
+    if (!definition || !isGrandmasterActivityDefinition(definition)) {
+      return;
+    }
+
+    const group = getOrCreateGrandmasterGroup(groups, grandmasterDisplayName(definition, `Activity ${activityHash}`), definition);
+    const hashNumber = Number(activityHash);
+    if (Number.isFinite(hashNumber)) {
+      group.activityHashes.add(hashNumber);
+    }
+
+    const values = asRecord(activity.values);
+    group.completions += statBasicValue(values, "activityCompletions");
+    group.lifetimeClears += statBasicValue(values, "activityWins");
+    group.kills += statBasicValue(values, "activityKills");
+    group.deaths += statBasicValue(values, "activityDeaths");
+    group.secondsPlayed += statBasicValue(values, "activitySecondsPlayed");
+
+    const fastest = statBasicValue(values, "fastestCompletionMsForActivity");
+    if (fastest > 0 && (group.fastestCompletionMs === undefined || fastest < group.fastestCompletionMs)) {
+      group.fastestCompletionMs = fastest;
+      group.fastestCompletionDisplay = statDisplayValue(values, "fastestCompletionMsForActivity");
+      group.fastestActivityId = statActivityId(values, "fastestCompletionMsForActivity");
+    }
+  }
+
+  private applyGrandmasterPgcrScan(group: GrandmasterOverviewGroup, activity: ActivitySummary, pgcr: PgcrSummary, membershipId: string): void {
+    const playerEntries = pgcr.players.filter((player) => player.membershipId === membershipId);
+    const playerCompleted = playerEntries.some((player) => player.completed) || statBasicValue(activity.values, "completed") > 0;
+    if (!playerCompleted) {
+      return;
+    }
+
+    const durationSeconds = statBasicValue(activity.values, "activityDurationSeconds");
+    if (durationSeconds > 0) {
+      const durationMs = durationSeconds * 1000;
+      if (group.fastestCompletionMs === undefined || durationMs < group.fastestCompletionMs) {
+        group.fastestCompletionMs = durationMs;
+        group.fastestCompletionDisplay = formatDurationSeconds(durationSeconds);
+        group.fastestActivityId = activity.activityId;
+      }
+    }
+    if (!group.lastClearedAt || activity.period > group.lastClearedAt) {
+      group.lastClearedAt = activity.period;
+      group.lastActivityId = activity.activityId;
+    }
+  }
+
+  private toGrandmasterRecentActivity(
+    activity: ActivitySummary,
+    pgcr: PgcrSummary,
+    activityDefinitions: Record<string, RaidActivityDefinition>
+  ): GrandmasterRecentActivity {
+    const definition = activity.referenceId === undefined ? undefined : activityDefinitions[String(activity.referenceId)];
+    const playerRows = pgcr.players.slice().sort((a, b) => Number(b.kills || 0) - Number(a.kills || 0));
+    const completed = statBasicValue(activity.values, "completed") > 0 || pgcr.players.some((player) => player.completed);
+    const durationSeconds = statBasicValue(activity.values, "activityDurationSeconds");
+    return {
+      activityId: activity.activityId,
+      referenceId: activity.referenceId,
+      activityName: grandmasterDisplayName(definition, activity.activityName || pgcr.activityName),
+      pgcrImage: definition?.pgcrImage,
+      period: pgcr.period ?? activity.period,
+      completed,
+      durationSeconds,
+      kills: playerRows.reduce((sum, player) => sum + player.kills, 0),
+      deaths: playerRows.reduce((sum, player) => sum + player.deaths, 0),
+      assists: playerRows.reduce((sum, player) => sum + player.assists, 0),
+      players: playerRows.map(toGrandmasterRecentPlayer)
+    };
+  }
+
+  private async getActiveSeasonWindow(): Promise<SeasonWindow | undefined> {
+    const seasons = await this.getCareerSeasons();
+    const active = seasons?.find((season) => season.active && season.startDate && season.endDate);
+    if (!active?.startDate || !active.endDate) {
+      return undefined;
+    }
+    return {
+      name: active.name,
+      startDate: active.startDate,
+      endDate: active.endDate
+    };
+  }
 }
 
 interface RaidActivityDefinition {
   displayProperties?: {
     name?: string;
+    description?: string;
     icon?: string;
   };
+  selectionScreenDisplayProperties?: {
+    name?: string;
+    description?: string;
+  };
   activityModeTypes?: number[];
+  activityModeHashes?: number[];
+  recommendedLight?: number;
   pgcrImage?: string;
   [key: string]: unknown;
 }
@@ -1578,12 +2124,61 @@ interface RaidOverviewGroup {
   sortOrder: number;
 }
 
+interface DungeonOverviewGroup {
+  key: string;
+  name: string;
+  displayName: string;
+  difficulty: string;
+  difficultyLabel: string;
+  activityHashes: Set<number>;
+  pgcrImage?: string;
+  fullClears: number;
+  completions: number;
+  wins: number;
+  kills: number;
+  deaths: number;
+  secondsPlayed: number;
+  fastestCompletionMs?: number;
+  fastestCompletionDisplay?: string;
+  fastestActivityId?: string;
+  lastClearedAt?: string;
+  lastActivityId?: string;
+  scannedCompletions: number;
+  sherpaCompletions: number;
+  fireteamSizes: {
+    solo: number;
+    duo: number;
+    trio: number;
+  };
+  tags: Set<string>;
+  flawless: DungeonOverviewActivity["flawless"];
+  sortOrder: number;
+}
+
 interface ActivityOverviewGroup {
   name: string;
   activityHashes: Set<number>;
   pgcrImage?: string;
   completions: number;
   wins: number;
+  kills: number;
+  deaths: number;
+  secondsPlayed: number;
+  fastestCompletionMs?: number;
+  fastestCompletionDisplay?: string;
+  fastestActivityId?: string;
+  lastClearedAt?: string;
+  lastActivityId?: string;
+}
+
+interface GrandmasterOverviewGroup {
+  name: string;
+  activityHashes: Set<number>;
+  pgcrImage?: string;
+  currentSeasonClears: number;
+  lifetimeClears: number;
+  attempts: number;
+  completions: number;
   kills: number;
   deaths: number;
   secondsPlayed: number;
@@ -1605,8 +2200,22 @@ function isRaidActivityDefinition(definition: RaidActivityDefinition): boolean {
   return Array.isArray(definition.activityModeTypes) && definition.activityModeTypes.includes(RAID_MODE_TYPE);
 }
 
+function isDungeonActivityDefinition(definition: RaidActivityDefinition): boolean {
+  return Array.isArray(definition.activityModeTypes) && definition.activityModeTypes.includes(DUNGEON_MODE_TYPE);
+}
+
 function isActivityDefinitionForMode(definition: RaidActivityDefinition, modeType: number): boolean {
   return Array.isArray(definition.activityModeTypes) && definition.activityModeTypes.includes(modeType);
+}
+
+function isGrandmasterActivityDefinition(definition: RaidActivityDefinition): boolean {
+  const text = [
+    definition.displayProperties?.name,
+    definition.displayProperties?.description,
+    definition.selectionScreenDisplayProperties?.name,
+    definition.selectionScreenDisplayProperties?.description
+  ].join(" ");
+  return /宗师|grandmaster/iu.test(text);
 }
 
 function getOrCreateRaidGroup(
@@ -1660,6 +2269,50 @@ function getOrCreateRaidGroup(
   return group;
 }
 
+function getOrCreateDungeonGroup(
+  groups: Map<string, DungeonOverviewGroup>,
+  parsed: ParsedRaidActivityName,
+  definition: RaidActivityDefinition
+): DungeonOverviewGroup {
+  const existing = groups.get(parsed.key);
+  if (existing) {
+    existing.pgcrImage ??= definition.pgcrImage;
+    return existing;
+  }
+
+  const group: DungeonOverviewGroup = {
+    key: parsed.key,
+    name: parsed.name,
+    displayName: `${parsed.name}：${parsed.difficultyLabel}`,
+    difficulty: parsed.difficulty,
+    difficultyLabel: parsed.difficultyLabel,
+    activityHashes: new Set(),
+    pgcrImage: definition.pgcrImage,
+    fullClears: 0,
+    completions: 0,
+    wins: 0,
+    kills: 0,
+    deaths: 0,
+    secondsPlayed: 0,
+    scannedCompletions: 0,
+    sherpaCompletions: 0,
+    fireteamSizes: {
+      solo: 0,
+      duo: 0,
+      trio: 0
+    },
+    tags: new Set(),
+    flawless: {
+      status: "unknown",
+      personal: false,
+      fireteam: false
+    },
+    sortOrder: 0
+  };
+  groups.set(parsed.key, group);
+  return group;
+}
+
 function getOrCreateActivityGroup(
   groups: Map<string, ActivityOverviewGroup>,
   name: string,
@@ -1677,6 +2330,33 @@ function getOrCreateActivityGroup(
     pgcrImage: definition.pgcrImage,
     completions: 0,
     wins: 0,
+    kills: 0,
+    deaths: 0,
+    secondsPlayed: 0
+  };
+  groups.set(name, group);
+  return group;
+}
+
+function getOrCreateGrandmasterGroup(
+  groups: Map<string, GrandmasterOverviewGroup>,
+  name: string,
+  definition: RaidActivityDefinition
+): GrandmasterOverviewGroup {
+  const existing = groups.get(name);
+  if (existing) {
+    existing.pgcrImage ??= definition.pgcrImage;
+    return existing;
+  }
+
+  const group: GrandmasterOverviewGroup = {
+    name,
+    activityHashes: new Set(),
+    pgcrImage: definition.pgcrImage,
+    currentSeasonClears: 0,
+    lifetimeClears: 0,
+    attempts: 0,
+    completions: 0,
     kills: 0,
     deaths: 0,
     secondsPlayed: 0
@@ -1765,6 +2445,18 @@ function normalizeActivityDisplayName(name: string): string {
   return normalizeRaidDisplayName(name);
 }
 
+function grandmasterDisplayName(definition: RaidActivityDefinition | undefined, fallback: string): string {
+  const raw =
+    optionalString(definition?.displayProperties?.name) ??
+    optionalString(definition?.selectionScreenDisplayProperties?.name) ??
+    fallback;
+  return raw
+    .replace(/\s*[:：]\s*(Grandmaster|宗师)\s*$/iu, "")
+    .replace(/\s*[（(]\s*(Grandmaster|宗师)\s*[）)]\s*$/iu, "")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
 function isPantheonActivityName(name: string): boolean {
   return /pantheon|众神殿/iu.test(name);
 }
@@ -1818,6 +2510,35 @@ function finalizeRaidGroup(group: RaidOverviewGroup): RaidOverviewActivity {
   };
 }
 
+function finalizeDungeonGroup(group: DungeonOverviewGroup): DungeonOverviewActivity {
+  return {
+    name: group.name,
+    displayName: group.displayName,
+    difficulty: group.difficulty,
+    difficultyLabel: group.difficultyLabel,
+    activityHashes: [...group.activityHashes].sort((a, b) => a - b),
+    pgcrImage: group.pgcrImage,
+    clears: group.fullClears,
+    fullClears: group.fullClears,
+    completions: group.completions,
+    wins: group.wins,
+    kills: group.kills,
+    deaths: group.deaths,
+    secondsPlayed: group.secondsPlayed,
+    fastestCompletionMs: group.fastestCompletionMs,
+    fastestCompletionDisplay: group.fastestCompletionDisplay,
+    fastestActivityId: group.fastestActivityId,
+    lastClearedAt: group.lastClearedAt,
+    lastActivityId: group.lastActivityId,
+    scannedCompletions: group.scannedCompletions,
+    sherpaCompletions: group.sherpaCompletions,
+    fireteamSizes: group.fireteamSizes,
+    tags: [...group.tags],
+    flawless: group.flawless,
+    sortOrder: group.sortOrder
+  };
+}
+
 function finalizeActivityGroup(group: ActivityOverviewGroup): ActivityModeOverviewActivity {
   return {
     name: group.name,
@@ -1835,6 +2556,67 @@ function finalizeActivityGroup(group: ActivityOverviewGroup): ActivityModeOvervi
     lastClearedAt: group.lastClearedAt,
     lastActivityId: group.lastActivityId
   };
+}
+
+function finalizeGrandmasterGroup(group: GrandmasterOverviewGroup): GrandmasterStrikeSummary {
+  const completionsForAverage = group.completions > 0 ? group.completions : group.lifetimeClears;
+  return {
+    name: group.name,
+    activityHashes: [...group.activityHashes].sort((a, b) => a - b),
+    pgcrImage: group.pgcrImage,
+    currentSeasonClears: group.currentSeasonClears,
+    lifetimeClears: group.lifetimeClears,
+    attempts: group.attempts,
+    completions: group.completions,
+    kills: group.kills,
+    deaths: group.deaths,
+    secondsPlayed: group.secondsPlayed,
+    fastestCompletionMs: group.fastestCompletionMs,
+    fastestCompletionDisplay: group.fastestCompletionDisplay,
+    fastestActivityId: group.fastestActivityId,
+    averageCompletionSeconds: completionsForAverage > 0 ? Math.round(group.secondsPlayed / completionsForAverage) : undefined,
+    completionRate: group.attempts > 0 ? round((group.currentSeasonClears / group.attempts) * 100) : 0,
+    lastClearedAt: group.lastClearedAt,
+    lastActivityId: group.lastActivityId
+  };
+}
+
+function grandmasterActivityInSeason(
+  period: string,
+  scope: GrandmasterSeasonScope,
+  activeSeason: SeasonWindow | undefined
+): boolean {
+  if (scope === "all") {
+    return true;
+  }
+  if (!activeSeason) {
+    return true;
+  }
+  const periodMs = new Date(period).getTime();
+  const startMs = new Date(activeSeason.startDate).getTime();
+  const endMs = new Date(activeSeason.endDate).getTime();
+  return Number.isFinite(periodMs) && Number.isFinite(startMs) && Number.isFinite(endMs) && periodMs >= startMs && periodMs <= endMs;
+}
+
+function toGrandmasterRecentPlayer(player: PgcrPlayerSummary): GrandmasterRecentPlayer {
+  return {
+    displayName: player.displayName,
+    membershipId: player.membershipId,
+    emblemPath: player.emblemPath,
+    kills: player.kills,
+    deaths: player.deaths,
+    assists: player.assists,
+    kd: player.kd,
+    completed: player.completed,
+    weapons: player.weapons.slice(0, 3)
+  };
+}
+
+function formatDurationSeconds(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(total / 60);
+  const remainder = total % 60;
+  return `${minutes}m ${String(remainder).padStart(2, "0")}s`;
 }
 
 function addHeatmapBucket(
@@ -2468,6 +3250,12 @@ interface SeasonDefinition {
   endDate?: string;
   backgroundImagePath?: string;
   [key: string]: unknown;
+}
+
+interface SeasonWindow {
+  name: string;
+  startDate: string;
+  endDate: string;
 }
 
 interface PresentationNodeDefinition {

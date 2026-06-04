@@ -17,6 +17,8 @@ export const CACHE_TTL = {
   heatmap: 30 * 60,
   heatmapLong: 24 * 60 * 60,
   raidOverview: 30 * 60,
+  dungeonOverview: 30 * 60,
+  grandmasterOverview: 30 * 60,
   weapons: 30 * 60,
   craftables: 30 * 60,
   catalysts: 30 * 60,

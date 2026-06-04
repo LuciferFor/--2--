@@ -47,7 +47,15 @@ describe("d2stats core", () => {
     assert.equal(catalysts, "http://d2.local/api/d2/catalysts/qq/607972716");
 
     const dungeons = buildPublicDataUrl("dungeons", target, { historyPages: 3 }, resolveConfig({ baseUrl: "http://d2.local" }));
-    assert.equal(dungeons, "http://d2.local/api/d2/dungeons/3/4611686018428939884?historyPages=3");
+    assert.equal(dungeons, "http://d2.local/api/d2/dungeons/3/4611686018428939884?historyPages=3&pgcrLimit=100");
+
+    const grandmasters = buildPublicDataUrl(
+      "grandmasters",
+      target,
+      { historyPages: 10, pgcrLimit: 50, season: "current" },
+      resolveConfig({ baseUrl: "http://d2.local" }),
+    );
+    assert.equal(grandmasters, "http://d2.local/api/d2/grandmasters/3/4611686018428939884?historyPages=10&pgcrLimit=50&season=current");
 
     const heatmap = buildPublicDataUrl(
       "heatmap",
@@ -328,19 +336,63 @@ describe("d2stats core", () => {
               membershipId: "4611686018428939884",
               mode: "dungeon",
               modeLabel: "地牢",
-              totals: { activities: 1, clears: 2, kills: 50, deaths: 5, secondsPlayed: 1800 },
+              totals: {
+                activities: 1,
+                dungeons: 1,
+                clears: 2,
+                fullClears: 2,
+                completions: 2,
+                sherpaCompletions: 0,
+                kills: 50,
+                deaths: 5,
+                secondsPlayed: 1800,
+                fastestCompletionDisplay: "15:00.000",
+              },
               activities: [
                 {
                   name: "二象性",
+                  displayName: "二象性：普通",
+                  difficulty: "normal",
+                  difficultyLabel: "普通",
                   activityHashes: [1],
                   clears: 2,
+                  fullClears: 2,
+                  completions: 2,
+                  wins: 2,
                   kills: 50,
                   deaths: 5,
                   secondsPlayed: 1800,
                   fastestCompletionDisplay: "15:00.000",
+                  scannedCompletions: 1,
+                  sherpaCompletions: 0,
+                  fireteamSizes: { solo: 1, duo: 0, trio: 0 },
+                  tags: ["Flawless Solo"],
+                  flawless: { status: "confirmed", personal: true, fireteam: true },
                 },
               ],
-              scan: { historyPages: 2 },
+              dungeons: [
+                {
+                  name: "二象性",
+                  displayName: "二象性：普通",
+                  difficulty: "normal",
+                  difficultyLabel: "普通",
+                  activityHashes: [1],
+                  clears: 2,
+                  fullClears: 2,
+                  completions: 2,
+                  wins: 2,
+                  kills: 50,
+                  deaths: 5,
+                  secondsPlayed: 1800,
+                  fastestCompletionDisplay: "15:00.000",
+                  scannedCompletions: 1,
+                  sherpaCompletions: 0,
+                  fireteamSizes: { solo: 1, duo: 0, trio: 0 },
+                  tags: ["Flawless Solo"],
+                  flawless: { status: "confirmed", personal: true, fireteam: true },
+                },
+              ],
+              scan: { historyPages: 2, pgcrLimit: 100, pgcrScanned: 1 },
               updatedAt: "2026-06-03T00:00:00.000Z",
             },
           });
@@ -348,6 +400,8 @@ describe("d2stats core", () => {
         renderHtmlToPng: async (html) => {
           assert.match(html, /DESTINY 2 DUNGEON OVERVIEW/);
           assert.match(html, /二象性/);
+          assert.match(html, /Flawless Solo/);
+          assert.match(html, /地牢全程次数/);
           return Buffer.from("png-bytes");
         },
       },
@@ -355,10 +409,137 @@ describe("d2stats core", () => {
 
     assert.deepEqual(calls, [
       "http://d2.local/api/d2/namecard/3/4611686018428939884",
-      "http://d2.local/api/d2/dungeons/3/4611686018428939884?historyPages=2",
+      "http://d2.local/api/d2/dungeons/3/4611686018428939884?historyPages=2&pgcrLimit=100",
     ]);
     assert.equal(result.content[0].type, "image");
     assert.equal(result.details.card, "dungeon_overview");
+  });
+
+  it("renders grandmaster cards from public JSON", async () => {
+    const calls = [];
+    const result = await queryCard(
+      { target: "607972716", command: "/宗师", historyPages: 10, pgcrLimit: 50, season: "current" },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async (url) => {
+          calls.push(String(url));
+          if (String(url).includes("/bindings/qq/")) {
+            return jsonResponse({
+              success: true,
+              data: {
+                qq: "607972716",
+                membershipType: 3,
+                membershipId: "4611686018428939884",
+                bungieName: "Lucifer#8571",
+                displayName: "Lucifer",
+                displayNameCode: 8571,
+              },
+            });
+          }
+          if (String(url).includes("/namecard/")) {
+            return jsonResponse({
+              success: true,
+              data: {
+                membershipType: 3,
+                membershipId: "4611686018428939884",
+                profile: {
+                  bungieName: "Lucifer#8571",
+                  displayName: "Lucifer",
+                  displayNameCode: 8571,
+                  characters: [
+                    {
+                      className: "Warlock",
+                      light: 2020,
+                      dateLastPlayed: "2026-06-03T00:00:00.000Z",
+                      emblemPath: "/common/destiny2_content/icons/current-icon.jpg",
+                      emblemBackgroundPath: "/common/destiny2_content/icons/current-card.jpg",
+                    },
+                  ],
+                },
+              },
+            });
+          }
+          assert.equal(String(url), "http://d2.local/api/d2/grandmasters/3/4611686018428939884?historyPages=10&pgcrLimit=50&season=current");
+          return jsonResponse({
+            success: true,
+            data: {
+              membershipType: 3,
+              membershipId: "4611686018428939884",
+              season: { scope: "current", currentSeasonName: "赛季：回响", currentSeasonReliable: true },
+              totals: {
+                strikes: 1,
+                currentSeasonClears: 2,
+                lifetimeClears: 5,
+                attempts: 3,
+                completions: 5,
+                kills: 300,
+                deaths: 10,
+                secondsPlayed: 7200,
+                fastestCompletionDisplay: "20m 00s",
+                averageCompletionSeconds: 1440,
+              },
+              strikes: [
+                {
+                  name: "洞悉终界",
+                  activityHashes: [7001],
+                  currentSeasonClears: 2,
+                  lifetimeClears: 5,
+                  attempts: 3,
+                  completions: 5,
+                  kills: 300,
+                  deaths: 10,
+                  secondsPlayed: 7200,
+                  fastestCompletionDisplay: "20m 00s",
+                  averageCompletionSeconds: 1440,
+                  completionRate: 66.67,
+                },
+              ],
+              recent: [
+                {
+                  activityId: "990",
+                  activityName: "洞悉终界",
+                  period: "2026-06-03T00:00:00.000Z",
+                  completed: true,
+                  durationSeconds: 1200,
+                  kills: 120,
+                  deaths: 3,
+                  assists: 30,
+                  players: [
+                    {
+                      displayName: "Lucifer#8571",
+                      kills: 50,
+                      deaths: 1,
+                      assists: 6,
+                      kd: 50,
+                      completed: true,
+                      weapons: [{ referenceId: "99", name: "Wish-Ender", kills: 30, precisionKills: 0, secondsUsed: 0 }],
+                    },
+                  ],
+                },
+              ],
+              scan: { note: "宗师测试", historyPages: 10, pgcrLimit: 50, pgcrScanned: 1 },
+              updatedAt: "2026-06-03T00:00:00.000Z",
+            },
+          });
+        },
+        renderHtmlToPng: async (html) => {
+          assert.match(html, /DESTINY 2 GRANDMASTERS/);
+          assert.match(html, /Lucifer#8571/);
+          assert.match(html, /洞悉终界/);
+          assert.match(html, /最近宗师队伍/);
+          assert.match(html, /Wish-Ender/);
+          return Buffer.from("png-bytes");
+        },
+      },
+    );
+
+    assert.deepEqual(calls, [
+      "http://d2.local/api/d2/bindings/qq/607972716",
+      "http://d2.local/api/d2/namecard/3/4611686018428939884",
+      "http://d2.local/api/d2/grandmasters/3/4611686018428939884?historyPages=10&pgcrLimit=50&season=current",
+    ]);
+    assert.equal(result.content[0].type, "image");
+    assert.equal(result.details.card, "grandmasters");
   });
 
   it("renders heatmap cards from public JSON", async () => {

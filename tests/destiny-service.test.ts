@@ -70,6 +70,39 @@ const fakeManifest = {
         }
       };
     }
+    if (entityType === "DestinyActivityDefinition") {
+      return {
+        "1": {
+          displayProperties: { name: "玻璃拱顶" },
+          activityModeTypes: [4],
+          pgcrImage: "/common/destiny2_content/icons/raid.jpg"
+        },
+        "7001": {
+          displayProperties: {
+            name: "洞悉终界：宗师",
+            description: "宗师夜幕"
+          },
+          selectionScreenDisplayProperties: { description: "Grandmaster Nightfall" },
+          activityModeTypes: [16],
+          pgcrImage: "/common/destiny2_content/icons/gm.jpg"
+        },
+        "8001": {
+          displayProperties: { name: "二象性：普通" },
+          activityModeTypes: [82],
+          pgcrImage: "/common/destiny2_content/icons/dungeon.jpg"
+        }
+      };
+    }
+    if (entityType === "DestinySeasonDefinition") {
+      return {
+        "500": {
+          displayProperties: { name: "赛季：回响" },
+          seasonNumber: 25,
+          startDate: "2026-01-01T00:00:00.000Z",
+          endDate: "2026-12-31T00:00:00.000Z"
+        }
+      };
+    }
     return {};
   }
 };
@@ -174,6 +207,47 @@ class FakeBungieClient {
     }
 
     if (path.includes("/Stats/Activities/")) {
+      if (Number(options?.query?.mode) === 82) {
+        return {
+          activities: [
+            {
+              period: "2026-06-02T00:00:00.000Z",
+              activityDetails: {
+                instanceId: "880",
+                referenceId: 8001,
+                mode: 82
+              },
+              values: {
+                completed: { basic: { value: 1 } },
+                kills: { basic: { value: 80 } },
+                deaths: { basic: { value: 0 } },
+                activityDurationSeconds: { basic: { value: 1800 } }
+              }
+            }
+          ]
+        };
+      }
+      if (Number(options?.query?.mode) === 16) {
+        return {
+          activities: [
+            {
+              period: "2026-06-03T00:00:00.000Z",
+              activityDetails: {
+                instanceId: "990",
+                referenceId: 7001,
+                mode: 16
+              },
+              values: {
+                completed: { basic: { value: 1 } },
+                kills: { basic: { value: 120 } },
+                deaths: { basic: { value: 3 } },
+                assists: { basic: { value: 20 } },
+                activityDurationSeconds: { basic: { value: 1200 } }
+              }
+            }
+          ]
+        };
+      }
       return {
         activities: [
           {
@@ -190,6 +264,80 @@ class FakeBungieClient {
     }
 
     if (path.includes("/Stats/PostGameCarnageReport/")) {
+      if (path.includes("/880/")) {
+        return {
+          period: "2026-06-02T00:00:00.000Z",
+          activityDetails: {
+            referenceId: 8001,
+            mode: 82
+          },
+          entries: [
+            {
+              player: {
+                destinyUserInfo: {
+                  bungieGlobalDisplayName: "Guardian",
+                  membershipType: 3,
+                  membershipId: "4611686018"
+                }
+              },
+              values: {
+                kills: { basic: { value: 80 } },
+                deaths: { basic: { value: 0 } },
+                assists: { basic: { value: 12 } },
+                completed: { basic: { value: 1 } }
+              },
+              extended: { weapons: [] }
+            }
+          ],
+          teams: []
+        };
+      }
+      if (path.includes("/990/")) {
+        return {
+          period: "2026-06-03T00:00:00.000Z",
+          activityDetails: {
+            referenceId: 7001,
+            mode: 16
+          },
+          entries: [
+            {
+              player: {
+                destinyUserInfo: {
+                  bungieGlobalDisplayName: "Guardian",
+                  membershipType: 3,
+                  membershipId: "4611686018"
+                }
+              },
+              values: {
+                kills: { basic: { value: 50 } },
+                deaths: { basic: { value: 1 } },
+                assists: { basic: { value: 6 } },
+                completed: { basic: { value: 1 } }
+              },
+              extended: {
+                weapons: [{ referenceId: 99, values: { kills: { basic: { value: 30 } } } }]
+              }
+            },
+            {
+              player: {
+                destinyUserInfo: {
+                  bungieGlobalDisplayName: "Teammate",
+                  membershipType: 3,
+                  membershipId: "4611686019"
+                }
+              },
+              values: {
+                kills: { basic: { value: 40 } },
+                deaths: { basic: { value: 2 } },
+                assists: { basic: { value: 8 } },
+                completed: { basic: { value: 1 } }
+              },
+              extended: { weapons: [] }
+            }
+          ],
+          teams: []
+        };
+      }
       return {
         period: "2026-06-03T00:00:00.000Z",
         activityDetails: {
@@ -226,6 +374,41 @@ class FakeBungieClient {
             referenceId: 99,
             values: {
               uniqueWeaponKills: { basic: { value: 15 } }
+            }
+          }
+        ]
+      };
+    }
+
+    if (path.includes("/Stats/AggregateActivityStats/")) {
+      return {
+        activities: [
+          {
+            activityHash: 8001,
+            values: {
+              activityCompletions: { basic: { value: 7 } },
+              activityWins: { basic: { value: 5 } },
+              activityKills: { basic: { value: 800 } },
+              activityDeaths: { basic: { value: 20 } },
+              activitySecondsPlayed: { basic: { value: 18000 } },
+              fastestCompletionMsForActivity: {
+                basic: { value: 1800000, displayValue: "30m 00s" },
+                activityId: "880"
+              }
+            }
+          },
+          {
+            activityHash: 7001,
+            values: {
+              activityCompletions: { basic: { value: 5 } },
+              activityWins: { basic: { value: 4 } },
+              activityKills: { basic: { value: 300 } },
+              activityDeaths: { basic: { value: 15 } },
+              activitySecondsPlayed: { basic: { value: 7200 } },
+              fastestCompletionMsForActivity: {
+                basic: { value: 1200000, displayValue: "20m 00s" },
+                activityId: "990"
+              }
             }
           }
         ]
@@ -339,6 +522,60 @@ describe("DestinyService", () => {
         }
       ],
       scan: { candidateRecords: 1, recordsReturned: 1, collectiblesReturned: 1 }
+    });
+    await expect(
+      service.getDungeonOverview(3, "4611686018", { historyPages: 1, pgcrLimit: 5 })
+    ).resolves.toMatchObject({
+      totals: {
+        dungeons: 1,
+        fullClears: 5,
+        completions: 7,
+        fastestCompletionDisplay: "30m 00s"
+      },
+      dungeons: [
+        {
+          name: "二象性",
+          difficultyLabel: "普通",
+          fullClears: 5,
+          completions: 7,
+          fastestCompletionDisplay: "30m 00s",
+          fireteamSizes: { solo: 1 },
+          flawless: { status: "confirmed", personal: true, fireteam: true },
+          tags: expect.arrayContaining(["Solo", "Flawless Solo"])
+        }
+      ],
+      activities: [{ name: "二象性" }],
+      scan: { recentActivitiesScanned: 1, pgcrScanned: 1 }
+    });
+    await expect(
+      service.getGrandmasterOverview(3, "4611686018", { historyPages: 1, pgcrLimit: 5, season: "current" })
+    ).resolves.toMatchObject({
+      season: { currentSeasonReliable: true, currentSeasonName: "赛季：回响" },
+      totals: { strikes: 1, currentSeasonClears: 1, lifetimeClears: 4 },
+      strikes: [
+        {
+          name: "洞悉终界",
+          currentSeasonClears: 1,
+          lifetimeClears: 4,
+          fastestCompletionDisplay: "20m 00s",
+          completionRate: 100
+        }
+      ],
+      recent: [
+        {
+          activityId: "990",
+          activityName: "洞悉终界",
+          completed: true,
+          players: expect.arrayContaining([
+            expect.objectContaining({
+              displayName: "Guardian",
+              kills: 50,
+              weapons: [expect.objectContaining({ referenceId: "99" })]
+            })
+          ])
+        }
+      ],
+      scan: { recentActivitiesScanned: 1, pgcrScanned: 1 }
     });
   });
 

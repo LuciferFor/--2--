@@ -462,6 +462,7 @@ function isAllowedD2Path(path: string): boolean {
     /^\/api\/d2\/pvp\/[^/?#]+\/[^/?#]+$/,
     /^\/api\/d2\/raids\/[^/?#]+\/[^/?#]+$/,
     /^\/api\/d2\/dungeons\/[^/?#]+\/[^/?#]+$/,
+    /^\/api\/d2\/grandmasters\/[^/?#]+\/[^/?#]+$/,
     /^\/api\/d2\/activities\/[^/?#]+\/[^/?#]+$/,
     /^\/api\/d2\/heatmap\/[^/?#]+\/[^/?#]+$/,
     /^\/api\/d2\/namecard\/[^/?#]+\/[^/?#]+$/,

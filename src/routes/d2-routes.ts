@@ -178,7 +178,21 @@ export async function registerD2Routes(app: FastifyInstance, deps: D2RouteDeps):
     const { membershipType, membershipId } = parseMembershipParams(request.params as Params);
     const query = request.query as Query;
     const data = await deps.destinyService.getDungeonOverview(membershipType, membershipId, {
-      historyPages: parseBoundedInteger(query.historyPages, "historyPages", 1, 10, 1)
+      historyPages: parseBoundedInteger(query.historyPages, "historyPages", 1, 10, 10),
+      pgcrLimit: parseBoundedInteger(query.pgcrLimit, "pgcrLimit", 0, 200, 100)
+    });
+    await recordQuery(deps.store, request, false);
+    return ok(data, { tookMs: Date.now() - started });
+  });
+
+  app.get("/api/d2/grandmasters/:membershipType/:membershipId", async (request) => {
+    const started = Date.now();
+    const { membershipType, membershipId } = parseMembershipParams(request.params as Params);
+    const query = request.query as Query;
+    const data = await deps.destinyService.getGrandmasterOverview(membershipType, membershipId, {
+      historyPages: parseBoundedInteger(query.historyPages, "historyPages", 1, 10, 10),
+      pgcrLimit: parseBoundedInteger(query.pgcrLimit, "pgcrLimit", 0, 200, 50),
+      season: parseGrandmasterSeason(query.season)
     });
     await recordQuery(deps.store, request, false);
     return ok(data, { tookMs: Date.now() - started });
@@ -519,6 +533,14 @@ function parseHeatmapRange(value: unknown): "all" | "year" | "recent" {
     return range;
   }
   throw new BadRequestError("range must be one of all, year, recent");
+}
+
+function parseGrandmasterSeason(value: unknown): "current" | "all" {
+  const season = typeof value === "string" && value.trim().length > 0 ? value.trim() : "current";
+  if (season === "current" || season === "all") {
+    return season;
+  }
+  throw new BadRequestError("season must be one of current or all");
 }
 
 function parseHeatmapYear(value: unknown, timezone: string): number {

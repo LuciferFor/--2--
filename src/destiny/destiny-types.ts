@@ -352,6 +352,152 @@ export interface ActivityModeOverview {
   updatedAt: string;
 }
 
+export interface DungeonOverviewActivity {
+  name: string;
+  displayName?: string;
+  difficulty: string;
+  difficultyLabel: string;
+  activityHashes: number[];
+  pgcrImage?: string;
+  clears: number;
+  fullClears: number;
+  completions: number;
+  wins: number;
+  kills: number;
+  deaths: number;
+  secondsPlayed: number;
+  fastestCompletionMs?: number;
+  fastestCompletionDisplay?: string;
+  fastestActivityId?: string;
+  lastClearedAt?: string;
+  lastActivityId?: string;
+  scannedCompletions: number;
+  sherpaCompletions: number;
+  fireteamSizes: {
+    solo: number;
+    duo: number;
+    trio: number;
+  };
+  tags: string[];
+  flawless: RaidOverviewFlawlessStatus;
+  sortOrder: number;
+}
+
+export interface DungeonOverview {
+  membershipType: number;
+  membershipId: string;
+  mode: "dungeon";
+  modeLabel: string;
+  totals: {
+    activities: number;
+    dungeons: number;
+    clears: number;
+    fullClears: number;
+    completions: number;
+    sherpaCompletions: number;
+    kills: number;
+    deaths: number;
+    secondsPlayed: number;
+    fastestCompletionMs?: number;
+    fastestCompletionDisplay?: string;
+  };
+  activities: DungeonOverviewActivity[];
+  dungeons: DungeonOverviewActivity[];
+  scan: {
+    historyPages: number;
+    pgcrLimit: number;
+    recentActivitiesScanned: number;
+    pgcrScanned: number;
+    note: string;
+  };
+  updatedAt: string;
+}
+
+export type GrandmasterSeasonScope = "current" | "all";
+
+export interface GrandmasterStrikeSummary {
+  name: string;
+  activityHashes: number[];
+  pgcrImage?: string;
+  currentSeasonClears: number;
+  lifetimeClears: number;
+  attempts: number;
+  completions: number;
+  kills: number;
+  deaths: number;
+  secondsPlayed: number;
+  fastestCompletionMs?: number;
+  fastestCompletionDisplay?: string;
+  fastestActivityId?: string;
+  averageCompletionSeconds?: number;
+  completionRate: number;
+  lastClearedAt?: string;
+  lastActivityId?: string;
+}
+
+export interface GrandmasterRecentPlayer {
+  displayName: string;
+  membershipId?: string;
+  emblemPath?: string;
+  kills: number;
+  deaths: number;
+  assists: number;
+  kd: number;
+  completed: boolean;
+  weapons: WeaponUsageSummary[];
+}
+
+export interface GrandmasterRecentActivity {
+  activityId: string;
+  referenceId?: number;
+  activityName: string;
+  pgcrImage?: string;
+  period?: string;
+  completed: boolean;
+  durationSeconds: number;
+  kills: number;
+  deaths: number;
+  assists: number;
+  players: GrandmasterRecentPlayer[];
+}
+
+export interface GrandmasterOverview {
+  membershipType: number;
+  membershipId: string;
+  season: {
+    scope: GrandmasterSeasonScope;
+    currentSeasonName?: string;
+    currentSeasonStart?: string;
+    currentSeasonEnd?: string;
+    currentSeasonReliable: boolean;
+  };
+  totals: {
+    strikes: number;
+    currentSeasonClears: number;
+    lifetimeClears: number;
+    attempts: number;
+    completions: number;
+    kills: number;
+    deaths: number;
+    secondsPlayed: number;
+    fastestCompletionMs?: number;
+    fastestCompletionDisplay?: string;
+    averageCompletionSeconds?: number;
+  };
+  strikes: GrandmasterStrikeSummary[];
+  recent: GrandmasterRecentActivity[];
+  scan: {
+    historyPages: number;
+    pgcrLimit: number;
+    season: GrandmasterSeasonScope;
+    recentActivitiesScanned: number;
+    pgcrScanned: number;
+    currentSeasonReliable: boolean;
+    note: string;
+  };
+  updatedAt: string;
+}
+
 export interface HeatmapBucket {
   key: string;
   activities: number;
