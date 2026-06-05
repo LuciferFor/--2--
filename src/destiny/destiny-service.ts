@@ -1,5 +1,6 @@
 import type { CacheStore } from "../cache/cache.js";
 import type { Store } from "../db/store.js";
+import { randomBytes } from "node:crypto";
 import { BadRequestError, NotFoundError } from "../lib/errors.js";
 import { asArray, asBoolean, asNumber, asRecord, asString, numberFrom, optionalNumber, optionalString } from "../lib/json.js";
 import {
@@ -38,6 +39,7 @@ import type {
   HeatmapCalendarYear,
   HeatmapRange,
   HeatmapSummary,
+  InventoryArmorStatSummary,
   InventoryArmorStatsSummary,
   InventoryActionResult,
   InventoryBucketFilter,
@@ -47,6 +49,14 @@ import type {
   InventorySearchSummary,
   InventorySocketSummary,
   InventorySummary,
+  LoadoutOptimizerApplyResult,
+  LoadoutOptimizerArmorItem,
+  LoadoutOptimizerBuild,
+  LoadoutOptimizerFragmentSuggestion,
+  LoadoutOptimizerSearchSummary,
+  LoadoutOptimizerStatModSuggestion,
+  LoadoutOptimizerTargetStat,
+  LoadoutOptimizerStatValue,
   LoadoutsSummary,
   NamecardSummary,
   PgcrPlayerSummary,
@@ -83,6 +93,38 @@ const HEATMAP_FULL_HISTORY_MAX_PAGES = 100;
 const KINETIC_BUCKET_HASHES = new Set([1498876634]);
 const ENERGY_BUCKET_HASHES = new Set([2465295065]);
 const POWER_BUCKET_HASHES = new Set([953998645]);
+const ARMOR_BUCKETS: Record<number, { slot: string; label: string; order: number }> = {
+  3448274439: { slot: "helmet", label: "头盔", order: 10 },
+  3551918588: { slot: "gauntlets", label: "臂铠", order: 20 },
+  14239492: { slot: "chest", label: "胸甲", order: 30 },
+  20886954: { slot: "legs", label: "腿甲", order: 40 },
+  1585787867: { slot: "class_item", label: "职业物品", order: 50 }
+};
+const ARMOR_SLOT_ORDER = ["helmet", "gauntlets", "chest", "legs", "class_item"] as const;
+const LOADOUT_OPTIMIZER_SESSION_TTL_SECONDS = 10 * 60;
+const LOADOUT_OPTIMIZER_MAX_PARTIALS = 3000;
+const LOADOUT_OPTIMIZER_MAX_FRAGMENT_COMBOS = 2000;
+const LOADOUT_OPTIMIZER_STAT_HASHES = {
+  mobility: 2996146975,
+  resilience: 392767087,
+  recovery: 1943323491,
+  discipline: 1735777505,
+  intellect: 144602215,
+  strength: 4244567218
+} as const;
+const LOADOUT_OPTIMIZER_STAT_LABELS: Record<string, string> = {
+  mobility: "机动",
+  resilience: "韧性",
+  recovery: "恢复",
+  discipline: "纪律",
+  intellect: "智慧",
+  strength: "力量"
+};
+const LOADOUT_OPTIMIZER_DEFAULT_TARGETS: Record<string, number> = {
+  recovery: 100,
+  discipline: 100,
+  strength: 100
+};
 const CATALYST_SLOT_ORDER: CatalystSlot[] = ["kinetic", "energy", "power", "unknown"];
 const CATALYST_SLOT_LABELS: Record<CatalystSlot, string> = {
   kinetic: "动能武器",
@@ -1199,6 +1241,140 @@ export class DestinyService {
     };
   }
 
+  async searchLoadoutOptimizer(
+    membershipType: number,
+    membershipId: string,
+    accessToken: string,
+    request: {
+      qq?: string;
+      className: string;
+      targetStats?: Record<string, unknown>;
+      includeCurrentSubclassFragments?: boolean;
+      simulateStatMods?: boolean;
+      limit?: number;
+    }
+  ): Promise<LoadoutOptimizerSearchSummary> {
+    const inventory = await this.getPrivateInventory(membershipType, membershipId, accessToken, request.qq);
+    const classType = normalizeOptimizerClassType(request.className);
+    const character = selectOptimizerCharacter(inventory.characters, classType);
+    if (!character) {
+      throw new BadRequestError("selected class was not found on this account", { className: request.className });
+    }
+    const targets = normalizeOptimizerTargets(request.targetStats);
+    const includeCurrentSubclassFragments = request.includeCurrentSubclassFragments !== false;
+    const simulateStatMods = request.simulateStatMods !== false;
+    const limit = clampIntegerValue(request.limit, 3, 1, 10);
+    const search = buildOptimizerSearch(inventory, character, targets, {
+      includeCurrentSubclassFragments,
+      simulateStatMods,
+      limit
+    });
+    const sessionId = randomBytes(12).toString("hex");
+    const result: LoadoutOptimizerSearchSummary = {
+      qq: request.qq,
+      membershipType,
+      membershipId,
+      sessionId,
+      className: character.className,
+      classType: character.classType,
+      characterId: character.characterId,
+      targets,
+      options: {
+        includeCurrentSubclassFragments,
+        simulateStatMods,
+        limit
+      },
+      ...search,
+      updatedAt: new Date().toISOString()
+    };
+    await this.cache.setJson(optimizerSessionCacheKey(request.qq, sessionId), result, LOADOUT_OPTIMIZER_SESSION_TTL_SECONDS);
+    return result;
+  }
+
+  async applyLoadoutOptimizerBuild(
+    membershipType: number,
+    membershipId: string,
+    accessToken: string,
+    request: { qq: string; sessionId: string; buildId: string; characterId?: string; confirm: boolean }
+  ): Promise<LoadoutOptimizerApplyResult> {
+    if (!request.confirm) {
+      throw new BadRequestError("confirm must be true to apply a loadout optimizer build");
+    }
+    const cached = await this.cache.getJson<LoadoutOptimizerSearchSummary>(
+      optimizerSessionCacheKey(request.qq, request.sessionId)
+    );
+    if (!cached || cached.qq !== request.qq || cached.membershipType !== membershipType || cached.membershipId !== membershipId) {
+      throw new NotFoundError("loadout optimizer session was not found or expired");
+    }
+    const build = cached.builds.find((entry) => entry.buildId === request.buildId);
+    if (!build) {
+      throw new NotFoundError("loadout optimizer build was not found");
+    }
+    const characterId = request.characterId || cached.characterId;
+    if (characterId !== cached.characterId) {
+      throw new BadRequestError("characterId does not match the optimizer session");
+    }
+
+    const transferredItemIds: string[] = [];
+    const bungieResponses: unknown[] = [];
+    for (const item of build.armor) {
+      if (item.owner === "vault") {
+        const transfer = await this.transferInventoryItem(membershipType, membershipId, accessToken, {
+          qq: request.qq,
+          itemReferenceHash: item.itemHash,
+          stackSize: 1,
+          transferToVault: false,
+          itemId: item.itemInstanceId,
+          characterId
+        });
+        transferredItemIds.push(item.itemInstanceId);
+        bungieResponses.push(transfer.bungieResponse);
+      } else if (item.owner === "inventory" && item.characterId && item.characterId !== characterId) {
+        const toVault = await this.transferInventoryItem(membershipType, membershipId, accessToken, {
+          qq: request.qq,
+          itemReferenceHash: item.itemHash,
+          stackSize: 1,
+          transferToVault: true,
+          itemId: item.itemInstanceId,
+          characterId: item.characterId
+        });
+        const fromVault = await this.transferInventoryItem(membershipType, membershipId, accessToken, {
+          qq: request.qq,
+          itemReferenceHash: item.itemHash,
+          stackSize: 1,
+          transferToVault: false,
+          itemId: item.itemInstanceId,
+          characterId
+        });
+        transferredItemIds.push(item.itemInstanceId);
+        bungieResponses.push(toVault.bungieResponse, fromVault.bungieResponse);
+      }
+    }
+
+    const equippedItemIds = build.armor.map((item) => item.itemInstanceId);
+    const equip = await this.equipInventoryItems(membershipType, membershipId, accessToken, {
+      qq: request.qq,
+      itemIds: equippedItemIds,
+      characterId
+    });
+    bungieResponses.push(equip.bungieResponse);
+    return {
+      qq: request.qq,
+      membershipType,
+      membershipId,
+      sessionId: request.sessionId,
+      buildId: request.buildId,
+      characterId,
+      transferredItemIds,
+      equippedItemIds,
+      statMods: build.statMods,
+      fragments: build.fragments,
+      bungieResponses,
+      message: "已应用配装防具；属性模组和碎片请按推荐图手动调整。",
+      updatedAt: new Date().toISOString()
+    };
+  }
+
   async getRaidOverview(
     membershipType: number,
     membershipId: string,
@@ -2016,7 +2192,7 @@ export class DestinyService {
       damageType: optionalString(instance.damageType),
       energyCapacity: optionalNumber(energy.energyCapacity),
       energyUsed: optionalNumber(energy.energyUsed),
-      ...inventorySocketsForItem(definition, socketComponent, reusablePlugComponent, inventoryDefinitions),
+      ...inventorySocketsForItem(definition, socketComponent, reusablePlugComponent, inventoryDefinitions, statDefinitions),
       ...inventoryArmorStatsForItem(definition, statComponent, statDefinitions)
     };
   }
@@ -3816,6 +3992,7 @@ interface InventoryItemDefinition {
   sockets?: {
     socketEntries?: unknown[];
   };
+  investmentStats?: unknown[];
   quality?: {
     displayVersionWatermarkIcons?: string[];
   };
@@ -3933,7 +4110,8 @@ function inventorySocketsForItem(
   definition: InventoryItemDefinition | undefined,
   socketComponent: Record<string, unknown>,
   reusablePlugComponent: Record<string, unknown>,
-  inventoryDefinitions: Record<string, InventoryItemDefinition>
+  inventoryDefinitions: Record<string, InventoryItemDefinition>,
+  statDefinitions: Record<string, StatDefinition>
 ): { sockets?: InventorySocketSummary[] } {
   const rawSockets = asArray(socketComponent.sockets);
   if (rawSockets.length === 0) {
@@ -3948,12 +4126,18 @@ function inventorySocketsForItem(
       const socketEntry = asRecord(socketEntries[index]);
       const selectedPlugHash = optionalNumber(socket.plugHash) ?? numberFrom(socket.plugHash, Number.NaN);
       const selectedPlug = Number.isFinite(selectedPlugHash)
-        ? toInventoryPlugSummary(selectedPlugHash, inventoryDefinitions, {
+        ? toInventoryPlugSummary(selectedPlugHash, inventoryDefinitions, statDefinitions, {
             selected: true,
             enabled: asBoolean(socket.isEnabled, true)
           })
         : undefined;
-      const reusablePlugs = reusablePlugsForSocket(reusableBySocket, index, selectedPlugHash, inventoryDefinitions);
+      const reusablePlugs = reusablePlugsForSocket(
+        reusableBySocket,
+        index,
+        selectedPlugHash,
+        inventoryDefinitions,
+        statDefinitions
+      );
       const socketTypeHash =
         optionalNumber(socketEntry.socketTypeHash) ??
         optionalNumber(socket.socketTypeHash) ??
@@ -3981,7 +4165,8 @@ function reusablePlugsForSocket(
   reusableBySocket: unknown,
   socketIndex: number,
   selectedPlugHash: number,
-  inventoryDefinitions: Record<string, InventoryItemDefinition>
+  inventoryDefinitions: Record<string, InventoryItemDefinition>,
+  statDefinitions: Record<string, StatDefinition>
 ): InventoryPlugSummary[] {
   const rawPlugs = Array.isArray(reusableBySocket)
     ? asArray(reusableBySocket[socketIndex])
@@ -4000,7 +4185,7 @@ function reusablePlugsForSocket(
     }
     seen.add(itemHash);
     plugs.push(
-      toInventoryPlugSummary(itemHash, inventoryDefinitions, {
+      toInventoryPlugSummary(itemHash, inventoryDefinitions, statDefinitions, {
         selected: itemHash === selectedPlugHash,
         enabled: asBoolean(plug.enabled, asBoolean(plug.canInsert, true))
       })
@@ -4018,17 +4203,42 @@ function reusablePlugsForSocket(
 function toInventoryPlugSummary(
   itemHash: number,
   inventoryDefinitions: Record<string, InventoryItemDefinition>,
+  statDefinitions: Record<string, StatDefinition>,
   options: { selected: boolean; enabled?: boolean }
 ): InventoryPlugSummary {
   const definition = inventoryDefinitions[String(itemHash)];
+  const statModifiers = inventoryStatModifiersFromDefinition(definition, statDefinitions);
   return {
     itemHash,
     name: asString(definition?.displayProperties?.name, `Plug ${itemHash}`),
     iconPath: optionalString(definition?.displayProperties?.icon),
     description: optionalString(definition?.displayProperties?.description),
+    ...(statModifiers.length > 0 ? { statModifiers } : {}),
     selected: options.selected,
     ...(options.enabled !== undefined ? { enabled: options.enabled } : {})
   };
+}
+
+function inventoryStatModifiersFromDefinition(
+  definition: InventoryItemDefinition | undefined,
+  statDefinitions: Record<string, StatDefinition>
+): InventoryArmorStatSummary[] {
+  return asArray(definition?.investmentStats)
+    .map((rawStat): InventoryArmorStatSummary | null => {
+      const stat = asRecord(rawStat);
+      const hash = optionalNumber(stat.statTypeHash) ?? numberFrom(stat.statTypeHash, Number.NaN);
+      const value = optionalNumber(stat.value) ?? optionalNumber(stat.statValue) ?? 0;
+      if (!Number.isFinite(hash) || !ARMOR_STAT_HASHES.includes(hash as never) || value === 0) {
+        return null;
+      }
+      const statDefinition = statDefinitions[String(hash)];
+      return {
+        hash,
+        name: optionalString(statDefinition?.displayProperties?.name) ?? ARMOR_STAT_FALLBACK_NAMES[hash] ?? String(hash),
+        value
+      };
+    })
+    .filter((stat): stat is InventoryArmorStatSummary => stat !== null);
 }
 
 function inventorySocketDisplayName(
@@ -4099,6 +4309,552 @@ function compareInventoryItems(left: InventoryItemSummary, right: InventoryItemS
     return powerDiff;
   }
   return left.name.localeCompare(right.name);
+}
+
+type OptimizerStatKey = keyof typeof LOADOUT_OPTIMIZER_STAT_HASHES;
+type OptimizerStats = Record<OptimizerStatKey, number>;
+
+interface OptimizerArmorCandidate {
+  slot: string;
+  slotLabel: string;
+  item: InventoryItemSummary;
+  baseStats: OptimizerStats;
+  currentStats: OptimizerStats;
+  removedStatMods: InventoryPlugSummary[];
+  exotic: boolean;
+  rankScore: number;
+}
+
+interface OptimizerPartialArmorSet {
+  armor: OptimizerArmorCandidate[];
+  stats: OptimizerStats;
+  exoticCount: number;
+}
+
+interface OptimizerFragmentCombo {
+  fragments: LoadoutOptimizerFragmentSuggestion[];
+  stats: OptimizerStats;
+}
+
+interface OptimizerModPlan {
+  stats: OptimizerStats;
+  statMods: LoadoutOptimizerStatModSuggestion[];
+  missing: LoadoutOptimizerStatValue[];
+  waste: number;
+  achieved: boolean;
+}
+
+function buildOptimizerSearch(
+  inventory: InventorySummary,
+  character: CharacterSummary,
+  targets: LoadoutOptimizerTargetStat[],
+  options: { includeCurrentSubclassFragments: boolean; simulateStatMods: boolean; limit: number }
+): Pick<LoadoutOptimizerSearchSummary, "builds" | "scan"> {
+  const targetKeys = targets.map((target) => target.key as OptimizerStatKey);
+  const armorItems = inventory.items
+    .map((item) => toOptimizerArmorCandidate(item, character.classType, targetKeys))
+    .filter((item): item is OptimizerArmorCandidate => item !== null);
+  const grouped = new Map<string, OptimizerArmorCandidate[]>();
+  for (const candidate of armorItems) {
+    const list = grouped.get(candidate.slot) ?? [];
+    list.push(candidate);
+    grouped.set(candidate.slot, list);
+  }
+  for (const slot of ARMOR_SLOT_ORDER) {
+    grouped.set(slot, pruneOptimizerArmorCandidates(grouped.get(slot) ?? [], targetKeys));
+  }
+
+  let partials: OptimizerPartialArmorSet[] = [{ armor: [], stats: emptyOptimizerStats(), exoticCount: 0 }];
+  let truncated = false;
+  for (const slot of ARMOR_SLOT_ORDER) {
+    const candidates = grouped.get(slot) ?? [];
+    const next: OptimizerPartialArmorSet[] = [];
+    for (const partial of partials) {
+      for (const candidate of candidates) {
+        const exoticCount = partial.exoticCount + (candidate.exotic ? 1 : 0);
+        if (exoticCount > 1) {
+          continue;
+        }
+        next.push({
+          armor: [...partial.armor, candidate],
+          stats: addOptimizerStats(partial.stats, candidate.baseStats),
+          exoticCount
+        });
+      }
+    }
+    if (next.length > LOADOUT_OPTIMIZER_MAX_PARTIALS) {
+      truncated = true;
+    }
+    partials = next
+      .sort((left, right) => rankOptimizerPartial(right, targets) - rankOptimizerPartial(left, targets))
+      .slice(0, LOADOUT_OPTIMIZER_MAX_PARTIALS);
+  }
+
+  const fragmentCombos = options.includeCurrentSubclassFragments
+    ? currentSubclassFragmentCombos(inventory, character)
+    : [{ fragments: [], stats: emptyOptimizerStats() }];
+  const candidates: LoadoutOptimizerBuild[] = [];
+  let evaluated = 0;
+  for (const partial of partials) {
+    if (partial.armor.length !== ARMOR_SLOT_ORDER.length) {
+      continue;
+    }
+    for (const fragmentCombo of fragmentCombos) {
+      evaluated += 1;
+      const statsBeforeMods = addOptimizerStats(partial.stats, fragmentCombo.stats);
+      const modPlan = bestOptimizerModPlan(statsBeforeMods, targets, options.simulateStatMods);
+      candidates.push(
+        toLoadoutOptimizerBuild(partial, fragmentCombo, modPlan, targets, candidates.length + 1, options.simulateStatMods)
+      );
+    }
+  }
+
+  const builds = candidates
+    .sort(compareLoadoutOptimizerBuilds)
+    .slice(0, options.limit)
+    .map((build, index) => ({ ...build, rank: index + 1, buildId: `b${index + 1}` }));
+
+  return {
+    builds,
+    scan: {
+      armorItems: armorItems.length,
+      candidateArmorItems: Array.from(grouped.values()).reduce((sum, list) => sum + list.length, 0),
+      armorCombinations: partials.length,
+      fragmentCombinations: fragmentCombos.length,
+      truncated: truncated || evaluated > partials.length * fragmentCombos.length
+    }
+  };
+}
+
+function toOptimizerArmorCandidate(
+  item: InventoryItemSummary,
+  classType: number,
+  targetKeys: OptimizerStatKey[]
+): OptimizerArmorCandidate | null {
+  if (!item.itemInstanceId || !item.armorStats?.stats?.length) {
+    return null;
+  }
+  const slot = optimizerArmorSlot(item);
+  if (!slot) {
+    return null;
+  }
+  if (!optimizerItemMatchesClass(item, classType)) {
+    return null;
+  }
+  const currentStats = optimizerStatsFromArmorStats(item.armorStats.stats);
+  const removedStatMods = selectedArmorStatModPlugs(item);
+  const baseStats = subtractOptimizerStats(currentStats, optimizerStatsFromPlugs(removedStatMods));
+  const rankScore =
+    targetKeys.reduce((sum, key) => sum + baseStats[key], 0) +
+    Object.values(baseStats).reduce((sum, value) => sum + value, 0) / 20 +
+    (item.owner === "equipped" ? 2 : 0);
+  return {
+    slot: slot.slot,
+    slotLabel: slot.label,
+    item,
+    baseStats,
+    currentStats,
+    removedStatMods,
+    exotic: optimizerItemIsExotic(item),
+    rankScore
+  };
+}
+
+function optimizerArmorSlot(item: InventoryItemSummary): { slot: string; label: string; order: number } | null {
+  if (item.bucketHash && ARMOR_BUCKETS[item.bucketHash]) {
+    return ARMOR_BUCKETS[item.bucketHash];
+  }
+  const text = `${item.bucketName ?? ""} ${item.itemTypeDisplayName ?? ""}`.toLowerCase();
+  if (/helmet|头盔/u.test(text)) return ARMOR_BUCKETS[3448274439];
+  if (/gauntlet|臂铠|手套/u.test(text)) return ARMOR_BUCKETS[3551918588];
+  if (/chest|胸甲/u.test(text)) return ARMOR_BUCKETS[14239492];
+  if (/leg|腿甲|护腿/u.test(text)) return ARMOR_BUCKETS[20886954];
+  if (/class item|职业物品/u.test(text)) return ARMOR_BUCKETS[1585787867];
+  return null;
+}
+
+function optimizerItemMatchesClass(item: InventoryItemSummary, classType: number): boolean {
+  return item.classType === undefined || item.classType === classType || item.classType === 3;
+}
+
+function optimizerItemIsExotic(item: InventoryItemSummary): boolean {
+  return /异域|exotic/iu.test(`${item.tierTypeName ?? ""}`);
+}
+
+function selectedArmorStatModPlugs(item: InventoryItemSummary): InventoryPlugSummary[] {
+  const sockets = Array.isArray(item.sockets) ? item.sockets : [];
+  return sockets
+    .map((socket) => socket.selectedPlug)
+    .filter((plug): plug is InventoryPlugSummary => Boolean(plug?.statModifiers?.length))
+    .filter(isLikelyArmorStatModPlug);
+}
+
+function isLikelyArmorStatModPlug(plug: InventoryPlugSummary): boolean {
+  const text = `${plug.name} ${plug.description ?? ""}`.toLowerCase();
+  const modifiers = plug.statModifiers ?? [];
+  if (!modifiers.length || modifiers.some((modifier) => Math.abs(modifier.value) > 10)) {
+    return false;
+  }
+  return /mod|模组|机动|韧性|恢复|纪律|智慧|力量|mobility|resilience|recovery|discipline|intellect|strength/iu.test(text);
+}
+
+function pruneOptimizerArmorCandidates(
+  candidates: OptimizerArmorCandidate[],
+  targetKeys: OptimizerStatKey[]
+): OptimizerArmorCandidate[] {
+  return candidates
+    .sort((left, right) => {
+      const targetDelta =
+        targetKeys.reduce((sum, key) => sum + right.baseStats[key], 0) -
+        targetKeys.reduce((sum, key) => sum + left.baseStats[key], 0);
+      if (targetDelta !== 0) return targetDelta;
+      return right.rankScore - left.rankScore;
+    })
+    .slice(0, 70);
+}
+
+function currentSubclassFragmentCombos(inventory: InventorySummary, character: CharacterSummary): OptimizerFragmentCombo[] {
+  const subclass = inventory.items.find(
+    (item) => item.owner === "equipped" && item.characterId === character.characterId && optimizerItemLooksLikeSubclass(item)
+  );
+  const sockets = (subclass?.sockets ?? [])
+    .map((socket) => optimizerFragmentOptions(socket))
+    .filter((options) => options.length > 0)
+    .slice(0, 5);
+  if (sockets.length === 0) {
+    return [{ fragments: [], stats: emptyOptimizerStats() }];
+  }
+  const combos: OptimizerFragmentCombo[] = [];
+  const visit = (index: number, fragments: LoadoutOptimizerFragmentSuggestion[], stats: OptimizerStats) => {
+    if (combos.length >= LOADOUT_OPTIMIZER_MAX_FRAGMENT_COMBOS) {
+      return;
+    }
+    if (index >= sockets.length) {
+      combos.push({ fragments, stats });
+      return;
+    }
+    for (const option of sockets[index]) {
+      visit(index + 1, [...fragments, option], addOptimizerStats(stats, optimizerStatsFromArmorStats(option.statModifiers)));
+    }
+  };
+  visit(0, [], emptyOptimizerStats());
+  return combos.length > 0 ? combos : [{ fragments: [], stats: emptyOptimizerStats() }];
+}
+
+function optimizerItemLooksLikeSubclass(item: InventoryItemSummary): boolean {
+  const text = `${item.bucketName ?? ""} ${item.itemTypeDisplayName ?? ""} ${item.name}`.toLowerCase();
+  return /subclass|分支职业|分支/u.test(text);
+}
+
+function optimizerFragmentOptions(socket: InventorySocketSummary): LoadoutOptimizerFragmentSuggestion[] {
+  const plugs = [socket.selectedPlug, ...(socket.reusablePlugs ?? [])]
+    .filter((plug): plug is InventoryPlugSummary => Boolean(plug?.statModifiers?.length))
+    .filter((plug) => plug.enabled !== false);
+  const seen = new Set<string>();
+  const options: LoadoutOptimizerFragmentSuggestion[] = [];
+  for (const plug of plugs) {
+    const key = `${plug.itemHash}:${JSON.stringify(plug.statModifiers)}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    options.push({
+      socketIndex: socket.socketIndex,
+      name: plug.name,
+      itemHash: plug.itemHash,
+      iconPath: plug.iconPath,
+      statModifiers: plug.statModifiers ?? []
+    });
+  }
+  return options.slice(0, 16);
+}
+
+function bestOptimizerModPlan(
+  baseStats: OptimizerStats,
+  targets: LoadoutOptimizerTargetStat[],
+  simulateStatMods: boolean
+): OptimizerModPlan {
+  const targetKeys = targets.map((target) => target.key as OptimizerStatKey);
+  let best: OptimizerModPlan | null = null;
+  const bonusesByKey = simulateStatMods ? targetKeys.map(() => optimizerStatBonusOptions()) : targetKeys.map(() => [0]);
+  const visit = (index: number, bonuses: number[]) => {
+    if (index >= targetKeys.length) {
+      const modCount = bonuses.reduce((sum, bonus) => sum + optimizerStatModCount(bonus), 0);
+      if (modCount > 5) {
+        return;
+      }
+      const stats = { ...baseStats };
+      const statMods: LoadoutOptimizerStatModSuggestion[] = [];
+      for (let statIndex = 0; statIndex < targetKeys.length; statIndex += 1) {
+        const key = targetKeys[statIndex];
+        const bonus = bonuses[statIndex];
+        stats[key] += bonus;
+        if (bonus > 0) {
+          statMods.push({
+            statHash: LOADOUT_OPTIMIZER_STAT_HASHES[key],
+            statKey: key,
+            statName: LOADOUT_OPTIMIZER_STAT_LABELS[key],
+            value: bonus,
+            count: optimizerStatModCount(bonus)
+          });
+        }
+      }
+      const missing = optimizerMissingStats(stats, targets);
+      const achieved = missing.every((entry) => (entry.deficit ?? 0) <= 0);
+      const waste = optimizerWaste(stats, targets);
+      const plan = { stats, statMods, missing, waste, achieved };
+      if (!best || compareOptimizerModPlans(plan, best) < 0) {
+        best = plan;
+      }
+      return;
+    }
+    for (const bonus of bonusesByKey[index]) {
+      visit(index + 1, [...bonuses, bonus]);
+    }
+  };
+  visit(0, []);
+  return best ?? {
+    stats: baseStats,
+    statMods: [],
+    missing: optimizerMissingStats(baseStats, targets),
+    waste: optimizerWaste(baseStats, targets),
+    achieved: false
+  };
+}
+
+function optimizerStatBonusOptions(): number[] {
+  return [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50];
+}
+
+function optimizerStatModCount(bonus: number): number {
+  if (bonus <= 0) return 0;
+  return Math.ceil(bonus / 10);
+}
+
+function compareOptimizerModPlans(left: OptimizerModPlan, right: OptimizerModPlan): number {
+  const leftMissing = optimizerMissingTotal(left.missing);
+  const rightMissing = optimizerMissingTotal(right.missing);
+  if (leftMissing !== rightMissing) return leftMissing - rightMissing;
+  if (left.waste !== right.waste) return left.waste - right.waste;
+  return left.statMods.reduce((sum, mod) => sum + mod.count, 0) - right.statMods.reduce((sum, mod) => sum + mod.count, 0);
+}
+
+function toLoadoutOptimizerBuild(
+  partial: OptimizerPartialArmorSet,
+  fragmentCombo: OptimizerFragmentCombo,
+  modPlan: OptimizerModPlan,
+  targets: LoadoutOptimizerTargetStat[],
+  index: number,
+  simulateStatMods: boolean
+): LoadoutOptimizerBuild {
+  const missingTotal = optimizerMissingTotal(modPlan.missing);
+  const notes = [
+    modPlan.achieved ? "达到目标属性。" : `未完全达标，仍缺 ${missingTotal} 点。`,
+    simulateStatMods ? "属性模组为模拟建议，不会自动插入。" : "未模拟属性模组。",
+    fragmentCombo.fragments.length ? "碎片需要按推荐手动调整。" : "未找到影响属性的当前分支碎片。"
+  ];
+  return {
+    buildId: `raw-${index}`,
+    rank: index,
+    achieved: modPlan.achieved,
+    score: optimizerBuildScore(modPlan, targets),
+    waste: modPlan.waste,
+    missing: modPlan.missing,
+    stats: optimizerStatValues(modPlan.stats, targets),
+    armor: partial.armor
+      .slice()
+      .sort((left, right) => armorSlotOrder(left.slot) - armorSlotOrder(right.slot))
+      .map(toLoadoutOptimizerArmorItem),
+    statMods: modPlan.statMods,
+    fragments: fragmentCombo.fragments,
+    notes
+  };
+}
+
+function toLoadoutOptimizerArmorItem(candidate: OptimizerArmorCandidate): LoadoutOptimizerArmorItem {
+  return {
+    slot: candidate.slot,
+    slotLabel: candidate.slotLabel,
+    itemHash: candidate.item.itemHash,
+    itemInstanceId: candidate.item.itemInstanceId ?? "",
+    name: candidate.item.name,
+    iconPath: candidate.item.iconPath,
+    owner: candidate.item.owner,
+    characterId: candidate.item.characterId,
+    tierTypeName: candidate.item.tierTypeName,
+    exotic: candidate.exotic,
+    power: candidate.item.power,
+    baseStats: optimizerStatValues(candidate.baseStats),
+    currentStats: optimizerStatValues(candidate.currentStats),
+    removedStatMods: candidate.removedStatMods
+  };
+}
+
+function compareLoadoutOptimizerBuilds(left: LoadoutOptimizerBuild, right: LoadoutOptimizerBuild): number {
+  if (left.achieved !== right.achieved) return left.achieved ? -1 : 1;
+  const missingDelta = optimizerMissingTotal(left.missing) - optimizerMissingTotal(right.missing);
+  if (missingDelta !== 0) return missingDelta;
+  if (left.waste !== right.waste) return left.waste - right.waste;
+  return right.score - left.score;
+}
+
+function optimizerBuildScore(plan: OptimizerModPlan, targets: LoadoutOptimizerTargetStat[]): number {
+  const targetScore = targets.reduce((sum, target) => sum + Math.min(plan.stats[target.key as OptimizerStatKey], target.target), 0);
+  return targetScore - optimizerMissingTotal(plan.missing) * 10 - plan.waste;
+}
+
+function rankOptimizerPartial(partial: OptimizerPartialArmorSet, targets: LoadoutOptimizerTargetStat[]): number {
+  return targets.reduce((sum, target) => sum + Math.min(partial.stats[target.key as OptimizerStatKey], target.target), 0);
+}
+
+function optimizerMissingStats(stats: OptimizerStats, targets: LoadoutOptimizerTargetStat[]): LoadoutOptimizerStatValue[] {
+  return targets
+    .map((target) => {
+      const value = stats[target.key as OptimizerStatKey] ?? 0;
+      return {
+        hash: target.hash,
+        key: target.key,
+        name: target.name,
+        value,
+        target: target.target,
+        deficit: Math.max(0, target.target - value)
+      };
+    })
+    .filter((entry) => (entry.deficit ?? 0) > 0);
+}
+
+function optimizerMissingTotal(missing: LoadoutOptimizerStatValue[]): number {
+  return missing.reduce((sum, stat) => sum + (stat.deficit ?? 0), 0);
+}
+
+function optimizerWaste(stats: OptimizerStats, targets: LoadoutOptimizerTargetStat[]): number {
+  return targets.reduce((sum, target) => sum + Math.max(0, stats[target.key as OptimizerStatKey] - target.target), 0);
+}
+
+function optimizerStatValues(stats: OptimizerStats, targets?: LoadoutOptimizerTargetStat[]): LoadoutOptimizerStatValue[] {
+  const targetMap = new Map((targets ?? []).map((target) => [target.key, target.target]));
+  return Object.entries(LOADOUT_OPTIMIZER_STAT_HASHES).map(([key, hash]) => {
+    const value = stats[key as OptimizerStatKey] ?? 0;
+    const target = targetMap.get(key);
+    return {
+      hash,
+      key,
+      name: LOADOUT_OPTIMIZER_STAT_LABELS[key],
+      value,
+      ...(target === undefined ? {} : { target, deficit: Math.max(0, target - value) })
+    };
+  });
+}
+
+function optimizerStatsFromArmorStats(stats: InventoryArmorStatSummary[]): OptimizerStats {
+  const result = emptyOptimizerStats();
+  for (const stat of stats) {
+    const key = optimizerStatKeyFromHash(stat.hash);
+    if (key) {
+      result[key] += stat.value;
+    }
+  }
+  return result;
+}
+
+function optimizerStatsFromPlugs(plugs: InventoryPlugSummary[]): OptimizerStats {
+  return plugs.reduce((stats, plug) => addOptimizerStats(stats, optimizerStatsFromArmorStats(plug.statModifiers ?? [])), emptyOptimizerStats());
+}
+
+function optimizerStatKeyFromHash(hash: number): OptimizerStatKey | null {
+  for (const [key, value] of Object.entries(LOADOUT_OPTIMIZER_STAT_HASHES)) {
+    if (value === hash) return key as OptimizerStatKey;
+  }
+  return null;
+}
+
+function emptyOptimizerStats(): OptimizerStats {
+  return {
+    mobility: 0,
+    resilience: 0,
+    recovery: 0,
+    discipline: 0,
+    intellect: 0,
+    strength: 0
+  };
+}
+
+function addOptimizerStats(left: OptimizerStats, right: OptimizerStats): OptimizerStats {
+  const result = emptyOptimizerStats();
+  for (const key of Object.keys(result) as OptimizerStatKey[]) {
+    result[key] = (left[key] ?? 0) + (right[key] ?? 0);
+  }
+  return result;
+}
+
+function subtractOptimizerStats(left: OptimizerStats, right: OptimizerStats): OptimizerStats {
+  const result = emptyOptimizerStats();
+  for (const key of Object.keys(result) as OptimizerStatKey[]) {
+    result[key] = Math.max(0, (left[key] ?? 0) - (right[key] ?? 0));
+  }
+  return result;
+}
+
+function normalizeOptimizerClassType(value: unknown): number {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (/^(0|titan|泰坦)$/iu.test(text)) return 0;
+  if (/^(1|hunter|猎人)$/iu.test(text)) return 1;
+  if (/^(2|warlock|术士)$/iu.test(text)) return 2;
+  throw new BadRequestError("className must be 术士, 猎人, or 泰坦");
+}
+
+function selectOptimizerCharacter(characters: CharacterSummary[], classType: number): CharacterSummary | null {
+  return (
+    characters
+      .filter((character) => character.classType === classType)
+      .sort((left, right) => Date.parse(right.dateLastPlayed ?? "") - Date.parse(left.dateLastPlayed ?? ""))[0] ?? null
+  );
+}
+
+function normalizeOptimizerTargets(input: Record<string, unknown> | undefined): LoadoutOptimizerTargetStat[] {
+  const raw = input && Object.keys(input).length > 0 ? input : LOADOUT_OPTIMIZER_DEFAULT_TARGETS;
+  const targets = Object.entries(raw)
+    .map(([key, value]): LoadoutOptimizerTargetStat | null => {
+      const statKey = normalizeOptimizerStatKey(key);
+      if (!statKey) return null;
+      return {
+        hash: LOADOUT_OPTIMIZER_STAT_HASHES[statKey],
+        key: statKey,
+        name: LOADOUT_OPTIMIZER_STAT_LABELS[statKey],
+        target: clampIntegerValue(value, 100, 0, 100)
+      };
+    })
+    .filter((target): target is LoadoutOptimizerTargetStat => target !== null && target.target > 0);
+  if (targets.length === 0) {
+    throw new BadRequestError("targetStats must include at least one armor stat target");
+  }
+  return targets;
+}
+
+function normalizeOptimizerStatKey(value: string): OptimizerStatKey | null {
+  const text = value.trim().toLowerCase();
+  if (/^(mobility|mob|机动)$/iu.test(text)) return "mobility";
+  if (/^(resilience|res|韧性)$/iu.test(text)) return "resilience";
+  if (/^(recovery|rec|恢复)$/iu.test(text)) return "recovery";
+  if (/^(discipline|dis|纪律)$/iu.test(text)) return "discipline";
+  if (/^(intellect|int|智慧)$/iu.test(text)) return "intellect";
+  if (/^(strength|str|力量)$/iu.test(text)) return "strength";
+  return null;
+}
+
+function armorSlotOrder(slot: string): number {
+  const index = ARMOR_SLOT_ORDER.indexOf(slot as never);
+  return index === -1 ? 999 : index;
+}
+
+function optimizerSessionCacheKey(qq: string | undefined, sessionId: string): string {
+  return `d2:loadout-optimizer:${qq ?? "unknown"}:${sessionId}`;
+}
+
+function clampIntegerValue(value: unknown, fallback: number, min: number, max: number): number {
+  const number = Number(value);
+  const integer = Number.isFinite(number) ? Math.trunc(number) : fallback;
+  return Math.min(max, Math.max(min, integer));
 }
 
 const CAREER_MODES: CareerModeInfo[] = [

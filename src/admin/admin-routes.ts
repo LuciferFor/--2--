@@ -474,6 +474,8 @@ function isAllowedD2Path(path: string): boolean {
     /^\/api\/d2\/inventory\/qq\/[^/?#]+$/,
     /^\/api\/d2\/inventory\/qq\/[^/?#]+\/search$/,
     /^\/api\/d2\/loadouts\/qq\/[^/?#]+$/,
+    /^\/api\/d2\/loadout-optimizer\/qq\/[^/?#]+\/search$/,
+    /^\/api\/d2\/loadout-optimizer\/qq\/[^/?#]+\/apply$/,
     /^\/api\/d2\/catalysts\/[^/?#]+\/[^/?#]+$/,
     /^\/api\/d2\/catalysts\/qq\/[^/?#]+$/,
     /^\/api\/d2\/titles\/[^/?#]+\/[^/?#]+$/,

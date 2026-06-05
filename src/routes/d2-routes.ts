@@ -3,7 +3,12 @@ import type { CacheStore } from "../cache/cache.js";
 import type { CardService } from "../cards/card-service.js";
 import type { Store } from "../db/store.js";
 import type { DestinyService } from "../destiny/destiny-service.js";
-import type { InventoryBucketFilter, InventoryActionResult, PlayerSearchResult } from "../destiny/destiny-types.js";
+import type {
+  InventoryBucketFilter,
+  InventoryActionResult,
+  LoadoutOptimizerApplyResult,
+  PlayerSearchResult
+} from "../destiny/destiny-types.js";
 import type { QqOAuthService } from "../oauth/qq-oauth-service.js";
 import { parseQq } from "../bindings/qq.js";
 import { parseCount, parseId, parseMembershipType, parsePage } from "../destiny/validators.js";
@@ -360,6 +365,45 @@ export async function registerD2Routes(app: FastifyInstance, deps: D2RouteDeps):
     );
   });
 
+  app.post("/api/d2/loadout-optimizer/qq/:qq/search", async (request) => {
+    const started = Date.now();
+    const qq = parseQq((request.params as Params).qq);
+    const { binding, accessToken } = await resolveQqOAuthContext(deps, qq, "Loadout optimizer");
+    const body = requireRecordBody(request.body);
+    const data = await deps.destinyService.searchLoadoutOptimizer(
+      binding.membershipType,
+      binding.membershipId,
+      accessToken,
+      {
+        qq,
+        className: getRequiredBodyString(body, "className"),
+        targetStats: isRecord(body.targetStats) ? body.targetStats : undefined,
+        includeCurrentSubclassFragments: parseOptionalBoolean(body.includeCurrentSubclassFragments, true),
+        simulateStatMods: parseOptionalBoolean(body.simulateStatMods, true),
+        limit: parseBoundedInteger(body.limit, "limit", 1, 10, 3)
+      }
+    );
+    await deps.store.touchQqBinding(qq);
+    await recordQuery(deps.store, request, false);
+    return ok(data, { tookMs: Date.now() - started });
+  });
+
+  app.post("/api/d2/loadout-optimizer/qq/:qq/apply", async (request) => {
+    const qq = parseQq((request.params as Params).qq);
+    const { binding, accessToken } = await resolveQqOAuthContext(deps, qq, "Loadout optimizer apply");
+    const body = requireRecordBody(request.body);
+    return runInventoryAction(deps, request, qq, "loadoutOptimizer.apply", body.buildId, async () =>
+      deps.destinyService.applyLoadoutOptimizerBuild(binding.membershipType, binding.membershipId, accessToken, {
+        qq,
+        sessionId: getRequiredBodyString(body, "sessionId"),
+        buildId: getRequiredBodyString(body, "buildId"),
+        characterId:
+          body.characterId === undefined || body.characterId === "" ? undefined : parseNumericId(body.characterId, "characterId"),
+        confirm: parseBoolean(body.confirm, "confirm")
+      })
+    );
+  });
+
   app.get("/api/d2/vault/:membershipType/:membershipId/search", oauthRequired("Vault search"));
   app.get("/api/d2/inventory/:membershipType/:membershipId/weapons", oauthRequired("Private inventory weapons"));
   app.get("/api/d2/catalysts/:membershipType/:membershipId", oauthRequired("Catalyst progress"));
@@ -613,6 +657,14 @@ function getRequiredQueryString(query: Query, key: string): string {
   return value.trim();
 }
 
+function getRequiredBodyString(body: Record<string, unknown>, key: string): string {
+  const value = body[key];
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new BadRequestError(`${key} is required`);
+  }
+  return value.trim();
+}
+
 function parseBoundedInteger(
   value: unknown,
   name: string,
@@ -652,6 +704,13 @@ function parseBoolean(value: unknown, name: string): boolean {
     }
   }
   throw new BadRequestError(`${name} must be a boolean`);
+}
+
+function parseOptionalBoolean(value: unknown, defaultValue: boolean): boolean {
+  if (value === undefined || value === null || value === "") {
+    return defaultValue;
+  }
+  return parseBoolean(value, "boolean option");
 }
 
 function parseHash(value: unknown, name: string): number {
@@ -798,19 +857,21 @@ async function runInventoryAction(
   qq: string,
   action: string,
   target: unknown,
-  execute: () => Promise<InventoryActionResult>
+  execute: () => Promise<InventoryActionResult | LoadoutOptimizerApplyResult>
 ) {
   const started = Date.now();
   try {
     const data = await execute();
     await auditInventoryAction(deps.store, request, qq, action, target, {
       ok: true,
-      resultAction: data.action,
-      itemId: data.itemId,
-      itemIds: data.itemIds,
-      itemHash: data.itemHash,
+      resultAction: "action" in data ? data.action : "loadoutOptimizerApply",
+      itemId: "itemId" in data ? data.itemId : undefined,
+      itemIds: "equippedItemIds" in data ? data.equippedItemIds : data.itemIds,
+      itemHash: "itemHash" in data ? data.itemHash : undefined,
       characterId: data.characterId,
-      loadoutIndex: data.loadoutIndex
+      loadoutIndex: "loadoutIndex" in data ? data.loadoutIndex : undefined,
+      sessionId: "sessionId" in data ? data.sessionId : undefined,
+      buildId: "buildId" in data ? data.buildId : undefined
     });
     await deps.store.touchQqBinding(qq);
     await recordQuery(deps.store, request, false);

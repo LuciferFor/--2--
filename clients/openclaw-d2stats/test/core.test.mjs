@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { bindQq, buildPublicDataUrl, itemAction, parseTarget, queryCard, queryInventory, resolveConfig } from "../lib/core.mjs";
+import {
+  applyLoadoutOptimizer,
+  bindQq,
+  buildPublicDataUrl,
+  itemAction,
+  parseTarget,
+  queryCard,
+  queryInventory,
+  queryLoadoutOptimizer,
+  resolveConfig,
+} from "../lib/core.mjs";
 
 describe("d2stats core", () => {
   it("parses supported target formats", () => {
@@ -1121,7 +1131,8 @@ describe("d2stats core", () => {
                   itemInstanceId: "691752902764",
                   owner: "vault",
                   name: "纪念",
-                  itemTypeDisplayName: "机枪",
+                  bucketName: "一般",
+                  itemTypeDisplayName: "微型冲锋枪",
                   locked: true,
                   canEquip: true,
                   sockets: [
@@ -1145,6 +1156,7 @@ describe("d2stats core", () => {
           assert.match(html, /DESTINY 2 INVENTORY/);
           assert.match(html, /纪念/);
           assert.match(html, /691752902764/);
+          assert.match(html, /inventory-selected-perks/);
           assert.match(html, /重建/);
           assert.doesNotMatch(html, /不稳定弹药/);
           return Buffer.from("png-bytes");
@@ -1669,6 +1681,198 @@ describe("d2stats core", () => {
     assert.equal(called, false);
     assert.equal(result.details.status, "confirmation_required");
     assert.match(result.content[0].text, /confirm=true/);
+  });
+
+  it("asks for class before loadout optimization", async () => {
+    let called = false;
+    const result = await queryLoadoutOptimizer(
+      { target: "607972716" },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async () => {
+          called = true;
+          return jsonResponse({ success: true, data: {} });
+        },
+      },
+    );
+
+    assert.equal(called, false);
+    assert.equal(result.details.status, "needs_class");
+    assert.match(result.content[0].text, /术士、猎人或泰坦/);
+  });
+
+  it("renders loadout optimizer results from QQ OAuth data", async () => {
+    const seenUrls = [];
+    const result = await queryLoadoutOptimizer(
+      { target: "607972716", className: "术士", targetStats: { recovery: 100, discipline: 100, strength: 100 } },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async (url, init = {}) => {
+          seenUrls.push(String(url));
+          if (String(url).includes("/bindings/qq/")) {
+            return jsonResponse({
+              success: true,
+              data: {
+                qq: "607972716",
+                membershipType: 3,
+                membershipId: "4611686018428939884",
+                bungieName: "Lucifer#8571",
+                displayName: "Lucifer",
+                displayNameCode: 8571,
+              },
+            });
+          }
+          if (String(url).includes("/namecard/")) {
+            return jsonResponse({
+              success: true,
+              data: {
+                membershipType: 3,
+                membershipId: "4611686018428939884",
+                profile: {
+                  bungieName: "Lucifer#8571",
+                  displayName: "Lucifer",
+                  displayNameCode: 8571,
+                  characters: [
+                    {
+                      className: "Warlock",
+                      light: 2020,
+                      dateLastPlayed: "2026-06-03T00:00:00.000Z",
+                      emblemPath: "/common/destiny2_content/icons/current-icon.jpg",
+                      emblemBackgroundPath: "/common/destiny2_content/icons/current-card.jpg",
+                    },
+                  ],
+                },
+              },
+            });
+          }
+          assert.equal(init.method, "POST");
+          assert.deepEqual(JSON.parse(init.body), {
+            className: "术士",
+            targetStats: { recovery: 100, discipline: 100, strength: 100 },
+            includeCurrentSubclassFragments: true,
+            simulateStatMods: true,
+            limit: 3,
+          });
+          return jsonResponse({
+            success: true,
+            data: {
+              qq: "607972716",
+              membershipType: 3,
+              membershipId: "4611686018428939884",
+              sessionId: "session-1",
+              className: "术士",
+              classType: 2,
+              characterId: "2305843009",
+              targets: [
+                { key: "recovery", statKey: "recovery", statHash: 1943323491, statName: "恢复", target: 100 },
+                { key: "discipline", statKey: "discipline", statHash: 1735777505, statName: "纪律", target: 100 },
+                { key: "strength", statKey: "strength", statHash: 4244567218, statName: "力量", target: 100 },
+              ],
+              options: { includeCurrentSubclassFragments: true, simulateStatMods: true, limit: 3 },
+              builds: [
+                {
+                  buildId: "b1",
+                  rank: 1,
+                  achieved: true,
+                  score: 0,
+                  waste: 0,
+                  missing: [],
+                  stats: [
+                    { key: "recovery", statKey: "recovery", statHash: 1943323491, statName: "恢复", value: 100 },
+                    { key: "discipline", statKey: "discipline", statHash: 1735777505, statName: "纪律", value: 100 },
+                    { key: "strength", statKey: "strength", statHash: 4244567218, statName: "力量", value: 100 },
+                  ],
+                  armor: [
+                    {
+                      slot: "helmet",
+                      slotLabel: "头盔",
+                      itemHash: 401,
+                      itemInstanceId: "691752903001",
+                      name: "配装头盔",
+                      iconPath: "/helmet.jpg",
+                      owner: "vault",
+                      tierTypeName: "传说",
+                      exotic: false,
+                      baseStats: [{ key: "recovery", statKey: "recovery", statName: "恢复", value: 20 }],
+                      currentStats: [],
+                      removedStatMods: [],
+                    },
+                  ],
+                  statMods: [{ statHash: 1943323491, statKey: "recovery", statName: "恢复", value: 10, count: 2 }],
+                  fragments: [{ socketIndex: 3, name: "慰藉余烬", statModifiers: [{ hash: 1735777505, name: "纪律", value: 10 }] }],
+                  notes: ["属性模组和碎片需要手动调整"],
+                },
+              ],
+              scan: { armorItems: 5, candidateArmorItems: 5, armorCombinations: 1, fragmentCombinations: 1, truncated: false },
+              updatedAt: "2026-06-03T00:00:00.000Z",
+            },
+          });
+        },
+        renderHtmlToPng: async (html) => {
+          assert.match(html, /DESTINY 2 LOADOUT OPTIMIZER/);
+          assert.match(html, /Lucifer#8571/);
+          assert.match(html, /session-1/);
+          assert.match(html, /第 1 套/);
+          assert.match(html, /配装头盔/);
+          assert.match(html, /恢复 \+10（2 个）/);
+          assert.match(html, /慰藉余烬/);
+          return Buffer.from("png-bytes");
+        },
+      },
+    );
+
+    assert.deepEqual(seenUrls, [
+      "http://d2.local/api/d2/bindings/qq/607972716",
+      "http://d2.local/api/d2/namecard/3/4611686018428939884",
+      "http://d2.local/api/d2/loadout-optimizer/qq/607972716/search",
+    ]);
+    assert.equal(result.content[0].type, "image");
+    assert.equal(result.details.sessionId, "session-1");
+  });
+
+  it("requires confirmation before applying loadout optimizer builds", async () => {
+    let called = false;
+    const result = await applyLoadoutOptimizer(
+      { target: "607972716", sessionId: "session-1", buildId: "b1" },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async () => {
+          called = true;
+          return jsonResponse({ success: true, data: {} });
+        },
+      },
+    );
+
+    assert.equal(called, false);
+    assert.equal(result.details.status, "needs_confirmation");
+    assert.match(result.content[0].text, /只会换防具/);
+  });
+
+  it("applies confirmed loadout optimizer builds", async () => {
+    const result = await applyLoadoutOptimizer(
+      { target: "607972716", sessionId: "session-1", buildId: "b1", confirm: true },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async (url, init = {}) => {
+          assert.equal(String(url), "http://d2.local/api/d2/loadout-optimizer/qq/607972716/apply");
+          assert.equal(init.method, "POST");
+          assert.deepEqual(JSON.parse(init.body), { sessionId: "session-1", buildId: "b1", confirm: true });
+          return jsonResponse({
+            success: true,
+            data: {
+              message: "已应用配装防具",
+              statMods: [{ statName: "恢复", value: 10, count: 2 }],
+              fragments: [{ name: "慰藉余烬" }],
+            },
+          });
+        },
+      },
+    );
+
+    assert.equal(result.details.status, "ok");
+    assert.match(result.content[0].text, /已应用配装防具/);
+    assert.match(result.content[0].text, /属性模组/);
+    assert.match(result.content[0].text, /碎片/);
   });
 
   it("starts OAuth binding when no Bungie target is provided", async () => {

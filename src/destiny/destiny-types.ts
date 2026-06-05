@@ -109,6 +109,7 @@ export interface InventoryPlugSummary {
   name: string;
   iconPath?: string;
   description?: string;
+  statModifiers?: InventoryArmorStatSummary[];
   selected: boolean;
   enabled?: boolean;
 }
@@ -217,6 +218,110 @@ export interface LoadoutsSummary {
   membershipId: string;
   characters: CharacterSummary[];
   loadouts: LoadoutSummary[];
+  updatedAt: string;
+}
+
+export interface LoadoutOptimizerTargetStat {
+  hash: number;
+  key: string;
+  name: string;
+  target: number;
+}
+
+export interface LoadoutOptimizerStatValue {
+  hash: number;
+  key: string;
+  name: string;
+  value: number;
+  target?: number;
+  deficit?: number;
+}
+
+export interface LoadoutOptimizerArmorItem {
+  slot: string;
+  slotLabel: string;
+  itemHash: number;
+  itemInstanceId: string;
+  name: string;
+  iconPath?: string;
+  owner: InventoryOwner;
+  characterId?: string;
+  tierTypeName?: string;
+  exotic: boolean;
+  power?: number;
+  baseStats: LoadoutOptimizerStatValue[];
+  currentStats: LoadoutOptimizerStatValue[];
+  removedStatMods: InventoryPlugSummary[];
+}
+
+export interface LoadoutOptimizerStatModSuggestion {
+  statHash: number;
+  statKey: string;
+  statName: string;
+  value: number;
+  count: number;
+}
+
+export interface LoadoutOptimizerFragmentSuggestion {
+  socketIndex: number;
+  name: string;
+  itemHash?: number;
+  iconPath?: string;
+  statModifiers: InventoryArmorStatSummary[];
+}
+
+export interface LoadoutOptimizerBuild {
+  buildId: string;
+  rank: number;
+  achieved: boolean;
+  score: number;
+  waste: number;
+  missing: LoadoutOptimizerStatValue[];
+  stats: LoadoutOptimizerStatValue[];
+  armor: LoadoutOptimizerArmorItem[];
+  statMods: LoadoutOptimizerStatModSuggestion[];
+  fragments: LoadoutOptimizerFragmentSuggestion[];
+  notes: string[];
+}
+
+export interface LoadoutOptimizerSearchSummary {
+  qq?: string;
+  membershipType: number;
+  membershipId: string;
+  sessionId: string;
+  className: string;
+  classType: number;
+  characterId: string;
+  targets: LoadoutOptimizerTargetStat[];
+  options: {
+    includeCurrentSubclassFragments: boolean;
+    simulateStatMods: boolean;
+    limit: number;
+  };
+  builds: LoadoutOptimizerBuild[];
+  scan: {
+    armorItems: number;
+    candidateArmorItems: number;
+    armorCombinations: number;
+    fragmentCombinations: number;
+    truncated: boolean;
+  };
+  updatedAt: string;
+}
+
+export interface LoadoutOptimizerApplyResult {
+  qq?: string;
+  membershipType: number;
+  membershipId: string;
+  sessionId: string;
+  buildId: string;
+  characterId: string;
+  transferredItemIds: string[];
+  equippedItemIds: string[];
+  statMods: LoadoutOptimizerStatModSuggestion[];
+  fragments: LoadoutOptimizerFragmentSuggestion[];
+  bungieResponses: unknown[];
+  message: string;
   updatedAt: string;
 }
 

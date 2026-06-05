@@ -6,6 +6,8 @@ Adds OpenClaw tools:
 - `destiny2_bind_qq`: creates a QQ -> Bungie membership binding. If no Bungie target is provided, it returns a 3-minute Bungie OAuth binding link.
 - `destiny2_inventory_query`: queries the QQ OAuth owner's inventory/vault/equipped items and returns an image card. It supports `view=vault`, `view=equipped`, `view=inventory`, `view=overview`, and `view=search`.
 - `destiny2_item_action`: safely transfers, equips, bulk-equips, locks/unlocks, or equips an in-game loadout after explicit confirmation.
+- `destiny2_loadout_optimize`: searches the QQ OAuth owner's armor for DIM-like triple-100 builds, defaulting to recovery + discipline + strength.
+- `destiny2_loadout_apply`: applies an optimizer build after explicit confirmation. It equips armor only and leaves mods/fragments as manual instructions.
 
 Default backend:
 
@@ -66,7 +68,13 @@ include `微冲`/`SMG` -> `冲锋枪`, `喷子` -> `霰弹枪`, and `筒子` -> 
 Write operations such as `/转移`, `/锁定`, `/解锁`, `/套装`, or equipping a
 specific item must be confirmed before execution.
 
+Loadout optimization is QQ OAuth only. Use `/配装`, `三百套`, or natural language
+such as `恢复纪律力量有没有三百套`. If the class is missing, ask for `术士`,
+`猎人`, or `泰坦`; then call `destiny2_loadout_optimize` with the same sender QQ.
+Applying a result requires the returned `sessionId` + `buildId` and explicit
+confirmation, and only equips the recommended armor.
+
 Card rendering does not call backend `/api/d2/cards/*.png` endpoints. The plugin
 uses `/api/d2/profile`, `/summary`, `/career`, `/pvp`, `/raids`,
-`/dungeons`, `/grandmasters`, `/heatmap`, `/namecard`, `/activities`, `/pgcr`, `/weapons`, `/craftables`, and `/catalysts/qq`,
+`/dungeons`, `/grandmasters`, `/heatmap`, `/namecard`, `/activities`, `/pgcr`, `/weapons`, `/craftables`, `/catalysts/qq`, and `/loadout-optimizer/qq`,
 then owns the HTML/CSS layout itself.

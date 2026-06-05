@@ -89,6 +89,36 @@ const fakeManifest = {
           displayProperties: { name: "不散恐惧", icon: "/common/destiny2_content/icons/smg.jpg" },
           itemTypeDisplayName: "微型冲锋枪",
           inventory: { bucketTypeHash: 1498876634, tierTypeName: "传说" }
+        },
+        "401": {
+          displayProperties: { name: "配装头盔", icon: "/common/destiny2_content/icons/helmet.jpg" },
+          itemTypeDisplayName: "头盔",
+          classType: 2,
+          inventory: { bucketTypeHash: 3448274439, bucketTypeName: "头盔", tierTypeName: "传说" }
+        },
+        "402": {
+          displayProperties: { name: "配装臂铠", icon: "/common/destiny2_content/icons/gauntlets.jpg" },
+          itemTypeDisplayName: "臂铠",
+          classType: 2,
+          inventory: { bucketTypeHash: 3551918588, bucketTypeName: "臂铠", tierTypeName: "传说" }
+        },
+        "403": {
+          displayProperties: { name: "配装胸甲", icon: "/common/destiny2_content/icons/chest.jpg" },
+          itemTypeDisplayName: "胸甲",
+          classType: 2,
+          inventory: { bucketTypeHash: 14239492, bucketTypeName: "胸甲", tierTypeName: "传说" }
+        },
+        "404": {
+          displayProperties: { name: "配装腿甲", icon: "/common/destiny2_content/icons/legs.jpg" },
+          itemTypeDisplayName: "腿甲",
+          classType: 2,
+          inventory: { bucketTypeHash: 20886954, bucketTypeName: "腿甲", tierTypeName: "传说" }
+        },
+        "405": {
+          displayProperties: { name: "配装臂环", icon: "/common/destiny2_content/icons/bond.jpg" },
+          itemTypeDisplayName: "职业物品",
+          classType: 2,
+          inventory: { bucketTypeHash: 1585787867, bucketTypeName: "职业物品", tierTypeName: "传说" }
         }
       };
     }
@@ -96,7 +126,22 @@ const fakeManifest = {
       return {
         "1498876634": { displayProperties: { name: "动能武器" } },
         "953998645": { displayProperties: { name: "威能武器" } },
-        "2465295065": { displayProperties: { name: "能量武器" } }
+        "2465295065": { displayProperties: { name: "能量武器" } },
+        "3448274439": { displayProperties: { name: "头盔" } },
+        "3551918588": { displayProperties: { name: "臂铠" } },
+        "14239492": { displayProperties: { name: "胸甲" } },
+        "20886954": { displayProperties: { name: "腿甲" } },
+        "1585787867": { displayProperties: { name: "职业物品" } }
+      };
+    }
+    if (entityType === "DestinyStatDefinition") {
+      return {
+        "2996146975": { displayProperties: { name: "机动" } },
+        "392767087": { displayProperties: { name: "韧性" } },
+        "1943323491": { displayProperties: { name: "恢复" } },
+        "1735777505": { displayProperties: { name: "纪律" } },
+        "144602215": { displayProperties: { name: "智慧" } },
+        "4244567218": { displayProperties: { name: "力量" } }
       };
     }
     if (entityType === "DestinyActivityDefinition") {
@@ -135,6 +180,27 @@ const fakeManifest = {
     return {};
   }
 };
+
+function optimizerArmorStats(values: Partial<Record<"mobility" | "resilience" | "recovery" | "discipline" | "intellect" | "strength", number>>) {
+  const statHashes = {
+    mobility: 2996146975,
+    resilience: 392767087,
+    recovery: 1943323491,
+    discipline: 1735777505,
+    intellect: 144602215,
+    strength: 4244567218
+  };
+  return {
+    stats: Object.fromEntries(
+      Object.entries(statHashes).map(([key, hash]) => [
+        String(hash),
+        {
+          value: values[key as keyof typeof statHashes] ?? 0
+        }
+      ])
+    )
+  };
+}
 
 class FakeBungieClient {
   async post() {
@@ -188,6 +254,41 @@ class FakeBungieClient {
                   quantity: 1,
                   bucketHash: 1498876634,
                   state: 0
+                },
+                {
+                  itemHash: 401,
+                  itemInstanceId: "691752903001",
+                  quantity: 1,
+                  bucketHash: 3448274439,
+                  state: 0
+                },
+                {
+                  itemHash: 402,
+                  itemInstanceId: "691752903002",
+                  quantity: 1,
+                  bucketHash: 3551918588,
+                  state: 0
+                },
+                {
+                  itemHash: 403,
+                  itemInstanceId: "691752903003",
+                  quantity: 1,
+                  bucketHash: 14239492,
+                  state: 0
+                },
+                {
+                  itemHash: 404,
+                  itemInstanceId: "691752903004",
+                  quantity: 1,
+                  bucketHash: 20886954,
+                  state: 0
+                },
+                {
+                  itemHash: 405,
+                  itemInstanceId: "691752903005",
+                  quantity: 1,
+                  bucketHash: 1585787867,
+                  state: 0
                 }
               ]
             }
@@ -238,6 +339,31 @@ class FakeBungieClient {
                   primaryStat: { value: 1995 },
                   canEquip: true,
                   transferStatus: 0
+                },
+                "691752903001": {
+                  primaryStat: { value: 2010 },
+                  canEquip: true,
+                  transferStatus: 0
+                },
+                "691752903002": {
+                  primaryStat: { value: 2010 },
+                  canEquip: true,
+                  transferStatus: 0
+                },
+                "691752903003": {
+                  primaryStat: { value: 2010 },
+                  canEquip: true,
+                  transferStatus: 0
+                },
+                "691752903004": {
+                  primaryStat: { value: 2010 },
+                  canEquip: true,
+                  transferStatus: 0
+                },
+                "691752903005": {
+                  primaryStat: { value: 2010 },
+                  canEquip: true,
+                  transferStatus: 0
                 }
               }
             },
@@ -245,7 +371,21 @@ class FakeBungieClient {
               data: {
                 "691752902764": { isLocked: true },
                 "691752902765": { isLocked: false },
-                "691752902766": { isLocked: false }
+                "691752902766": { isLocked: false },
+                "691752903001": { isLocked: false },
+                "691752903002": { isLocked: false },
+                "691752903003": { isLocked: false },
+                "691752903004": { isLocked: false },
+                "691752903005": { isLocked: false }
+              }
+            },
+            stats: {
+              data: {
+                "691752903001": optimizerArmorStats({ recovery: 20, discipline: 20, strength: 20 }),
+                "691752903002": optimizerArmorStats({ recovery: 20, discipline: 20, strength: 20 }),
+                "691752903003": optimizerArmorStats({ recovery: 20, discipline: 20, strength: 20 }),
+                "691752903004": optimizerArmorStats({ recovery: 10, discipline: 20, strength: 20 }),
+                "691752903005": optimizerArmorStats({ recovery: 10, discipline: 10, strength: 20 })
               }
             }
           }
@@ -655,7 +795,7 @@ describe("DestinyService", () => {
     });
     await expect(service.getPrivateInventory(3, "4611686018", "access-token", "607972716")).resolves.toMatchObject({
       qq: "607972716",
-      totals: { items: 3, vault: 2, inventory: 0, equipped: 1 },
+      totals: { items: 8, vault: 7, inventory: 0, equipped: 1 },
       items: expect.arrayContaining([
         expect.objectContaining({
           name: "纪念",
@@ -678,6 +818,14 @@ describe("DestinyService", () => {
           itemTypeDisplayName: "微型冲锋枪",
           bucketName: "动能武器",
           power: 1995
+        }),
+        expect.objectContaining({
+          name: "配装头盔",
+          owner: "vault",
+          bucketName: "头盔",
+          armorStats: expect.objectContaining({
+            total: 60
+          })
         })
       ])
     });
@@ -709,6 +857,53 @@ describe("DestinyService", () => {
     await expect(service.getLoadouts(3, "4611686018", "access-token", "607972716")).resolves.toMatchObject({
       qq: "607972716",
       loadouts: [{ index: 0, characterId: "2305843009", name: "Raid", itemCount: 1 }]
+    });
+    const optimizer = await service.searchLoadoutOptimizer(3, "4611686018", "access-token", {
+      qq: "607972716",
+      className: "术士",
+      targetStats: { recovery: 100, discipline: 100, strength: 100 },
+      includeCurrentSubclassFragments: true,
+      simulateStatMods: true,
+      limit: 2
+    });
+    expect(optimizer).toMatchObject({
+      qq: "607972716",
+      className: "术士",
+      classType: 2,
+      targets: expect.arrayContaining([
+        expect.objectContaining({ key: "recovery", target: 100 }),
+        expect.objectContaining({ key: "discipline", target: 100 }),
+        expect.objectContaining({ key: "strength", target: 100 })
+      ]),
+      scan: { candidateArmorItems: 5 },
+      builds: [
+        expect.objectContaining({
+          buildId: "b1",
+          achieved: true,
+          armor: expect.arrayContaining([
+            expect.objectContaining({ name: "配装头盔", slot: "helmet" }),
+            expect.objectContaining({ name: "配装臂环", slot: "class_item" })
+          ]),
+          statMods: expect.arrayContaining([
+            expect.objectContaining({ statKey: "recovery", value: 20, count: 2 }),
+            expect.objectContaining({ statKey: "discipline", value: 10, count: 1 })
+          ])
+        })
+      ]
+    });
+    await expect(
+      service.applyLoadoutOptimizerBuild(3, "4611686018", "access-token", {
+        qq: "607972716",
+        sessionId: optimizer.sessionId,
+        buildId: "b1",
+        confirm: true
+      })
+    ).resolves.toMatchObject({
+      qq: "607972716",
+      buildId: "b1",
+      transferredItemIds: expect.arrayContaining(["691752903001", "691752903005"]),
+      equippedItemIds: expect.arrayContaining(["691752903001", "691752903005"]),
+      statMods: expect.arrayContaining([expect.objectContaining({ statKey: "recovery" })])
     });
     await expect(
       service.getDungeonOverview(3, "4611686018", { historyPages: 1, pgcrLimit: 5 })

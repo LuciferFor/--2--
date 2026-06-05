@@ -559,6 +559,183 @@ export async function queryInventory(params = {}, rawConfig = {}, options = {}) 
   }
 }
 
+export async function queryLoadoutOptimizer(params = {}, rawConfig = {}, options = {}) {
+  const config = resolveConfig(rawConfig);
+  if (!config.enabled) {
+    return textResult("命运2查询工具当前未启用。", { status: "disabled" });
+  }
+  let target;
+  try {
+    target = parseTarget(targetInputFromParams(params), config);
+  } catch (error) {
+    if (error instanceof D2StatsInputError) {
+      return textResult(error.message, { status: "invalid_input" });
+    }
+    throw error;
+  }
+  if (target.kind !== "qq") {
+    return textResult("配装器需要本人 QQ OAuth 授权，请用已绑定 QQ 查询。", { status: "qq_required" });
+  }
+  const className = normalizeOptimizerClassName(params.className || params.class || params.role || params.characterClass);
+  if (!className) {
+    return textResult("要给哪个角色配装？请回复：术士、猎人或泰坦。", {
+      status: "needs_class",
+      qq: target.qq,
+      expected: ["术士", "猎人", "泰坦"],
+    });
+  }
+
+  try {
+    const resolved = await withCardIdentity(await resolveTargetMembership(target.qq, config, options), config, options);
+    const url = `${config.baseUrl}/api/d2/loadout-optimizer/qq/${encodeURIComponent(target.qq)}/search`;
+    const optimizer = await postEnvelope(
+      url,
+      {
+        className,
+        targetStats: normalizeOptimizerTargetStats(params.targetStats, params),
+        includeCurrentSubclassFragments: params.includeCurrentSubclassFragments !== false,
+        simulateStatMods: params.simulateStatMods !== false,
+        limit: clampInteger(params.limit, 3, 1, 10),
+      },
+      config,
+      options,
+    );
+    const html = renderLoadoutOptimizerHtml(resolved.player, optimizer);
+    const png = await renderHtmlToPng(html, {
+      width: CARD_WIDTH,
+      height: estimateLoadoutOptimizerHeight(optimizer),
+      signal: options.signal,
+      renderer: options.renderHtmlToPng,
+    });
+    const shareResult = await maybeShareImages({
+      config,
+      options,
+      card: "loadout_optimizer",
+      sourceUrl: url,
+      title: "Destiny 2 配装器",
+      description: "配装结果较大，已生成网页方便查看。",
+      images: [
+        {
+          base64: png.toString("base64"),
+          mimeType: "image/png",
+          bytes: png.length,
+          html,
+          caption: "配装推荐",
+        },
+      ],
+    });
+    if (shareResult) {
+      return shareResult;
+    }
+    return imageResult({
+      label: "Destiny 2 loadout optimizer",
+      path: url,
+      base64: png.toString("base64"),
+      mimeType: "image/png",
+      details: {
+        status: "ok",
+        card: "loadout_optimizer",
+        sessionId: optimizer.sessionId,
+        builds: optimizer.builds?.map((build) => ({ buildId: build.buildId, rank: build.rank, achieved: build.achieved })),
+        bytes: png.length,
+        sourceUrl: url,
+        renderedBy: "openclaw-html",
+      },
+    });
+  } catch (error) {
+    if (error instanceof D2StatsBackendError && (error.status === 401 || error.status === 403 || error.status === 404)) {
+      return startQqOauthBinding(target.qq, config, options);
+    }
+    if (error instanceof D2StatsBackendError) {
+      return textResult(formatBackendError(error.payload, error.status), {
+        status: "failed",
+        httpStatus: error.status,
+        url: error.url,
+        error: error.payload,
+      });
+    }
+    return textResult(`配装器渲染失败：${error?.message || "未知错误"}`, {
+      status: "render_failed",
+      error: String(error?.stack || error),
+    });
+  }
+}
+
+export async function applyLoadoutOptimizer(params = {}, rawConfig = {}, options = {}) {
+  const config = resolveConfig(rawConfig);
+  if (!config.enabled) {
+    return textResult("命运2查询工具当前未启用。", { status: "disabled" });
+  }
+  let target;
+  try {
+    target = parseTarget(targetInputFromParams(params), config);
+  } catch (error) {
+    if (error instanceof D2StatsInputError) {
+      return textResult(error.message, { status: "invalid_input" });
+    }
+    throw error;
+  }
+  if (target.kind !== "qq") {
+    return textResult("应用配装只能使用本人 QQ OAuth 授权。", { status: "qq_required" });
+  }
+  const sessionId = String(params.sessionId || "").trim();
+  const buildId = normalizeOptimizerBuildId(params.buildId || params.rank || params.index);
+  if (!sessionId || !buildId) {
+    return textResult("应用配装需要 sessionId 和 buildId。请先查询配装结果，再说“应用第 N 套”。", {
+      status: "missing_session",
+    });
+  }
+  if (params.confirm !== true) {
+    return textResult(`确认要应用配装 ${buildId} 吗？确认后我只会换防具，不会自动改模组和碎片。`, {
+      status: "needs_confirmation",
+      qq: target.qq,
+      sessionId,
+      buildId,
+    });
+  }
+  try {
+    const url = `${config.baseUrl}/api/d2/loadout-optimizer/qq/${encodeURIComponent(target.qq)}/apply`;
+    const data = await postEnvelope(
+      url,
+      {
+        sessionId,
+        buildId,
+        characterId: params.characterId,
+        confirm: true,
+      },
+      config,
+      options,
+    );
+    const extra = [];
+    if (Array.isArray(data.statMods) && data.statMods.length) {
+      extra.push(`属性模组：${data.statMods.map((mod) => `${mod.statName}+${mod.value}`).join("，")}`);
+    }
+    if (Array.isArray(data.fragments) && data.fragments.length) {
+      extra.push(`碎片：${data.fragments.map((fragment) => fragment.name).join("，")}`);
+    }
+    return textResult([data.message || "已应用配装防具。", ...extra].join("\n"), {
+      status: "ok",
+      result: data,
+    });
+  } catch (error) {
+    if (error instanceof D2StatsBackendError && (error.status === 401 || error.status === 403 || error.status === 404)) {
+      return startQqOauthBinding(target.qq, config, options);
+    }
+    if (error instanceof D2StatsBackendError) {
+      return textResult(formatBackendError(error.payload, error.status), {
+        status: "failed",
+        httpStatus: error.status,
+        url: error.url,
+        error: error.payload,
+      });
+    }
+    return textResult(`应用配装失败：${error?.message || "未知错误"}`, {
+      status: "failed",
+      error: String(error?.stack || error),
+    });
+  }
+}
+
 function inventoryCardWidth(params = {}) {
   return normalizeInventoryView(params.view, params) === "equipped" ? EQUIPPED_CARD_WIDTH : HEATMAP_CARD_WIDTH;
 }
@@ -1948,6 +2125,183 @@ function renderInventoryListHtml(player, inventory, params = {}, view = "overvie
   });
 }
 
+function renderLoadoutOptimizerHtml(player, optimizer) {
+  const builds = Array.isArray(optimizer?.builds) ? optimizer.builds : [];
+  const targets = Array.isArray(optimizer?.targets) ? optimizer.targets : [];
+  const best = builds[0];
+  const achieved = builds.filter((build) => build?.achieved).length;
+  const targetLine = targets.map((target) => `${optimizerStatName(target)} ${int(target.target)}`).join(" + ") || "恢复 100 + 纪律 100 + 力量 100";
+  return cardPage({
+    width: CARD_WIDTH,
+    player,
+    title: formatPlayerName(player),
+    eyebrow: "DESTINY 2 LOADOUT OPTIMIZER",
+    subtitle: `${escapeHtml(optimizer?.className || "配装")} · ${escapeHtml(targetLine)}`,
+    body: `
+      <section class="metrics metrics-4">
+        ${metric("候选套装", int(builds.length))}
+        ${metric("达成目标", int(achieved))}
+        ${metric("防具候选", int(optimizer?.scan?.candidateArmorItems))}
+        ${metric("组合扫描", int(optimizer?.scan?.armorCombinations))}
+      </section>
+      <section class="optimizer-summary">
+        <div>
+          <strong>${best?.achieved ? "找到可达成三百的套装" : "未完全达成，已给出最接近方案"}</strong>
+          <span>sessionId: ${escapeHtml(optimizer?.sessionId || "-")} · characterId: ${escapeHtml(optimizer?.characterId || "-")}</span>
+        </div>
+        <p>应用时说“应用第 1 套”并确认；自动操作只会换推荐防具，属性模组和碎片需要手动按清单调整。</p>
+      </section>
+      <section class="optimizer-builds">
+        ${builds.map((build) => renderOptimizerBuild(build, optimizer)).join("") || emptyState("没有找到可用防具组合。")}
+      </section>
+      <footer class="card-footer">${escapeHtml(optimizerScanNote(optimizer))}</footer>
+      ${membershipBlock(optimizer?.membershipType, optimizer?.membershipId)}
+    `,
+  });
+}
+
+function renderOptimizerBuild(build, optimizer) {
+  const targets = Array.isArray(optimizer?.targets) ? optimizer.targets : [];
+  const missing = Array.isArray(build?.missing) ? build.missing.filter((stat) => Number(stat?.value || 0) > 0) : [];
+  const status = build?.achieved ? "达成" : `缺口 ${missing.map((stat) => `${optimizerStatName(stat)} ${int(stat.value)}`).join(" / ") || "-"}`;
+  const armor = Array.isArray(build?.armor) ? build.armor : [];
+  return `
+    <article class="optimizer-build ${build?.achieved ? "achieved" : ""}">
+      <div class="optimizer-build-head">
+        <div>
+          <strong>第 ${int(build?.rank)} 套 · ${escapeHtml(build?.buildId || "-")}</strong>
+          <span>${escapeHtml(status)} · 浪费 ${int(build?.waste)} · 分数 ${int(build?.score)}</span>
+        </div>
+        <b>${build?.achieved ? "三百达成" : "最接近"}</b>
+      </div>
+      <div class="optimizer-stat-bars">
+        ${optimizerStatBars(build?.stats, targets)}
+      </div>
+      <div class="optimizer-armor-grid">
+        ${armor.map(renderOptimizerArmor).join("")}
+      </div>
+      <div class="optimizer-advice-grid">
+        ${optimizerAdvicePanel("属性模组", renderOptimizerStatMods(build?.statMods))}
+        ${optimizerAdvicePanel("碎片建议", renderOptimizerFragments(build?.fragments))}
+      </div>
+      ${Array.isArray(build?.notes) && build.notes.length ? `<div class="optimizer-notes">${build.notes.map((note) => `<span>${escapeHtml(note)}</span>`).join("")}</div>` : ""}
+    </article>
+  `;
+}
+
+function optimizerStatBars(stats, targets) {
+  const statMap = new Map((Array.isArray(stats) ? stats : []).map((stat) => [stat?.statKey || stat?.key, stat]));
+  const targetMap = new Map((Array.isArray(targets) ? targets : []).map((target) => [target?.statKey || target?.key, target]));
+  const orderedKeys = ["mobility", "resilience", "recovery", "discipline", "intellect", "strength"];
+  return orderedKeys
+    .map((key) => {
+      const stat = statMap.get(key) || { statKey: key, statName: optimizerStatName({ statKey: key }), value: 0 };
+      const target = targetMap.get(key);
+      const value = Number(stat?.value || 0);
+      const wanted = Number(target?.target || 0);
+      const width = Math.max(0, Math.min(100, value));
+      const tone = wanted > 0 ? (value >= wanted ? "hit" : "miss") : "muted";
+      return `
+        <div class="optimizer-stat ${tone}">
+          <div><span>${escapeHtml(optimizerStatName(stat))}</span><b>${int(value)}${wanted ? ` / ${int(wanted)}` : ""}</b></div>
+          <i><em style="width: ${width}%"></em></i>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+function renderOptimizerArmor(item) {
+  const iconUrl = item?.iconPath ? bungieAssetUrl(item.iconPath) : "";
+  const stats = Array.isArray(item?.baseStats) ? item.baseStats : [];
+  const statLine = stats.length
+    ? stats.map((stat) => `<span>${escapeHtml(optimizerShortStatName(stat))} ${int(stat?.value)}</span>`).join("")
+    : "";
+  return `
+    <div class="optimizer-armor ${item?.exotic ? "exotic" : ""}">
+      <div class="optimizer-armor-icon ${iconUrl ? "" : "empty"}">
+        ${iconUrl ? `<img src="${escapeHtml(iconUrl)}" />` : "?"}
+      </div>
+      <div class="optimizer-armor-main">
+        <strong>${escapeHtml(item?.name || "Unknown Armor")}</strong>
+        <span>${escapeHtml([item?.slotLabel || item?.slot, item?.tierTypeName, item?.power ? `光等 ${int(item.power)}` : ""].filter(Boolean).join(" · "))}</span>
+        <b>${escapeHtml([item?.owner === "vault" ? "仓库" : item?.owner === "equipped" ? "已装备" : "背包", item?.itemInstanceId ? `ID ${item.itemInstanceId}` : ""].filter(Boolean).join(" · "))}</b>
+        ${statLine ? `<div class="optimizer-armor-stats">${statLine}</div>` : ""}
+      </div>
+    </div>
+  `;
+}
+
+function optimizerAdvicePanel(title, body) {
+  return `
+    <div class="optimizer-advice">
+      <strong>${escapeHtml(title)}</strong>
+      ${body || "<span>无需额外调整</span>"}
+    </div>
+  `;
+}
+
+function renderOptimizerStatMods(mods) {
+  const list = Array.isArray(mods) ? mods : [];
+  if (!list.length) {
+    return "";
+  }
+  return `<div class="optimizer-chip-list">${list.map((mod) => `<i>${escapeHtml(optimizerStatName(mod))} +${int(mod?.value)}（${int(mod?.count || 1)} 个）</i>`).join("")}</div>`;
+}
+
+function renderOptimizerFragments(fragments) {
+  const list = Array.isArray(fragments) ? fragments : [];
+  if (!list.length) {
+    return "";
+  }
+  return `<div class="optimizer-chip-list">${list.map((fragment) => `<i>${escapeHtml(fragment?.name || "碎片")} ${optimizerFragmentStats(fragment)}</i>`).join("")}</div>`;
+}
+
+function optimizerFragmentStats(fragment) {
+  const stats = Array.isArray(fragment?.statModifiers) ? fragment.statModifiers : [];
+  const text = stats
+    .map((stat) => `${optimizerShortStatName(stat)} ${Number(stat?.value || 0) >= 0 ? "+" : ""}${int(stat?.value)}`)
+    .join(" ");
+  return text ? `(${escapeHtml(text)})` : "";
+}
+
+function optimizerStatName(stat) {
+  const key = String(stat?.statKey || stat?.key || "").trim();
+  const names = {
+    mobility: "机动",
+    resilience: "韧性",
+    recovery: "恢复",
+    discipline: "纪律",
+    intellect: "智慧",
+    strength: "力量",
+  };
+  return stat?.statName || stat?.name || names[key] || key || "-";
+}
+
+function optimizerShortStatName(stat) {
+  const name = optimizerStatName(stat);
+  const shortNames = new Map([
+    ["机动", "机"],
+    ["韧性", "韧"],
+    ["恢复", "恢"],
+    ["纪律", "纪"],
+    ["智慧", "智"],
+    ["力量", "力"],
+  ]);
+  return shortNames.get(name) || name;
+}
+
+function optimizerScanNote(optimizer) {
+  const scan = optimizer?.scan || {};
+  const pieces = [
+    `防具 ${int(scan.candidateArmorItems)} 件`,
+    `防具组合 ${int(scan.armorCombinations)}`,
+    `碎片组合 ${int(scan.fragmentCombinations)}`,
+    scan.truncated ? "结果已剪枝，可能不是全量穷举" : "结果已按候选分数剪枝",
+  ];
+  return `配装器按所选职业全仓库/背包/已装备防具搜索；第一版只模拟当前分支碎片和常见属性模组。${pieces.join(" · ")}`;
+}
+
 function inventoryGroups(items) {
   return {
     equipped: items.filter((item) => item?.owner === "equipped"),
@@ -2060,9 +2414,25 @@ function inventoryItemCardHtml(item) {
         <strong>${escapeHtml(item?.name || "Unknown Item")}</strong>
         <span>${escapeHtml(subtitle || ownerLabel(item?.owner))}</span>
         <b>${escapeHtml(meta || ownerLabel(item?.owner))}</b>
+        ${inventorySelectedPerksHtml(item)}
         ${inventoryArmorStatsHtml(item)}
         ${inventorySocketsHtml(item)}
       </div>
+    </div>
+  `;
+}
+
+function inventorySelectedPerksHtml(item) {
+  if (!inventoryItemLooksLikeWeapon(item)) {
+    return "";
+  }
+  const selectedPerks = selectedInventoryPlugNames(item).filter(relevantEquippedPerkName).slice(0, 8);
+  if (!selectedPerks.length) {
+    return "";
+  }
+  return `
+    <div class="inventory-selected-perks">
+      ${selectedPerks.map((name) => `<i>${escapeHtml(name)}</i>`).join("")}
     </div>
   `;
 }
@@ -2094,6 +2464,9 @@ function inventoryArmorStatsHtml(item) {
 
 function inventorySocketsHtml(item) {
   if (!inventoryItemShouldShowSockets(item)) {
+    return "";
+  }
+  if (inventoryItemLooksLikeWeapon(item)) {
     return "";
   }
   const sockets = Array.isArray(item?.sockets) ? item.sockets.filter(inventorySocketHasContent) : [];
@@ -2170,9 +2543,6 @@ function equippedWideItemHtml(item) {
 }
 
 function selectedInventoryPlugNames(item) {
-  if (!inventoryItemShouldShowSockets(item)) {
-    return [];
-  }
   const sockets = Array.isArray(item?.sockets) ? item.sockets : [];
   const names = [];
   const seen = new Set();
@@ -2300,6 +2670,16 @@ function inventoryBucketTitle(item) {
   return String(item?.bucketName || item?.itemTypeDisplayName || ownerLabel(item?.owner) || "其他").trim();
 }
 
+function inventoryBucketSearchText(item) {
+  return [
+    item?.bucketName,
+    item?.itemTypeDisplayName,
+    item?.itemTypeAndTierDisplayName,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
 function inventoryBucketTone(item) {
   if (item?.owner === "vault") {
     return "green";
@@ -2329,11 +2709,15 @@ function inventoryBucketOrder(title) {
 }
 
 function inventoryItemLooksLikeWeapon(item) {
+  const text = inventoryBucketSearchText(item);
+  if (inventoryBucketOrder(text) <= 40) {
+    return true;
+  }
   return inventoryBucketOrder(inventoryBucketTitle(item)) <= 40;
 }
 
 function inventoryItemLooksLikeArmor(item) {
-  const order = inventoryBucketOrder(inventoryBucketTitle(item));
+  const order = Math.min(inventoryBucketOrder(inventoryBucketSearchText(item)), inventoryBucketOrder(inventoryBucketTitle(item)));
   return order >= 50 && order <= 100;
 }
 
@@ -2966,6 +3350,21 @@ function estimateInventoryHeight(inventory, params = {}) {
   return Math.max(720, 340 + groupHeights);
 }
 
+function estimateLoadoutOptimizerHeight(optimizer) {
+  const builds = Array.isArray(optimizer?.builds) ? optimizer.builds : [];
+  const buildHeight = builds.reduce((height, build) => {
+    const armorRows = Math.ceil(Math.max(1, Array.isArray(build?.armor) ? build.armor.length : 0) / 5);
+    const noteRows = Array.isArray(build?.notes) && build.notes.length ? 32 : 0;
+    const adviceRows = Math.max(
+      1,
+      Math.ceil(Math.max(1, Array.isArray(build?.statMods) ? build.statMods.length : 0) / 4),
+      Math.ceil(Math.max(1, Array.isArray(build?.fragments) ? build.fragments.length : 0) / 4),
+    );
+    return height + 174 + armorRows * 118 + adviceRows * 48 + noteRows;
+  }, 0);
+  return Math.max(820, 430 + buildHeight);
+}
+
 function inventoryGridEstimatedHeight(items, columns = 3) {
   const list = Array.isArray(items) && items.length ? items : [{}];
   let height = 0;
@@ -2977,13 +3376,16 @@ function inventoryGridEstimatedHeight(items, columns = 3) {
 }
 
 function inventoryItemEstimatedHeight(item) {
+  const isWeapon = inventoryItemLooksLikeWeapon(item);
+  const selectedPerks = isWeapon ? selectedInventoryPlugNames(item).filter(relevantEquippedPerkName).length : 0;
   const sockets =
-    inventoryItemShouldShowSockets(item) && Array.isArray(item?.sockets)
+    !isWeapon && inventoryItemShouldShowSockets(item) && Array.isArray(item?.sockets)
       ? item.sockets.filter(inventorySocketHasContent)
       : [];
   const armorStats = Array.isArray(item?.armorStats?.stats) && item.armorStats.stats.length ? 72 : 0;
   const socketHeight = sockets.reduce((height) => height + 38, 0);
-  return 96 + armorStats + socketHeight;
+  const perkHeight = selectedPerks ? 26 + Math.ceil(selectedPerks / 3) * 22 : 0;
+  return 96 + armorStats + socketHeight + perkHeight;
 }
 
 function equippedWideCharacterEstimatedHeight(itemCount) {
@@ -3833,6 +4235,29 @@ function cardPage({ eyebrow, title, subtitle, body, player, width = CARD_WIDTH }
       line-height: 1.05;
       font-weight: 950;
     }
+    .inventory-selected-perks {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-top: 6px;
+      padding-top: 7px;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .inventory-selected-perks i {
+      display: inline-flex;
+      max-width: 100%;
+      padding: 3px 6px;
+      border-radius: 4px;
+      color: #22d784;
+      background: rgba(34, 215, 132, 0.1);
+      border: 1px solid rgba(34, 215, 132, 0.22);
+      font-style: normal;
+      font-size: 11px;
+      line-height: 1.15;
+      font-weight: 950;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
     .inventory-sockets {
       display: grid;
       gap: 6px;
@@ -4100,6 +4525,290 @@ function cardPage({ eyebrow, title, subtitle, body, player, width = CARD_WIDTH }
     .equipped-statline b {
       color: #ffffff;
       background: rgba(255, 255, 255, 0.095);
+    }
+    .optimizer-summary {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+      gap: 18px;
+      align-items: center;
+      margin-bottom: 18px;
+      padding: 18px 20px;
+      border-radius: 8px;
+      background: rgba(17, 17, 17, 0.88);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .optimizer-summary strong,
+    .optimizer-summary span,
+    .optimizer-summary p {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+    .optimizer-summary strong {
+      display: block;
+      color: #ffffff;
+      font-size: 24px;
+      line-height: 1.15;
+      font-weight: 950;
+      margin-bottom: 7px;
+    }
+    .optimizer-summary span {
+      color: #aeb9c6;
+      font-size: 13px;
+      font-weight: 850;
+    }
+    .optimizer-summary p {
+      margin: 0;
+      color: #d4dbe5;
+      font-size: 15px;
+      line-height: 1.5;
+      font-weight: 800;
+    }
+    .optimizer-builds {
+      display: grid;
+      gap: 18px;
+    }
+    .optimizer-build {
+      display: grid;
+      gap: 16px;
+      min-width: 0;
+      padding: 18px 20px 20px;
+      border-radius: 8px;
+      background: rgba(17, 17, 17, 0.9);
+      border: 1px solid rgba(255, 255, 255, 0.055);
+    }
+    .optimizer-build.achieved {
+      border-color: rgba(33, 208, 122, 0.24);
+      box-shadow: inset 0 1px 0 rgba(33, 208, 122, 0.18);
+    }
+    .optimizer-build-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      min-width: 0;
+      padding-bottom: 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .optimizer-build-head strong,
+    .optimizer-build-head span {
+      display: block;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+    .optimizer-build-head strong {
+      color: #ffffff;
+      font-size: 24px;
+      line-height: 1.1;
+      font-weight: 950;
+      margin-bottom: 5px;
+    }
+    .optimizer-build-head span {
+      color: #aeb9c6;
+      font-size: 13px;
+      line-height: 1.25;
+      font-weight: 850;
+    }
+    .optimizer-build-head b {
+      flex: 0 0 auto;
+      min-width: 82px;
+      padding: 8px 10px;
+      border-radius: 5px;
+      color: #ffffff;
+      background: #d84d4d;
+      font-size: 15px;
+      line-height: 1;
+      font-weight: 950;
+      text-align: center;
+    }
+    .optimizer-build.achieved .optimizer-build-head b {
+      background: #21a46a;
+    }
+    .optimizer-stat-bars {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .optimizer-stat {
+      display: grid;
+      gap: 7px;
+      min-width: 0;
+      padding: 10px;
+      border-radius: 6px;
+      background: rgba(6, 6, 6, 0.48);
+    }
+    .optimizer-stat div {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      min-width: 0;
+    }
+    .optimizer-stat span,
+    .optimizer-stat b {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 13px;
+      line-height: 1.1;
+      font-weight: 950;
+    }
+    .optimizer-stat span { color: #aeb9c6; }
+    .optimizer-stat b { color: #ffffff; }
+    .optimizer-stat i {
+      display: block;
+      height: 6px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.08);
+    }
+    .optimizer-stat em {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: #7d8cff;
+    }
+    .optimizer-stat.hit em { background: #21d07a; }
+    .optimizer-stat.miss em { background: #ff6b63; }
+    .optimizer-armor-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      align-items: stretch;
+    }
+    .optimizer-armor {
+      display: grid;
+      grid-template-columns: 52px minmax(0, 1fr);
+      gap: 9px;
+      min-width: 0;
+      padding: 9px;
+      border-radius: 7px;
+      background: rgba(7, 7, 7, 0.48);
+      border-left: 4px solid #21d07a;
+    }
+    .optimizer-armor.exotic {
+      border-left-color: #ffc857;
+    }
+    .optimizer-armor-icon {
+      width: 52px;
+      height: 52px;
+      display: grid;
+      place-items: center;
+      border-radius: 5px;
+      overflow: hidden;
+      color: #7f8a97;
+      font-size: 22px;
+      font-weight: 950;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.07);
+    }
+    .optimizer-armor-icon img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .optimizer-armor-main {
+      display: grid;
+      align-content: start;
+      gap: 4px;
+      min-width: 0;
+    }
+    .optimizer-armor-main strong,
+    .optimizer-armor-main span,
+    .optimizer-armor-main b {
+      min-width: 0;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    .optimizer-armor-main strong {
+      color: #ffffff;
+      font-size: 14px;
+      line-height: 1.12;
+      font-weight: 950;
+    }
+    .optimizer-armor-main span {
+      color: #aeb9c6;
+      font-size: 11px;
+      line-height: 1.18;
+      font-weight: 850;
+    }
+    .optimizer-armor-main b {
+      color: #21d07a;
+      font-size: 10px;
+      line-height: 1.18;
+      font-weight: 900;
+    }
+    .optimizer-armor-stats {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 3px;
+      margin-top: 2px;
+    }
+    .optimizer-armor-stats span {
+      padding: 2px 4px;
+      border-radius: 3px;
+      color: #d8e0e8;
+      background: rgba(255, 255, 255, 0.06);
+      font-size: 10px;
+      line-height: 1.1;
+      font-weight: 900;
+    }
+    .optimizer-advice-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .optimizer-advice {
+      min-width: 0;
+      padding: 12px;
+      border-radius: 7px;
+      background: rgba(6, 6, 6, 0.42);
+      border: 1px solid rgba(255, 255, 255, 0.045);
+    }
+    .optimizer-advice strong {
+      display: block;
+      color: #ffffff;
+      font-size: 15px;
+      line-height: 1.1;
+      font-weight: 950;
+      margin-bottom: 8px;
+    }
+    .optimizer-advice > span {
+      color: #aeb9c6;
+      font-size: 13px;
+      font-weight: 850;
+    }
+    .optimizer-chip-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      min-width: 0;
+    }
+    .optimizer-chip-list i,
+    .optimizer-notes span {
+      display: inline-flex;
+      max-width: 100%;
+      padding: 5px 7px;
+      border-radius: 4px;
+      color: #dce5ef;
+      background: rgba(255, 255, 255, 0.07);
+      font-style: normal;
+      font-size: 12px;
+      line-height: 1.15;
+      font-weight: 900;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    .optimizer-chip-list i {
+      color: #21d07a;
+      background: rgba(33, 208, 122, 0.10);
+      border: 1px solid rgba(33, 208, 122, 0.18);
+    }
+    .optimizer-notes {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      min-width: 0;
     }
     .catalyst-groups {
       display: grid;
@@ -5748,6 +6457,87 @@ function normalizeInventoryView(value, params = {}) {
     return bucket;
   }
   return "overview";
+}
+
+function normalizeOptimizerClassName(value) {
+  const text = String(value || "").trim().toLowerCase();
+  if (!text) {
+    return "";
+  }
+  if (/warlock|术士|術士|术/u.test(text)) {
+    return "术士";
+  }
+  if (/hunter|猎人|獵人|猎/u.test(text)) {
+    return "猎人";
+  }
+  if (/titan|泰坦|泰/u.test(text)) {
+    return "泰坦";
+  }
+  return "";
+}
+
+function normalizeOptimizerTargetStats(input, params = {}) {
+  const result = {
+    recovery: 100,
+    discipline: 100,
+    strength: 100,
+  };
+  const applyValue = (key, value) => {
+    const normalized = normalizeOptimizerStatKey(key);
+    if (!normalized) {
+      return;
+    }
+    const number = Number(value);
+    if (Number.isFinite(number) && number >= 0) {
+      result[normalized] = clampInteger(number, 100, 0, 100);
+    }
+  };
+
+  if (input && typeof input === "object" && !Array.isArray(input)) {
+    for (const [key, value] of Object.entries(input)) {
+      applyValue(key, value);
+    }
+  }
+  for (const key of [
+    "mobility",
+    "resilience",
+    "recovery",
+    "discipline",
+    "intellect",
+    "strength",
+    "机动",
+    "韧性",
+    "恢复",
+    "纪律",
+    "智慧",
+    "力量",
+  ]) {
+    if (params[key] !== undefined) {
+      applyValue(key, params[key]);
+    }
+  }
+  return result;
+}
+
+function normalizeOptimizerStatKey(value) {
+  const text = String(value || "").trim().toLowerCase();
+  if (!text) return "";
+  if (/mobility|机动|機動/u.test(text)) return "mobility";
+  if (/resilience|韧性|韌性/u.test(text)) return "resilience";
+  if (/recovery|恢复|恢復/u.test(text)) return "recovery";
+  if (/discipline|纪律|紀律/u.test(text)) return "discipline";
+  if (/intellect|智慧|智力/u.test(text)) return "intellect";
+  if (/strength|力量/u.test(text)) return "strength";
+  return "";
+}
+
+function normalizeOptimizerBuildId(value) {
+  const text = String(value || "").trim().toLowerCase();
+  if (/^b\d+$/u.test(text)) {
+    return text;
+  }
+  const match = text.match(/\d+/u);
+  return match ? `b${Number(match[0])}` : "";
 }
 
 function normalizeItemAction(value) {

@@ -1,6 +1,6 @@
 # Destiny 2 Stats OpenClaw Skill
 
-Use this skill when a user asks to query Destiny 2 stats, cards, QQ bindings, raid, dungeon, Grandmaster, PvP, career, heatmap, crafting pattern, catalyst progress, or OAuth-protected inventory/equipment management.
+Use this skill when a user asks to query Destiny 2 stats, cards, QQ bindings, raid, dungeon, Grandmaster, PvP, career, heatmap, crafting pattern, catalyst progress, OAuth-protected inventory/equipment management, or DIM-like loadout optimization.
 
 ## Tool To Use
 
@@ -11,6 +11,10 @@ Use `destiny2_bind_qq` only when the user explicitly wants to bind a QQ number t
 Use `destiny2_inventory_query` for `/仓库`, `/仓库搜索`, `/库存`, `/背包`, `/装备`, `/现有装备`, `/身上装备`, `/当前装备`, or when the user needs itemInstanceId/characterId before an equipment operation. It accepts QQ targets or the sender QQ in `qq`, and returns an image card. Use `view=vault` for full vault, `view=equipped` for currently equipped gear, `view=inventory` for carried inventory, and `view=search` for item searches.
 
 Use `destiny2_item_action` for actual write operations such as `/转移`, `/锁定`, `/解锁`, `/套装`, or a clear request to equip/move a specific item. It only accepts QQ targets. Always call it once without `confirm=true` to produce the confirmation text, and only call again with `confirm=true` after the user explicitly confirms.
+
+Use `destiny2_loadout_optimize` for `/配装`, `三百套`, `恢复纪律力量有没有 300`, or DIM-like armor set questions. It only accepts QQ OAuth targets. If the user did not specify a class, call the tool with the sender QQ and no `className`; it will ask for `术士/猎人/泰坦`. Default target is recovery 100 + discipline 100 + strength 100.
+
+Use `destiny2_loadout_apply` only after a loadout optimizer result and an explicit confirmation such as `确认应用第 1 套`. It only equips armor from the same sender QQ's optimizer session; it does not change mods, sockets, subclass, or fragments.
 
 ## Targets
 
@@ -32,7 +36,7 @@ Do not reinterpret `/raid`, `查下raid`, `查 raid`, or `突袭` as weekly feat
 - If the user says `查我`, `我的`, `绑定命运2`, or asks for any Destiny 2 query and the sender QQ is available, use that QQ as `target`, `qq`, `senderQq`, `userId`, or `user_id`.
 - If OpenClaw exposes the sender QQ as a separate field, pass it as `qq` or `target`; do not call `destiny2_card_query` with only `command=/地牢`, `command=/raid`, `command=查下raid`, etc.
 - If a QQ target is not bound, or the bound QQ has not completed Bungie OAuth login for an OAuth-only feature, return the 3-minute Bungie OAuth binding/login link from the tool result. Do not ask the user to manually provide a Bungie ID first.
-- For OAuth-only features (`/催化`, `/仓库`, `/仓库搜索`, `/库存`, `/背包`, `/装备`, `/现有装备`, `/身上装备`, `/当前装备`, `/转移`, `/锁定`, `/解锁`, `/套装`), do not ask for BungieName or membershipId as a fallback. Tell the user to finish the QQ Bungie login link.
+- For OAuth-only features (`/催化`, `/仓库`, `/仓库搜索`, `/库存`, `/背包`, `/装备`, `/现有装备`, `/身上装备`, `/当前装备`, `/配装`, `三百套`, `/转移`, `/锁定`, `/解锁`, `/套装`), do not ask for BungieName or membershipId as a fallback. Tell the user to finish the QQ Bungie login link.
 - If the sender QQ is not available and the user says `查我`, ask for their QQ number.
 
 ## Command Mapping
@@ -55,6 +59,8 @@ Map common Chinese commands to `destiny2_card_query`:
 - `/库存`: use `destiny2_inventory_query` with `view=overview` and `bucket=all`; only use QQ targets.
 - `/背包`: use `destiny2_inventory_query` with `view=inventory` and `bucket=inventory`; only use QQ targets.
 - `/仓库搜索`, `查仓库所有 XX`, `仓库里有哪些 XX`: use `destiny2_inventory_query` with `view=search`; if the user says warehouse/vault, pass `bucket=vault`. Pass only the cleaned item name or type as `q`; strip structural words such as `的`, `所有`, `全部`, `里`, `有哪些`, `有没有`. Normalize common aliases before calling: `微冲`/`SMG` -> `冲锋枪`, `喷子` -> `霰弹枪`, `筒子` -> `火箭发射器`.
+- `/配装`, `三百套`, `恢复纪律力量有没有三百套`: use `destiny2_loadout_optimize`; only use QQ targets. If class is missing, let the tool ask which class. If the user says `术士/猎人/泰坦` after that, call again with the same sender QQ and `className`.
+- `应用第 1 套`, `换上第 2 套`: use `destiny2_loadout_apply` only with the same sender QQ's recent `sessionId` and `buildId`; first ask/confirm unless the user has explicitly confirmed. Do not apply another user's session in group chat.
 - `/转移`, `/锁定`, `/解锁`, `/套装`, or an explicit "equip this item" request: use `destiny2_item_action`; only use QQ targets and require explicit confirmation before execution.
 - `/武器`: `card=weapons`.
 - `/最近`, `/活动`, `/战绩列表`: `card=activities`.
@@ -73,7 +79,9 @@ Map common Chinese commands to `destiny2_card_query`:
 - Catalyst progress is private-ish OAuth data. Only query catalysts by QQ number that owns the OAuth binding.
 - Do not query catalyst progress by arbitrary BungieName or membership id.
 - Inventory, vault, equipment, lock state, and loadout actions are private OAuth capabilities. Only use them for the QQ owner; never use BungieName or membershipId for these tools.
+- Loadout optimization and apply are private OAuth capabilities. The search result can be shown to the QQ owner; the apply step must use that same QQ's session and explicit confirmation.
 - Never execute `destiny2_item_action` with `confirm=true` unless the user has just explicitly confirmed the operation. If the user gave only an item name, first run `destiny2_inventory_query` to show candidate items and ask which itemInstanceId to use.
+- Never execute `destiny2_loadout_apply` with `confirm=true` unless the user has just explicitly confirmed the optimizer build. It equips armor only; tell the user to manually apply the listed stat mods and fragments.
 - Do not offer dismantle/delete/mod/socket operations; this skill intentionally supports only safe DIM-like operations.
 - Do not claim Bungie returns these images. The backend returns JSON and OpenClaw renders the image card.
 - If a query fails because the Bungie API key or backend is broken, say the backend/Bungie API is unavailable and avoid inventing stats.

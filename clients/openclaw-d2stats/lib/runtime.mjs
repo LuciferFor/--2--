@@ -1,4 +1,12 @@
-import { bindQq, itemAction, queryCard, queryInventory, resolveConfig } from "./core.mjs";
+import {
+  applyLoadoutOptimizer,
+  bindQq,
+  itemAction,
+  queryCard,
+  queryInventory,
+  queryLoadoutOptimizer,
+  resolveConfig,
+} from "./core.mjs";
 
 const senderQqProperties = {
   senderQq: {
@@ -240,6 +248,95 @@ const itemActionParameters = {
   required: ["action"],
 };
 
+const loadoutOptimizeParameters = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    target: {
+      type: "string",
+      description: "QQ number only. Use the speaker's QQ when the user says 我/查我/给我配装.",
+    },
+    qq: {
+      type: "string",
+      description: "Optional explicit QQ number; same as target.",
+    },
+    ...senderQqProperties,
+    className: {
+      type: "string",
+      description: "Required character class after clarification: 术士, 猎人, or 泰坦. If missing, the tool asks the user which class.",
+    },
+    targetStats: {
+      type: "object",
+      additionalProperties: {
+        type: "number",
+      },
+      description: "Target stats, default recovery/discipline/strength all 100. Keys support recovery, discipline, strength, mobility, resilience, intellect.",
+    },
+    recovery: { type: "number", description: "Optional recovery target, usually 100." },
+    discipline: { type: "number", description: "Optional discipline target, usually 100." },
+    strength: { type: "number", description: "Optional strength target, usually 100." },
+    mobility: { type: "number", description: "Optional mobility target." },
+    resilience: { type: "number", description: "Optional resilience target." },
+    intellect: { type: "number", description: "Optional intellect target." },
+    includeCurrentSubclassFragments: {
+      type: "boolean",
+      description: "Whether to simulate current subclass fragment stat changes. Default true.",
+    },
+    simulateStatMods: {
+      type: "boolean",
+      description: "Whether to simulate common +10/+5 armor stat mods. Default true.",
+    },
+    limit: {
+      type: "number",
+      description: "Maximum candidate builds to return, default 3.",
+    },
+  },
+  anyOf: [{ required: ["target"] }, { required: ["qq"] }, { required: ["senderQq"] }, { required: ["userId"] }, { required: ["user_id"] }],
+  required: [],
+};
+
+const loadoutApplyParameters = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    target: {
+      type: "string",
+      description: "QQ number only. Must be the same sender QQ that owns the recent optimizer session.",
+    },
+    qq: {
+      type: "string",
+      description: "Optional explicit QQ number; same as target.",
+    },
+    ...senderQqProperties,
+    sessionId: {
+      type: "string",
+      description: "sessionId returned by destiny2_loadout_optimize.",
+    },
+    buildId: {
+      type: "string",
+      description: "Build id such as b1. Natural values like 第1套 can be passed as rank/index instead.",
+    },
+    rank: {
+      type: "number",
+      description: "Alternative build rank, e.g. 1.",
+    },
+    index: {
+      type: "number",
+      description: "Alternative build index, e.g. 1.",
+    },
+    characterId: {
+      type: "string",
+      description: "Optional target character ID; defaults to the character in the optimizer session.",
+    },
+    confirm: {
+      type: "boolean",
+      description: "Must be true to execute. Omit or false returns a confirmation prompt only.",
+    },
+  },
+  anyOf: [{ required: ["target"] }, { required: ["qq"] }, { required: ["senderQq"] }, { required: ["userId"] }, { required: ["user_id"] }],
+  required: ["sessionId"],
+};
+
 export function registerD2StatsRuntime(api, options = {}) {
   const logger = getLogger(api);
   const getConfig = () => resolveConfig(api.pluginConfig || options.config || {});
@@ -302,6 +399,36 @@ export function registerD2StatsRuntime(api, options = {}) {
       },
     },
     { optional: false },
+  );
+
+  api.registerTool(
+    {
+      name: "destiny2_loadout_optimize",
+      description:
+        "Search the bound QQ owner's inventory/vault/equipped armor for Destiny 2 triple-100 style builds. Use for /配装, 三百套, or questions like 恢复+纪律+力量有没有三百套. If className is missing, ask which class: 术士/猎人/泰坦. Requires QQ OAuth; if missing, returns a 3-minute Bungie OAuth binding link.",
+      parameters: loadoutOptimizeParameters,
+      async execute(_toolCallId, params, signal) {
+        const config = getConfig();
+        logger.info("d2stats.loadout optimize", { hasTarget: Boolean(params?.target || params?.qq), className: params?.className });
+        return queryLoadoutOptimizer(params, config, { signal, fetchImpl: options.fetchImpl });
+      },
+    },
+    { optional: false, timeoutMs: 120000 },
+  );
+
+  api.registerTool(
+    {
+      name: "destiny2_loadout_apply",
+      description:
+        "Apply an armor-only build returned by destiny2_loadout_optimize. Only use for the same sender QQ and only after the user explicitly confirms. This equips armor only; it does not modify mods, sockets, subclass, or fragments.",
+      parameters: loadoutApplyParameters,
+      async execute(_toolCallId, params, signal) {
+        const config = getConfig();
+        logger.info("d2stats.loadout apply", { confirmed: params?.confirm === true, buildId: params?.buildId || params?.rank || params?.index });
+        return applyLoadoutOptimizer(params, config, { signal, fetchImpl: options.fetchImpl });
+      },
+    },
+    { optional: false, timeoutMs: 120000 },
   );
 }
 

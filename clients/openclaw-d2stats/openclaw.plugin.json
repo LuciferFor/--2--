@@ -11,7 +11,9 @@
       "destiny2_card_query",
       "destiny2_bind_qq",
       "destiny2_inventory_query",
-      "destiny2_item_action"
+      "destiny2_item_action",
+      "destiny2_loadout_optimize",
+      "destiny2_loadout_apply"
     ]
   },
   "configSchema": {
