@@ -6477,11 +6477,8 @@ function normalizeOptimizerClassName(value) {
 }
 
 function normalizeOptimizerTargetStats(input, params = {}) {
-  const result = {
-    recovery: 100,
-    discipline: 100,
-    strength: 100,
-  };
+  const result = {};
+  let hasExplicitTarget = false;
   const applyValue = (key, value) => {
     const normalized = normalizeOptimizerStatKey(key);
     if (!normalized) {
@@ -6490,6 +6487,7 @@ function normalizeOptimizerTargetStats(input, params = {}) {
     const number = Number(value);
     if (Number.isFinite(number) && number >= 0) {
       result[normalized] = clampInteger(number, 100, 0, 100);
+      hasExplicitTarget = true;
     }
   };
 
@@ -6516,7 +6514,11 @@ function normalizeOptimizerTargetStats(input, params = {}) {
       applyValue(key, params[key]);
     }
   }
-  return result;
+  return hasExplicitTarget ? result : {
+    recovery: 100,
+    discipline: 100,
+    strength: 100,
+  };
 }
 
 function normalizeOptimizerStatKey(value) {

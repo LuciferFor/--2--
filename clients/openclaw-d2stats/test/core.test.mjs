@@ -1830,6 +1830,72 @@ describe("d2stats core", () => {
     assert.equal(result.details.sessionId, "session-1");
   });
 
+  it("does not add default strength when explicit loadout target stats are provided", async () => {
+    const result = await queryLoadoutOptimizer(
+      { target: "607972716", className: "术士", targetStats: { resilience: 100, recovery: 100, discipline: 100 } },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async (url, init = {}) => {
+          if (String(url).includes("/bindings/qq/")) {
+            return jsonResponse({
+              success: true,
+              data: {
+                qq: "607972716",
+                membershipType: 3,
+                membershipId: "4611686018428939884",
+                bungieName: "Lucifer#8571",
+                displayName: "Lucifer",
+                displayNameCode: 8571,
+              },
+            });
+          }
+          if (String(url).includes("/namecard/")) {
+            return jsonResponse({
+              success: true,
+              data: {
+                membershipType: 3,
+                membershipId: "4611686018428939884",
+                profile: { bungieName: "Lucifer#8571", characters: [] },
+              },
+            });
+          }
+          assert.deepEqual(JSON.parse(init.body), {
+            className: "术士",
+            targetStats: { resilience: 100, recovery: 100, discipline: 100 },
+            includeCurrentSubclassFragments: true,
+            simulateStatMods: true,
+            limit: 3,
+          });
+          return jsonResponse({
+            success: true,
+            data: {
+              qq: "607972716",
+              membershipType: 3,
+              membershipId: "4611686018428939884",
+              sessionId: "session-explicit",
+              className: "术士",
+              targets: [
+                { key: "resilience", statName: "韧性", target: 100 },
+                { key: "recovery", statName: "恢复", target: 100 },
+                { key: "discipline", statName: "纪律", target: 100 },
+              ],
+              builds: [],
+              scan: {},
+              updatedAt: "2026-06-03T00:00:00.000Z",
+            },
+          });
+        },
+        renderHtmlToPng: async (html) => {
+          assert.match(html, /韧性 100 \+ 恢复 100 \+ 纪律 100/);
+          return Buffer.from("png-bytes");
+        },
+      },
+    );
+
+    assert.equal(result.content[0].type, "image");
+    assert.equal(result.details.sessionId, "session-explicit");
+  });
+
   it("requires confirmation before applying loadout optimizer builds", async () => {
     let called = false;
     const result = await applyLoadoutOptimizer(

@@ -1147,6 +1147,20 @@ const D2_INVENTORY_SEARCH_KEYWORDS = [
   "\u6709\u54ea\u4e9b", "\u54ea\u4e9b", "\u6709\u6ca1\u6709", "\u627e", "\u641c", "\u641c\u7d22",
 ];
 
+const D2_LOADOUT_HINT_WORDS = [
+  "\u914d\u88c5", "\u5957\u88c5", "\u4e09\u767e", "\u4e09\u767e\u5957", "\u51d1", "\u80fd\u51d1", "\u8fbe\u5230", "\u6709\u6ca1\u6709", "\u80fd\u4e0d\u80fd",
+  "loadout", "build",
+];
+
+const D2_LOADOUT_STATS = [
+  ["mobility", ["\u673a\u52a8", "\u6a5f\u52d5", "\u654f\u6377", "\u767e\u654f", "mobility"]],
+  ["resilience", ["\u97e7\u6027", "\u97cc\u6027", "\u97e7", "\u767e\u97e7", "resilience"]],
+  ["recovery", ["\u6062\u590d", "\u6062\u5fa9", "\u56de\u590d", "\u767e\u6062", "recovery"]],
+  ["discipline", ["\u7eaa\u5f8b", "\u7d00\u5f8b", "\u767e\u7eaa", "discipline"]],
+  ["intellect", ["\u667a\u6167", "\u667a\u529b", "\u767e\u667a", "intellect"]],
+  ["strength", ["\u529b\u91cf", "\u767e\u529b", "strength"]],
+];
+
 const D2_DIRECT_REPLAY_WORDS = [
   "\u53d1\u51fa\u6765", "\u53d1\u51fa\u6765\u554a", "\u6ca1\u53d1\u56fe", "\u6ca1\u56fe", "\u56fe\u5462", "\u56fe\u7247\u5462",
   "\u518d\u53d1\u4e00\u6b21", "\u91cd\u53d1", "\u518d\u6765\u4e00\u6b21", "\u518d\u6765\u5f20", "\u91cd\u65b0\u53d1",
@@ -1154,9 +1168,9 @@ const D2_DIRECT_REPLAY_WORDS = [
 
 function inferD2DirectCard(text) {
   const value = normalizeD2Text(text);
-  if (!value || (!hasAnyD2Word(value, D2_DIRECT_KEYWORDS) && !hasAnyD2Word(value, D2_INVENTORY_SEARCH_WORDS))) return null;
+  if (!value || (!hasAnyD2Word(value, D2_DIRECT_KEYWORDS) && !hasAnyD2Word(value, D2_INVENTORY_SEARCH_WORDS) && !hasD2LoadoutIntent(value))) return null;
   if (hasAnyD2Word(value, ["\u5e2e\u52a9", "\u83dc\u5355", "help", "\u6307\u4ee4", "\u547d\u4ee4"])) return "help";
-  if (hasAnyD2Word(value, ["\u914d\u88c5", "\u4e09\u767e", "\u4e09\u767e\u5957", "loadout", "build"])) return "loadout_optimizer";
+  if (hasD2LoadoutIntent(value)) return "loadout_optimizer";
   if (hasAnyD2Word(value, ["\u4ed3\u5e93\u641c\u7d22", "\u4ed3\u5e93", "\u5e93\u5b58", "\u80cc\u5305", "\u73b0\u6709\u88c5\u5907", "\u8eab\u4e0a\u88c5\u5907", "\u5f53\u524d\u88c5\u5907", "\u6211\u7a7f\u4ec0\u4e48", "\u67e5\u88c5\u5907", "\u88c5\u5907", "inventory", "vault", "equipped"])) return "inventory";
   if (hasAnyD2Word(value, D2_INVENTORY_SEARCH_WORDS) && hasAnyD2Word(value, D2_INVENTORY_SEARCH_KEYWORDS)) return "inventory";
   if (hasAnyD2Word(value, ["\u50ac\u5316", "catalyst"])) return "catalysts";
@@ -1175,6 +1189,16 @@ function inferD2DirectCard(text) {
   if (hasAnyD2Word(value, ["\u8d44\u6599", "\u89d2\u8272", "profile"])) return "profile";
   if (hasAnyD2Word(value, ["\u6218\u7ee9", "\u603b\u89c8", "\u547d\u8fd02", "destiny 2", "destiny2", "d2"])) return "summary";
   return null;
+}
+
+function hasD2LoadoutIntent(text) {
+  const value = normalizeD2Text(text);
+  if (!value) return false;
+  if (hasAnyD2Word(value, ["\u914d\u88c5", "\u4e09\u767e", "\u4e09\u767e\u5957", "loadout", "build"])) return true;
+  const mentionedStats = d2LoadoutMentionedStats(value);
+  if (mentionedStats.length >= 2 && (hasAnyD2Word(value, D2_LOADOUT_HINT_WORDS) || /\b100\b/u.test(value))) return true;
+  if (mentionedStats.length >= 1 && hasAnyD2Word(value, ["\u5957\u88c5", "\u51d1"])) return true;
+  return false;
 }
 
 function extractD2DirectTarget(text, event, card) {
@@ -1250,6 +1274,42 @@ function d2LoadoutClassName(text) {
   if (hasAnyD2Word(value, ["\u730e\u4eba", "hunter"])) return "hunter";
   if (hasAnyD2Word(value, ["\u6cf0\u5766", "titan"])) return "titan";
   return "";
+}
+
+function d2LoadoutTargetStats(text) {
+  const value = normalizeD2Text(text);
+  const result = {};
+  for (const [key, aliases] of D2_LOADOUT_STATS) {
+    if (!hasAnyD2Word(value, aliases)) continue;
+    result[key] = d2LoadoutTargetValue(value, aliases);
+  }
+  if (Object.keys(result).length) return result;
+  return { recovery: 100, discipline: 100, strength: 100 };
+}
+
+function d2LoadoutMentionedStats(text) {
+  const value = normalizeD2Text(text);
+  return D2_LOADOUT_STATS
+    .filter(([, aliases]) => hasAnyD2Word(value, aliases))
+    .map(([key]) => key);
+}
+
+function d2LoadoutTargetValue(text, aliases) {
+  const value = normalizeD2Text(text);
+  for (const alias of aliases) {
+    const escaped = String(alias).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const patterns = [
+      new RegExp(`${escaped}\\s*(?:\\+|到|达|达到|要|需要|=|：|:)?\\s*([0-9]{1,3})`, "iu"),
+      new RegExp(`([0-9]{1,3})\\s*(?:\\+)?\\s*${escaped}`, "iu"),
+    ];
+    for (const pattern of patterns) {
+      const match = pattern.exec(value);
+      if (!match) continue;
+      const number = Number(match[1]);
+      if (Number.isFinite(number)) return Math.max(0, Math.min(100, Math.trunc(number)));
+    }
+  }
+  return 100;
 }
 
 function d2DirectMode(text) {
@@ -1342,7 +1402,7 @@ function buildD2DirectInvocation(event, text) {
       params: {
         target,
         className: d2LoadoutClassName(text),
-        targetStats: { recovery: 100, discipline: 100, strength: 100 },
+        targetStats: d2LoadoutTargetStats(text),
         includeCurrentSubclassFragments: true,
         simulateStatMods: true,
         limit: 3,
@@ -1603,6 +1663,7 @@ if (IS_MAIN) {
     cleanD2InventoryQuery,
     d2InventoryBucket,
     d2InventoryView,
+    d2LoadoutTargetStats,
     executeD2DirectInvocation,
     extractInventoryQuery,
     handleD2DirectRequest,
