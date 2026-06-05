@@ -54,7 +54,7 @@ Map common Chinese commands to `destiny2_card_query`:
 - `/装备`, `/现有装备`, `/身上装备`, `/当前装备`, `我穿什么`: use `destiny2_inventory_query` with `view=equipped` and `bucket=equipped`; only use QQ targets.
 - `/库存`: use `destiny2_inventory_query` with `view=overview` and `bucket=all`; only use QQ targets.
 - `/背包`: use `destiny2_inventory_query` with `view=inventory` and `bucket=inventory`; only use QQ targets.
-- `/仓库搜索`: use `destiny2_inventory_query` with `view=search`; if the user says warehouse search, pass `bucket=vault`.
+- `/仓库搜索`, `查仓库所有 XX`, `仓库里有哪些 XX`: use `destiny2_inventory_query` with `view=search`; if the user says warehouse/vault, pass `bucket=vault`. Pass only the cleaned item name or type as `q`; strip structural words such as `的`, `所有`, `全部`, `里`, `有哪些`, `有没有`. Normalize common aliases before calling: `微冲`/`SMG` -> `冲锋枪`, `喷子` -> `霰弹枪`, `筒子` -> `火箭发射器`.
 - `/转移`, `/锁定`, `/解锁`, `/套装`, or an explicit "equip this item" request: use `destiny2_item_action`; only use QQ targets and require explicit confirmation before execution.
 - `/武器`: `card=weapons`.
 - `/最近`, `/活动`, `/战绩列表`: `card=activities`.

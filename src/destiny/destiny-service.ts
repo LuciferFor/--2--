@@ -977,7 +977,7 @@ export class DestinyService {
     }
   ): Promise<InventorySearchSummary> {
     const inventory = await this.getPrivateInventory(membershipType, membershipId, accessToken, options.qq);
-    const normalizedQuery = normalizeSearchText(options.query);
+    const searchQueries = inventorySearchCandidates(options.query);
     const characterId = options.characterId;
     const items = inventory.items.filter((item) => {
       if (options.bucket !== "all" && item.owner !== options.bucket) {
@@ -986,12 +986,11 @@ export class DestinyService {
       if (characterId && item.characterId !== characterId) {
         return false;
       }
-      if (!normalizedQuery) {
+      if (searchQueries.length === 0) {
         return true;
       }
-      return normalizeSearchText(`${item.name} ${item.itemTypeDisplayName ?? ""} ${item.bucketName ?? ""}`).includes(
-        normalizedQuery
-      );
+      const itemText = normalizeSearchText(`${item.name} ${item.itemTypeDisplayName ?? ""} ${item.bucketName ?? ""}`);
+      return searchQueries.some((query) => itemText.includes(query));
     });
 
     return {
@@ -3865,6 +3864,56 @@ function normalizeSearchText(value: unknown): string {
     .trim()
     .toLowerCase()
     .replace(/\s+/gu, " ");
+}
+
+function inventorySearchCandidates(value: unknown): string[] {
+  const raw = normalizeSearchText(value);
+  const cleaned = normalizeInventorySearchPhrase(raw);
+  return uniqueStrings([raw, cleaned, ...inventorySearchAliases(raw), ...inventorySearchAliases(cleaned)]).filter(Boolean);
+}
+
+function normalizeInventorySearchPhrase(value: string): string {
+  return normalizeSearchText(value)
+    .replace(/[，,。.!！?？、；;：:"“”'‘’《》【】[\]()（）{}<>/\\|·_\-]+/gu, " ")
+    .replace(/\b(some|all|the|my|mine|in|of|from|find|search|vault|inventory|equipped|weapon|weapons)\b/giu, " ")
+    .replace(
+      /(命运2|仓库搜索|仓库|库存|背包|已装备|当前装备|身上装备|装备|帮我|我的|我|查询|查一下|查一查|查下|查看|查|搜索|搜一下|搜|寻找|找一下|找|看看|看|所有|全部|全都|一共|哪些|有哪些|有没有|有无|里面|里|中的|中|的)/gu,
+      " "
+    )
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function inventorySearchAliases(value: string): string[] {
+  const compact = normalizeInventorySearchPhrase(value).replace(/\s+/gu, "").toLowerCase();
+  if (!compact) {
+    return [];
+  }
+  const aliases: Array<[RegExp, string]> = [
+    [/^(微冲|微冲枪|smg|submachinegun|submachine)$/iu, "冲锋枪"],
+    [/(冲锋枪|微型冲锋枪)/u, "冲锋枪"],
+    [/^(喷子|霰弹|shotgun)$/iu, "霰弹枪"],
+    [/(霰弹枪)/u, "霰弹枪"],
+    [/^(筒子|火箭|火箭筒|rocket|rocketlauncher)$/iu, "火箭发射器"],
+    [/(火箭发射器)/u, "火箭发射器"],
+    [/^(榴弹|榴弹发射器|gl|grenadelauncher)$/iu, "榴弹发射器"],
+    [/^(手炮|hc|handcannon)$/iu, "手炮"],
+    [/^(脉冲|脉冲步枪|pulse|pulserifle)$/iu, "脉冲步枪"],
+    [/^(斥候|斥候步枪|scout|scoutrifle)$/iu, "斥候步枪"],
+    [/^(自动|自动步枪|ar|autorifle)$/iu, "自动步枪"],
+    [/^(狙|狙击|狙击枪|sniper|sniperrifle)$/iu, "狙击步枪"],
+    [/^(融合|融合枪|fusion|fusionrifle)$/iu, "融合步枪"],
+    [/^(线融|线性融合|线性融合步枪|linear|linearfusion)$/iu, "线性融合步枪"],
+    [/^(机枪|mg|machinegun)$/iu, "机枪"],
+    [/^(刀剑|剑|sword)$/iu, "剑"],
+    [/^(弓|bow)$/iu, "弓"],
+    [/^(手枪|sidearm)$/iu, "手枪"]
+  ];
+  return aliases.filter(([pattern]) => pattern.test(compact)).map(([, canonical]) => canonical);
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.map((value) => normalizeSearchText(value)).filter(Boolean))];
 }
 
 function inventoryOwnerCounts(items: InventoryItemSummary[]): InventorySummary["totals"] {

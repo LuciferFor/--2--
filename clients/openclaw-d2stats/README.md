@@ -60,8 +60,11 @@ targets are rejected because catalyst progress comes from private Bungie
 Inventory and equipment operations are also QQ OAuth only. Use `/仓库` for a full
 vault long image, `/装备` or `/当前装备` for the currently equipped gear by
 character, `/背包` for carried inventory, and `/仓库搜索` to identify
-itemInstanceId/characterId. Write operations such as `/转移`, `/锁定`, `/解锁`,
-`/套装`, or equipping a specific item must be confirmed before execution.
+itemInstanceId/characterId. Natural language searches such as `查仓库所有冲锋枪`
+should pass only the cleaned type/name to `q`, for example `冲锋枪`; common aliases
+include `微冲`/`SMG` -> `冲锋枪`, `喷子` -> `霰弹枪`, and `筒子` -> `火箭发射器`.
+Write operations such as `/转移`, `/锁定`, `/解锁`, `/套装`, or equipping a
+specific item must be confirmed before execution.
 
 Card rendering does not call backend `/api/d2/cards/*.png` endpoints. The plugin
 uses `/api/d2/profile`, `/summary`, `/career`, `/pvp`, `/raids`,

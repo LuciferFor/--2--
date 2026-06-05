@@ -154,7 +154,8 @@ const inventoryQueryParameters = {
     ...senderQqProperties,
     q: {
       type: "string",
-      description: "Optional item search keyword, such as weapon name.",
+      description:
+        "Optional item search keyword. For natural language like 查仓库所有冲锋枪, pass the cleaned item name or type only, e.g. 冲锋枪. Normalize common aliases such as 微冲/SMG -> 冲锋枪, 喷子 -> 霰弹枪, 筒子 -> 火箭发射器.",
     },
     query: {
       type: "string",
@@ -277,7 +278,7 @@ export function registerD2StatsRuntime(api, options = {}) {
     {
       name: "destiny2_inventory_query",
       description:
-        "Query the bound QQ owner's Destiny 2 private inventory/vault/equipped items and return an image card. Use view=vault for /仓库, view=equipped for /装备/当前装备/身上装备, view=inventory for /背包, and view=search for /仓库搜索. Requires QQ OAuth; if missing, returns a 3-minute Bungie OAuth binding link.",
+        "Query the bound QQ owner's Destiny 2 private inventory/vault/equipped items and return an image card or share page. Use view=vault for /仓库, view=equipped for /装备/当前装备/身上装备, view=inventory for /背包, and view=search for /仓库搜索 or 查仓库所有XX. For search, pass a cleaned q such as 冲锋枪, not 的所有冲锋枪. Requires QQ OAuth; if missing, returns a 3-minute Bungie OAuth binding link.",
       parameters: inventoryQueryParameters,
       async execute(_toolCallId, params, signal) {
         const config = getConfig();

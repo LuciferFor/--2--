@@ -26,6 +26,13 @@ const fakeManifest = {
         inventory: { tierTypeName: "传说" }
       };
     }
+    if (entityType === "DestinyInventoryItemDefinition" && String(hash) === "303") {
+      return {
+        displayProperties: { name: "不散恐惧", icon: "/common/destiny2_content/icons/smg.jpg" },
+        itemTypeDisplayName: "微型冲锋枪",
+        inventory: { tierTypeName: "传说" }
+      };
+    }
     return null;
   },
   async getDefinitionMap(entityType: string) {
@@ -77,11 +84,17 @@ const fakeManifest = {
           displayProperties: { name: "烈日弹丸", icon: "/common/destiny2_content/icons/sunshot.jpg" },
           itemTypeDisplayName: "手炮",
           inventory: { bucketTypeHash: 2465295065, tierTypeName: "异域" }
+        },
+        "303": {
+          displayProperties: { name: "不散恐惧", icon: "/common/destiny2_content/icons/smg.jpg" },
+          itemTypeDisplayName: "微型冲锋枪",
+          inventory: { bucketTypeHash: 1498876634, tierTypeName: "传说" }
         }
       };
     }
     if (entityType === "DestinyInventoryBucketDefinition") {
       return {
+        "1498876634": { displayProperties: { name: "动能武器" } },
         "953998645": { displayProperties: { name: "威能武器" } },
         "2465295065": { displayProperties: { name: "能量武器" } }
       };
@@ -168,6 +181,13 @@ class FakeBungieClient {
                   quantity: 1,
                   bucketHash: 953998645,
                   state: 1
+                },
+                {
+                  itemHash: 303,
+                  itemInstanceId: "691752902766",
+                  quantity: 1,
+                  bucketHash: 1498876634,
+                  state: 0
                 }
               ]
             }
@@ -213,13 +233,19 @@ class FakeBungieClient {
                   primaryStat: { value: 2000 },
                   canEquip: true,
                   transferStatus: 0
+                },
+                "691752902766": {
+                  primaryStat: { value: 1995 },
+                  canEquip: true,
+                  transferStatus: 0
                 }
               }
             },
             commonData: {
               data: {
                 "691752902764": { isLocked: true },
-                "691752902765": { isLocked: false }
+                "691752902765": { isLocked: false },
+                "691752902766": { isLocked: false }
               }
             }
           }
@@ -629,7 +655,7 @@ describe("DestinyService", () => {
     });
     await expect(service.getPrivateInventory(3, "4611686018", "access-token", "607972716")).resolves.toMatchObject({
       qq: "607972716",
-      totals: { items: 2, vault: 1, inventory: 0, equipped: 1 },
+      totals: { items: 3, vault: 2, inventory: 0, equipped: 1 },
       items: expect.arrayContaining([
         expect.objectContaining({
           name: "纪念",
@@ -645,9 +671,41 @@ describe("DestinyService", () => {
           bucketName: "能量武器",
           power: 2000,
           locked: false
+        }),
+        expect.objectContaining({
+          name: "不散恐惧",
+          owner: "vault",
+          itemTypeDisplayName: "微型冲锋枪",
+          bucketName: "动能武器",
+          power: 1995
         })
       ])
     });
+    for (const query of ["冲锋枪", "微冲", "微冲枪", "SMG", "所有冲锋枪", "的所有冲锋枪"]) {
+      await expect(
+        service.searchPrivateInventory(3, "4611686018", "access-token", {
+          qq: "607972716",
+          query,
+          bucket: "vault"
+        })
+      ).resolves.toMatchObject({
+        total: 1,
+        items: [
+          expect.objectContaining({
+            name: "不散恐惧",
+            owner: "vault",
+            itemTypeDisplayName: "微型冲锋枪"
+          })
+        ]
+      });
+    }
+    await expect(
+      service.searchPrivateInventory(3, "4611686018", "access-token", {
+        qq: "607972716",
+        query: "所有手炮",
+        bucket: "vault"
+      })
+    ).resolves.toMatchObject({ total: 0 });
     await expect(service.getLoadouts(3, "4611686018", "access-token", "607972716")).resolves.toMatchObject({
       qq: "607972716",
       loadouts: [{ index: 0, characterId: "2305843009", name: "Raid", itemCount: 1 }]
