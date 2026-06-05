@@ -274,6 +274,11 @@ export async function registerD2Routes(app: FastifyInstance, deps: D2RouteDeps):
         qq,
         query: typeof query.q === "string" ? query.q : "",
         bucket: parseInventoryBucket(query.bucket),
+        weaponType: parseOptionalQueryString(query.weaponType),
+        rpm: parseOptionalBoundedInteger(query.rpm, "rpm", 1, 2000),
+        slot: parseOptionalQueryString(query.slot),
+        damageType: parseOptionalQueryString(query.damageType),
+        perk: parseOptionalQueryString(query.perk),
         characterId:
           query.characterId === undefined || query.characterId === ""
             ? undefined
@@ -657,6 +662,10 @@ function getRequiredQueryString(query: Query, key: string): string {
   return value.trim();
 }
 
+function parseOptionalQueryString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
 function getRequiredBodyString(body: Record<string, unknown>, key: string): string {
   const value = body[key];
   if (typeof value !== "string" || value.trim().length === 0) {
@@ -680,6 +689,13 @@ function parseBoundedInteger(
     throw new BadRequestError(`${name} must be an integer between ${min} and ${max}`);
   }
   return number;
+}
+
+function parseOptionalBoundedInteger(value: unknown, name: string, min: number, max: number): number | undefined {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+  return parseBoundedInteger(value, name, min, max, min);
 }
 
 function parseInventoryBucket(value: unknown): InventoryBucketFilter {

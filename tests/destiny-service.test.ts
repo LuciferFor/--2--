@@ -90,6 +90,11 @@ const fakeManifest = {
           itemTypeDisplayName: "微型冲锋枪",
           inventory: { bucketTypeHash: 1498876634, tierTypeName: "传说" }
         },
+        "304": {
+          displayProperties: { name: "玫瑰", icon: "/common/destiny2_content/icons/rose.jpg" },
+          itemTypeDisplayName: "手炮",
+          inventory: { bucketTypeHash: 1498876634, tierTypeName: "传说" }
+        },
         "401": {
           displayProperties: { name: "配装头盔", icon: "/common/destiny2_content/icons/helmet.jpg" },
           itemTypeDisplayName: "头盔",
@@ -141,7 +146,8 @@ const fakeManifest = {
         "1943323491": { displayProperties: { name: "恢复" } },
         "1735777505": { displayProperties: { name: "纪律" } },
         "144602215": { displayProperties: { name: "智慧" } },
-        "4244567218": { displayProperties: { name: "力量" } }
+        "4244567218": { displayProperties: { name: "力量" } },
+        "4284893193": { displayProperties: { name: "每分钟发射数" } }
       };
     }
     if (entityType === "DestinyActivityDefinition") {
@@ -256,6 +262,13 @@ class FakeBungieClient {
                   state: 0
                 },
                 {
+                  itemHash: 304,
+                  itemInstanceId: "691752902767",
+                  quantity: 1,
+                  bucketHash: 1498876634,
+                  state: 1
+                },
+                {
                   itemHash: 401,
                   itemInstanceId: "691752903001",
                   quantity: 1,
@@ -340,6 +353,11 @@ class FakeBungieClient {
                   canEquip: true,
                   transferStatus: 0
                 },
+                "691752902767": {
+                  primaryStat: { value: 1990 },
+                  canEquip: true,
+                  transferStatus: 0
+                },
                 "691752903001": {
                   primaryStat: { value: 2010 },
                   canEquip: true,
@@ -372,6 +390,7 @@ class FakeBungieClient {
                 "691752902764": { isLocked: true },
                 "691752902765": { isLocked: false },
                 "691752902766": { isLocked: false },
+                "691752902767": { isLocked: true },
                 "691752903001": { isLocked: false },
                 "691752903002": { isLocked: false },
                 "691752903003": { isLocked: false },
@@ -381,6 +400,10 @@ class FakeBungieClient {
             },
             stats: {
               data: {
+                "691752902764": { stats: { "4284893193": { value: 450 } } },
+                "691752902765": { stats: { "4284893193": { value: 150 } } },
+                "691752902766": { stats: { "4284893193": { value: 900 } } },
+                "691752902767": { stats: { "4284893193": { value: 120 } } },
                 "691752903001": optimizerArmorStats({ recovery: 20, discipline: 20, strength: 20 }),
                 "691752903002": optimizerArmorStats({ recovery: 20, discipline: 20, strength: 20 }),
                 "691752903003": optimizerArmorStats({ recovery: 20, discipline: 20, strength: 20 }),
@@ -795,7 +818,7 @@ describe("DestinyService", () => {
     });
     await expect(service.getPrivateInventory(3, "4611686018", "access-token", "607972716")).resolves.toMatchObject({
       qq: "607972716",
-      totals: { items: 8, vault: 7, inventory: 0, equipped: 1 },
+      totals: { items: 9, vault: 8, inventory: 0, equipped: 1 },
       items: expect.arrayContaining([
         expect.objectContaining({
           name: "纪念",
@@ -817,14 +840,27 @@ describe("DestinyService", () => {
           owner: "vault",
           itemTypeDisplayName: "微型冲锋枪",
           bucketName: "动能武器",
-          power: 1995
+          power: 1995,
+          weaponStats: expect.objectContaining({ rpm: 900 })
+        }),
+        expect.objectContaining({
+          name: "玫瑰",
+          owner: "vault",
+          itemTypeDisplayName: "手炮",
+          bucketName: "动能武器",
+          weaponStats: expect.objectContaining({ rpm: 120 })
         }),
         expect.objectContaining({
           name: "配装头盔",
           owner: "vault",
           bucketName: "头盔",
           armorStats: expect.objectContaining({
-            total: 60
+            total: 60,
+            stats: expect.arrayContaining([
+              expect.objectContaining({ hash: 392767087, name: "生命值" }),
+              expect.objectContaining({ hash: 1943323491, name: "职业" }),
+              expect.objectContaining({ hash: 1735777505, name: "手雷" })
+            ])
           })
         })
       ])
@@ -853,6 +889,48 @@ describe("DestinyService", () => {
         query: "所有手炮",
         bucket: "vault"
       })
+    ).resolves.toMatchObject({
+      query: "",
+      weaponType: "手炮",
+      total: 1,
+      items: [expect.objectContaining({ name: "玫瑰", weaponStats: expect.objectContaining({ rpm: 120 }) })]
+    });
+    await expect(
+      service.searchPrivateInventory(3, "4611686018", "access-token", {
+        qq: "607972716",
+        query: "",
+        bucket: "vault",
+        weaponType: "手炮",
+        rpm: 120
+      })
+    ).resolves.toMatchObject({
+      query: "",
+      weaponType: "手炮",
+      rpm: 120,
+      total: 1,
+      items: [expect.objectContaining({ name: "玫瑰", owner: "vault" })]
+    });
+    await expect(
+      service.searchPrivateInventory(3, "4611686018", "access-token", {
+        qq: "607972716",
+        query: "120射速手炮",
+        bucket: "vault"
+      })
+    ).resolves.toMatchObject({
+      query: "",
+      weaponType: "手炮",
+      rpm: 120,
+      total: 1,
+      items: [expect.objectContaining({ name: "玫瑰", owner: "vault" })]
+    });
+    await expect(
+      service.searchPrivateInventory(3, "4611686018", "access-token", {
+        qq: "607972716",
+        query: "",
+        bucket: "vault",
+        weaponType: "手炮",
+        rpm: 140
+      })
     ).resolves.toMatchObject({ total: 0 });
     await expect(service.getLoadouts(3, "4611686018", "access-token", "607972716")).resolves.toMatchObject({
       qq: "607972716",
@@ -861,7 +939,7 @@ describe("DestinyService", () => {
     const optimizer = await service.searchLoadoutOptimizer(3, "4611686018", "access-token", {
       qq: "607972716",
       className: "术士",
-      targetStats: { recovery: 100, discipline: 100, strength: 100 },
+      targetStats: { class: 100, grenade: 100, melee: 100 },
       includeCurrentSubclassFragments: true,
       simulateStatMods: true,
       limit: 2
@@ -871,9 +949,9 @@ describe("DestinyService", () => {
       className: "术士",
       classType: 2,
       targets: expect.arrayContaining([
-        expect.objectContaining({ key: "recovery", target: 100 }),
+        expect.objectContaining({ key: "recovery", name: "职业", target: 100 }),
         expect.objectContaining({ key: "discipline", target: 100 }),
-        expect.objectContaining({ key: "strength", target: 100 })
+        expect.objectContaining({ key: "strength", name: "近战", target: 100 })
       ]),
       scan: { candidateArmorItems: 5 },
       builds: [
@@ -885,7 +963,7 @@ describe("DestinyService", () => {
             expect.objectContaining({ name: "配装臂环", slot: "class_item" })
           ]),
           statMods: expect.arrayContaining([
-            expect.objectContaining({ statKey: "recovery", value: 20, count: 2 }),
+            expect.objectContaining({ statKey: "recovery", statName: "职业", value: 20, count: 2 }),
             expect.objectContaining({ statKey: "discipline", value: 10, count: 1 })
           ])
         })
@@ -903,8 +981,14 @@ describe("DestinyService", () => {
       buildId: "b1",
       transferredItemIds: expect.arrayContaining(["691752903001", "691752903005"]),
       equippedItemIds: expect.arrayContaining(["691752903001", "691752903005"]),
-      statMods: expect.arrayContaining([expect.objectContaining({ statKey: "recovery" })])
+      statMods: expect.arrayContaining([expect.objectContaining({ statKey: "recovery", statName: "职业" })])
     });
+    await expect(
+      service.searchLoadoutOptimizer(3, "4611686018", "access-token", {
+        qq: "607972716",
+        className: "术士"
+      })
+    ).rejects.toThrow(/targetStats/);
     await expect(
       service.getDungeonOverview(3, "4611686018", { historyPages: 1, pgcrLimit: 5 })
     ).resolves.toMatchObject({

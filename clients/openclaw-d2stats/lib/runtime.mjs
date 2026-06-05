@@ -163,7 +163,7 @@ const inventoryQueryParameters = {
     q: {
       type: "string",
       description:
-        "Optional item search keyword. For natural language like 查仓库所有冲锋枪, pass the cleaned item name or type only, e.g. 冲锋枪. Normalize common aliases such as 微冲/SMG -> 冲锋枪, 喷子 -> 霰弹枪, 筒子 -> 火箭发射器.",
+        "Optional leftover item-name or perk keyword only. Do not put structured conditions here: for 120射速手炮, pass weaponType=手炮 and rpm=120, with q empty unless an item name remains.",
     },
     query: {
       type: "string",
@@ -182,6 +182,26 @@ const inventoryQueryParameters = {
     characterId: {
       type: "string",
       description: "Optional Destiny character ID filter.",
+    },
+    weaponType: {
+      type: "string",
+      description: "Optional weapon type filter. Normalize aliases such as 微冲/SMG -> 冲锋枪, 喷子 -> 霰弹枪, 筒子 -> 火箭发射器, HC/hand cannon -> 手炮.",
+    },
+    rpm: {
+      type: "number",
+      description: "Optional exact weapon RPM / 射速 filter. For 120射速手炮 or 120rpm hc, pass 120.",
+    },
+    slot: {
+      type: "string",
+      description: "Optional inventory slot filter such as 动能武器、能量武器、威能武器.",
+    },
+    damageType: {
+      type: "string",
+      description: "Optional damage element filter if known, such as 火、虚空、冰影、缚丝.",
+    },
+    perk: {
+      type: "string",
+      description: "Optional selected/reusable perk keyword filter.",
     },
   },
   anyOf: [{ required: ["target"] }, { required: ["qq"] }, { required: ["senderQq"] }, { required: ["userId"] }, { required: ["user_id"] }],
@@ -270,14 +290,20 @@ const loadoutOptimizeParameters = {
       additionalProperties: {
         type: "number",
       },
-      description: "Target stats, default recovery/discipline/strength all 100. Keys support recovery, discipline, strength, mobility, resilience, intellect.",
+      description: "Armor 3.0 target stats. Do not invent defaults; ask the user if missing. Supports Chinese keys 生命值, 近战, 手雷, 超能, 职业, 武器 and legacy aliases.",
     },
-    recovery: { type: "number", description: "Optional recovery target, usually 100." },
-    discipline: { type: "number", description: "Optional discipline target, usually 100." },
-    strength: { type: "number", description: "Optional strength target, usually 100." },
-    mobility: { type: "number", description: "Optional mobility target." },
-    resilience: { type: "number", description: "Optional resilience target." },
-    intellect: { type: "number", description: "Optional intellect target." },
+    health: { type: "number", description: "Optional 生命值 target, 0-200." },
+    melee: { type: "number", description: "Optional 近战 target, 0-200." },
+    grenade: { type: "number", description: "Optional 手雷 target, 0-200." },
+    super: { type: "number", description: "Optional 超能 target, 0-200." },
+    class: { type: "number", description: "Optional 职业 target, 0-200." },
+    weapon: { type: "number", description: "Optional 武器 target, 0-200." },
+    recovery: { type: "number", description: "Legacy alias for 职业 target." },
+    discipline: { type: "number", description: "Legacy alias for 手雷 target." },
+    strength: { type: "number", description: "Legacy alias for 近战 target." },
+    mobility: { type: "number", description: "Legacy alias for 武器 target." },
+    resilience: { type: "number", description: "Legacy alias for 生命值 target." },
+    intellect: { type: "number", description: "Legacy alias for 超能 target." },
     includeCurrentSubclassFragments: {
       type: "boolean",
       description: "Whether to simulate current subclass fragment stat changes. Default true.",
@@ -375,7 +401,7 @@ export function registerD2StatsRuntime(api, options = {}) {
     {
       name: "destiny2_inventory_query",
       description:
-        "Query the bound QQ owner's Destiny 2 private inventory/vault/equipped items and return an image card or share page. Use view=vault for /仓库, view=equipped for /装备/当前装备/身上装备, view=inventory for /背包, and view=search for /仓库搜索 or 查仓库所有XX. For search, pass a cleaned q such as 冲锋枪, not 的所有冲锋枪. Requires QQ OAuth; if missing, returns a 3-minute Bungie OAuth binding link.",
+        "Query the bound QQ owner's Destiny 2 private inventory/vault/equipped items and return an image card or share page. Use view=vault for /仓库, view=equipped for /装备/当前装备/身上装备, view=inventory for /背包, and view=search for /仓库搜索 or 查仓库所有XX. For structured searches, pass fields such as weaponType=手炮 and rpm=120; q is only leftover item/perk text. Requires QQ OAuth; if missing, returns a 3-minute Bungie OAuth binding link.",
       parameters: inventoryQueryParameters,
       async execute(_toolCallId, params, signal) {
         const config = getConfig();
@@ -405,7 +431,7 @@ export function registerD2StatsRuntime(api, options = {}) {
     {
       name: "destiny2_loadout_optimize",
       description:
-        "Search the bound QQ owner's inventory/vault/equipped armor for Destiny 2 triple-100 style builds. Use for /配装, 三百套, or questions like 恢复+纪律+力量有没有三百套. If className is missing, ask which class: 术士/猎人/泰坦. Requires QQ OAuth; if missing, returns a 3-minute Bungie OAuth binding link.",
+        "Search the bound QQ owner's inventory/vault/equipped armor for Destiny 2 Armor 3.0 builds. Use for /配装, 三百套, or questions like 生命值+手雷+武器有没有套装. If className or target stats are missing, ask the user to provide them. Requires QQ OAuth; if missing, returns a 3-minute Bungie OAuth binding link.",
       parameters: loadoutOptimizeParameters,
       async execute(_toolCallId, params, signal) {
         const config = getConfig();

@@ -1142,6 +1142,24 @@ const D2_INVENTORY_SEARCH_WORDS = [
   "\u624b\u67aa", "sidearm",
 ];
 
+const D2_INVENTORY_WEAPON_TYPE_ALIASES = [
+  { canonical: "\u51b2\u950b\u67aa", terms: ["\u51b2\u950b\u67aa", "\u5fae\u51b2", "\u5fae\u51b2\u67aa", "\u5fae\u578b\u51b2\u950b\u67aa", "smg", "submachine gun", "submachinegun", "submachine"] },
+  { canonical: "\u624b\u70ae", terms: ["\u624b\u70ae", "hc", "hand cannon", "handcannon"] },
+  { canonical: "\u9730\u5f39\u67aa", terms: ["\u9730\u5f39\u67aa", "\u9730\u5f39", "\u55b7\u5b50", "shotgun"] },
+  { canonical: "\u81ea\u52a8\u6b65\u67aa", terms: ["\u81ea\u52a8\u6b65\u67aa", "\u81ea\u52a8", "ar", "auto rifle", "autorifle"] },
+  { canonical: "\u8109\u51b2\u6b65\u67aa", terms: ["\u8109\u51b2\u6b65\u67aa", "\u8109\u51b2", "pulse rifle", "pulserifle", "pulse"] },
+  { canonical: "\u65a5\u5019\u6b65\u67aa", terms: ["\u65a5\u5019\u6b65\u67aa", "\u65a5\u5019", "scout rifle", "scoutrifle", "scout"] },
+  { canonical: "\u72d9\u51fb\u6b65\u67aa", terms: ["\u72d9\u51fb\u6b65\u67aa", "\u72d9\u51fb\u67aa", "\u72d9\u51fb", "\u72d9", "sniper rifle", "sniperrifle", "sniper"] },
+  { canonical: "\u878d\u5408\u6b65\u67aa", terms: ["\u878d\u5408\u6b65\u67aa", "\u878d\u5408\u67aa", "\u878d\u5408", "fusion rifle", "fusionrifle", "fusion"] },
+  { canonical: "\u7ebf\u6027\u878d\u5408\u6b65\u67aa", terms: ["\u7ebf\u6027\u878d\u5408\u6b65\u67aa", "\u7ebf\u6027\u878d\u5408", "\u7ebf\u878d", "linear fusion rifle", "linear fusion", "linearfusion", "linear"] },
+  { canonical: "\u69b4\u5f39\u53d1\u5c04\u5668", terms: ["\u69b4\u5f39\u53d1\u5c04\u5668", "\u69b4\u5f39", "gl", "grenade launcher", "grenadelauncher"] },
+  { canonical: "\u706b\u7bad\u53d1\u5c04\u5668", terms: ["\u706b\u7bad\u53d1\u5c04\u5668", "\u706b\u7bad\u7b52", "\u706b\u7bad", "\u7b52\u5b50", "rocket launcher", "rocketlauncher", "rocket"] },
+  { canonical: "\u673a\u67aa", terms: ["\u673a\u67aa", "mg", "machine gun", "machinegun"] },
+  { canonical: "\u5251", terms: ["\u5251", "\u5200\u5251", "sword"] },
+  { canonical: "\u5f13", terms: ["\u5f13", "bow"] },
+  { canonical: "\u624b\u67aa", terms: ["\u624b\u67aa", "sidearm"] },
+];
+
 const D2_INVENTORY_SEARCH_KEYWORDS = [
   "\u6211\u7684", "\u6211", "\u67e5\u8be2", "\u67e5\u4e00\u4e0b", "\u67e5\u4e0b", "\u67e5", "\u770b\u770b", "\u770b",
   "\u6709\u54ea\u4e9b", "\u54ea\u4e9b", "\u6709\u6ca1\u6709", "\u627e", "\u641c", "\u641c\u7d22",
@@ -1153,12 +1171,12 @@ const D2_LOADOUT_HINT_WORDS = [
 ];
 
 const D2_LOADOUT_STATS = [
-  ["mobility", ["\u673a\u52a8", "\u6a5f\u52d5", "\u654f\u6377", "\u767e\u654f", "mobility"]],
-  ["resilience", ["\u97e7\u6027", "\u97cc\u6027", "\u97e7", "\u767e\u97e7", "resilience"]],
-  ["recovery", ["\u6062\u590d", "\u6062\u5fa9", "\u56de\u590d", "\u767e\u6062", "recovery"]],
-  ["discipline", ["\u7eaa\u5f8b", "\u7d00\u5f8b", "\u767e\u7eaa", "discipline"]],
-  ["intellect", ["\u667a\u6167", "\u667a\u529b", "\u767e\u667a", "intellect"]],
-  ["strength", ["\u529b\u91cf", "\u767e\u529b", "strength"]],
+  ["mobility", ["\u6b66\u5668", "\u767e\u6b66", "weapon", "weapons", "\u673a\u52a8", "\u6a5f\u52d5", "\u654f\u6377", "\u767e\u654f", "mobility"]],
+  ["resilience", ["\u751f\u547d\u503c", "\u751f\u547d", "\u767e\u547d", "health", "hp", "\u97e7\u6027", "\u97cc\u6027", "\u97e7", "\u767e\u97e7", "resilience"]],
+  ["recovery", ["\u804c\u4e1a", "\u8077\u696d", "\u804c\u4e1a\u6280\u80fd", "\u767e\u804c", "class", "\u6062\u590d", "\u6062\u5fa9", "\u56de\u590d", "\u767e\u6062", "recovery"]],
+  ["discipline", ["\u624b\u96f7", "\u767e\u96f7", "grenade", "grenades", "\u7eaa\u5f8b", "\u7d00\u5f8b", "\u767e\u7eaa", "discipline"]],
+  ["intellect", ["\u8d85\u80fd", "\u5927\u62db", "\u767e\u8d85", "super", "\u667a\u6167", "\u667a\u529b", "\u767e\u667a", "intellect"]],
+  ["strength", ["\u8fd1\u6218", "\u8fd1\u6230", "\u767e\u8fd1", "melee", "\u529b\u91cf", "\u767e\u529b", "strength"]],
 ];
 
 const D2_DIRECT_REPLAY_WORDS = [
@@ -1218,13 +1236,90 @@ function extractD2DirectTarget(text, event, card) {
   return String(event.user_id || "");
 }
 
-function extractInventoryQuery(text, target) {
+function d2InventoryBaseQueryText(text, target) {
   let value = normalizeD2Text(text);
   const removeParts = [target, ...["\u4ed3\u5e93\u641c\u7d22", "\u4ed3\u5e93", "\u5e93\u5b58", "\u80cc\u5305", "\u73b0\u6709\u88c5\u5907", "\u8eab\u4e0a\u88c5\u5907", "\u5f53\u524d\u88c5\u5907", "\u6211\u7a7f\u4ec0\u4e48", "\u67e5\u88c5\u5907", "\u88c5\u5907", "inventory", "vault", "equipped", "\u547d\u8fd02", "\u5e2e\u6211", "\u6211\u7684", "\u6211", "\u67e5\u8be2", "\u67e5\u4e00\u4e0b", "\u67e5\u4e00\u67e5", "\u67e5\u4e0b", "\u67e5\u6211", "\u67e5\u770b", "\u67e5", "\u770b\u770b", "\u770b", "\u641c\u7d22", "\u641c\u4e00\u4e0b", "\u641c", "\u5bfb\u627e", "\u627e\u4e00\u4e0b", "\u627e"]];
   for (const part of removeParts) {
     if (!part) continue;
     value = value.replace(new RegExp(String(part).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu"), " ");
   }
+  return value;
+}
+
+function extractInventoryQuery(text, target) {
+  return extractInventorySearchParts(text, target).q;
+}
+
+function extractInventorySearchParts(text, target) {
+  const baseText = d2InventoryBaseQueryText(text, target);
+  const weaponType = d2InventoryWeaponTypeFromText(baseText);
+  const rpm = d2InventoryRpmFromText(baseText, Boolean(weaponType));
+  let queryText = baseText;
+  if (weaponType) {
+    queryText = stripD2InventoryWeaponTypeTerms(queryText, weaponType);
+  }
+  if (rpm) {
+    queryText = stripD2InventoryRpmTerms(queryText, rpm);
+  }
+  const q = cleanD2InventoryQuery(queryText);
+  return {
+    q,
+    ...(weaponType ? { weaponType } : {}),
+    ...(rpm ? { rpm } : {}),
+  };
+}
+
+function d2InventoryWeaponTypeFromText(text) {
+  const value = normalizeD2Text(text);
+  if (!value) return "";
+  for (const alias of D2_INVENTORY_WEAPON_TYPE_ALIASES) {
+    if (alias.terms.some((term) => d2InventoryTextHasTerm(value, term))) {
+      return alias.canonical;
+    }
+  }
+  return "";
+}
+
+function d2InventoryTextHasTerm(text, term) {
+  const value = normalizeD2Text(text);
+  const normalizedTerm = normalizeD2Text(term);
+  if (!value || !normalizedTerm) return false;
+  return value.includes(normalizedTerm) || value.replace(/\s+/gu, "").includes(normalizedTerm.replace(/\s+/gu, ""));
+}
+
+function d2InventoryRpmFromText(text, hasWeaponType) {
+  const value = normalizeD2Text(text);
+  const explicit = /(?:^|[^\d])([1-9][0-9]{1,3})\s*(?:rpm|r\/m|射速|每分钟发射数|每分钟发射|发\/分)/iu.exec(value);
+  const explicitValue = d2InventoryRpmValue(explicit?.[1]);
+  if (explicitValue) return explicitValue;
+  if (!hasWeaponType) return 0;
+  const numbers = [...value.matchAll(/(?:^|[^\d])([1-9][0-9]{1,3})(?!\d)/giu)]
+    .map((match) => d2InventoryRpmValue(match[1]))
+    .filter(Boolean);
+  return numbers.length === 1 ? numbers[0] : 0;
+}
+
+function d2InventoryRpmValue(value) {
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 && number <= 2000 ? number : 0;
+}
+
+function stripD2InventoryWeaponTypeTerms(text, weaponType) {
+  const alias = D2_INVENTORY_WEAPON_TYPE_ALIASES.find((entry) => entry.canonical === weaponType);
+  return (alias?.terms || [weaponType]).reduce((value, term) => {
+    const pattern = String(term).replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/gu, "\\s*");
+    return value.replace(new RegExp(pattern, "giu"), " ");
+  }, text);
+}
+
+function stripD2InventoryRpmTerms(text, rpm) {
+  return String(text || "")
+    .replace(new RegExp(`${rpm}\\s*(?:rpm|r\\/m|射速|每分钟发射数|每分钟发射|发\\/分)`, "giu"), " ")
+    .replace(new RegExp(`${rpm}`, "gu"), " ");
+}
+
+function extractInventoryQueryLegacy(text, target) {
+  let value = d2InventoryBaseQueryText(text, target);
   return cleanD2InventoryQuery(value);
 }
 
@@ -1283,8 +1378,7 @@ function d2LoadoutTargetStats(text) {
     if (!hasAnyD2Word(value, aliases)) continue;
     result[key] = d2LoadoutTargetValue(value, aliases);
   }
-  if (Object.keys(result).length) return result;
-  return { recovery: 100, discipline: 100, strength: 100 };
+  return result;
 }
 
 function d2LoadoutMentionedStats(text) {
@@ -1306,7 +1400,7 @@ function d2LoadoutTargetValue(text, aliases) {
       const match = pattern.exec(value);
       if (!match) continue;
       const number = Number(match[1]);
-      if (Number.isFinite(number)) return Math.max(0, Math.min(100, Math.trunc(number)));
+      if (Number.isFinite(number)) return Math.max(0, Math.min(200, Math.trunc(number)));
     }
   }
   return 100;
@@ -1388,12 +1482,13 @@ function buildD2DirectInvocation(event, text) {
   }
   if (card === "inventory") {
     let view = d2InventoryView(text);
-    const q = extractInventoryQuery(text, target);
-    if (q) {
+    const searchParts = extractInventorySearchParts(text, target);
+    const hasStructuredSearch = Boolean(searchParts.q || searchParts.weaponType || searchParts.rpm || searchParts.slot || searchParts.damageType || searchParts.perk);
+    if (hasStructuredSearch) {
       view = "search";
     }
     const bucket = d2InventoryBucket(text, view);
-    return { card, target, params: { target, q, view, bucket } };
+    return { card, target, params: { target, ...searchParts, view, bucket } };
   }
   if (card === "loadout_optimizer") {
     return {

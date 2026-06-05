@@ -49,6 +49,7 @@ import type {
   InventorySearchSummary,
   InventorySocketSummary,
   InventorySummary,
+  InventoryWeaponStatSummary,
   LoadoutOptimizerApplyResult,
   LoadoutOptimizerArmorItem,
   LoadoutOptimizerBuild,
@@ -93,6 +94,7 @@ const HEATMAP_FULL_HISTORY_MAX_PAGES = 100;
 const KINETIC_BUCKET_HASHES = new Set([1498876634]);
 const ENERGY_BUCKET_HASHES = new Set([2465295065]);
 const POWER_BUCKET_HASHES = new Set([953998645]);
+const WEAPON_RPM_STAT_HASH = 4284893193;
 const ARMOR_BUCKETS: Record<number, { slot: string; label: string; order: number }> = {
   3448274439: { slot: "helmet", label: "头盔", order: 10 },
   3551918588: { slot: "gauntlets", label: "臂铠", order: 20 },
@@ -113,17 +115,12 @@ const LOADOUT_OPTIMIZER_STAT_HASHES = {
   strength: 4244567218
 } as const;
 const LOADOUT_OPTIMIZER_STAT_LABELS: Record<string, string> = {
-  mobility: "机动",
-  resilience: "韧性",
-  recovery: "恢复",
-  discipline: "纪律",
-  intellect: "智慧",
-  strength: "力量"
-};
-const LOADOUT_OPTIMIZER_DEFAULT_TARGETS: Record<string, number> = {
-  recovery: 100,
-  discipline: 100,
-  strength: 100
+  mobility: "武器",
+  resilience: "生命值",
+  recovery: "职业",
+  discipline: "手雷",
+  intellect: "超能",
+  strength: "近战"
 };
 const CATALYST_SLOT_ORDER: CatalystSlot[] = ["kinetic", "energy", "power", "unknown"];
 const CATALYST_SLOT_LABELS: Record<CatalystSlot, string> = {
@@ -141,13 +138,14 @@ const ARMOR_STAT_HASHES = [
   4244567218 // Strength
 ] as const;
 const ARMOR_STAT_FALLBACK_NAMES: Record<number, string> = {
-  2996146975: "机动",
-  392767087: "韧性",
-  1943323491: "恢复",
-  1735777505: "纪律",
-  144602215: "智慧",
-  4244567218: "力量"
+  2996146975: "武器",
+  392767087: "生命值",
+  1943323491: "职业",
+  1735777505: "手雷",
+  144602215: "超能",
+  4244567218: "近战"
 };
+const ARMOR_3_STAT_NAMES = new Set(Object.values(ARMOR_STAT_FALLBACK_NAMES));
 
 export class DestinyService {
   constructor(
@@ -1016,10 +1014,16 @@ export class DestinyService {
       query?: string;
       bucket: InventoryBucketFilter;
       characterId?: string;
+      weaponType?: string;
+      rpm?: number;
+      slot?: string;
+      damageType?: string;
+      perk?: string;
     }
   ): Promise<InventorySearchSummary> {
     const inventory = await this.getPrivateInventory(membershipType, membershipId, accessToken, options.qq);
-    const searchQueries = inventorySearchCandidates(options.query);
+    const criteria = inventorySearchCriteria(options);
+    const searchQueries = inventorySearchCandidates(criteria.query);
     const characterId = options.characterId;
     const items = inventory.items.filter((item) => {
       if (options.bucket !== "all" && item.owner !== options.bucket) {
@@ -1028,10 +1032,13 @@ export class DestinyService {
       if (characterId && item.characterId !== characterId) {
         return false;
       }
+      if (!inventoryItemMatchesStructuredSearch(item, criteria)) {
+        return false;
+      }
       if (searchQueries.length === 0) {
         return true;
       }
-      const itemText = normalizeSearchText(`${item.name} ${item.itemTypeDisplayName ?? ""} ${item.bucketName ?? ""}`);
+      const itemText = inventoryItemSearchText(item);
       return searchQueries.some((query) => itemText.includes(query));
     });
 
@@ -1039,9 +1046,14 @@ export class DestinyService {
       qq: options.qq,
       membershipType,
       membershipId,
-      query: options.query?.trim() ?? "",
+      query: criteria.query,
       bucket: options.bucket,
       ...(characterId ? { characterId } : {}),
+      ...(criteria.weaponType ? { weaponType: criteria.weaponType } : {}),
+      ...(criteria.rpm !== undefined ? { rpm: criteria.rpm } : {}),
+      ...(criteria.slot ? { slot: criteria.slot } : {}),
+      ...(criteria.damageType ? { damageType: criteria.damageType } : {}),
+      ...(criteria.perk ? { perk: criteria.perk } : {}),
       items,
       total: items.length,
       updatedAt: new Date().toISOString()
@@ -2193,7 +2205,8 @@ export class DestinyService {
       energyCapacity: optionalNumber(energy.energyCapacity),
       energyUsed: optionalNumber(energy.energyUsed),
       ...inventorySocketsForItem(definition, socketComponent, reusablePlugComponent, inventoryDefinitions, statDefinitions),
-      ...inventoryArmorStatsForItem(definition, statComponent, statDefinitions)
+      ...inventoryArmorStatsForItem(definition, statComponent, statDefinitions),
+      ...inventoryWeaponStatsForItem(definition, statComponent, statDefinitions)
     };
   }
 
@@ -4017,6 +4030,15 @@ interface StatDefinition {
   [key: string]: unknown;
 }
 
+interface InventorySearchCriteria {
+  query: string;
+  weaponType?: string;
+  rpm?: number;
+  slot?: string;
+  damageType?: string;
+  perk?: string;
+}
+
 interface RecordDefinition {
   displayProperties?: {
     name?: string;
@@ -4043,6 +4065,24 @@ function normalizeSearchText(value: unknown): string {
     .replace(/\s+/gu, " ");
 }
 
+const INVENTORY_WEAPON_TYPE_ALIASES: Array<{ canonical: string; terms: string[] }> = [
+  { canonical: "冲锋枪", terms: ["冲锋枪", "微冲", "微冲枪", "微型冲锋枪", "smg", "submachine gun", "submachinegun", "submachine"] },
+  { canonical: "手炮", terms: ["手炮", "hc", "hand cannon", "handcannon"] },
+  { canonical: "霰弹枪", terms: ["霰弹枪", "霰弹", "喷子", "shotgun"] },
+  { canonical: "自动步枪", terms: ["自动步枪", "自动", "ar", "auto rifle", "autorifle"] },
+  { canonical: "脉冲步枪", terms: ["脉冲步枪", "脉冲", "pulse rifle", "pulserifle", "pulse"] },
+  { canonical: "斥候步枪", terms: ["斥候步枪", "斥候", "scout rifle", "scoutrifle", "scout"] },
+  { canonical: "狙击步枪", terms: ["狙击步枪", "狙击枪", "狙击", "狙", "sniper rifle", "sniperrifle", "sniper"] },
+  { canonical: "融合步枪", terms: ["融合步枪", "融合枪", "融合", "fusion rifle", "fusionrifle", "fusion"] },
+  { canonical: "线性融合步枪", terms: ["线性融合步枪", "线性融合", "线融", "linear fusion rifle", "linear fusion", "linearfusion", "linear"] },
+  { canonical: "榴弹发射器", terms: ["榴弹发射器", "榴弹", "gl", "grenade launcher", "grenadelauncher"] },
+  { canonical: "火箭发射器", terms: ["火箭发射器", "火箭筒", "火箭", "筒子", "rocket launcher", "rocketlauncher", "rocket"] },
+  { canonical: "机枪", terms: ["机枪", "mg", "machine gun", "machinegun"] },
+  { canonical: "剑", terms: ["剑", "刀剑", "sword"] },
+  { canonical: "弓", terms: ["弓", "bow"] },
+  { canonical: "手枪", terms: ["手枪", "sidearm"] }
+];
+
 function inventorySearchCandidates(value: unknown): string[] {
   const raw = normalizeSearchText(value);
   const cleaned = normalizeInventorySearchPhrase(raw);
@@ -4066,27 +4106,177 @@ function inventorySearchAliases(value: string): string[] {
   if (!compact) {
     return [];
   }
-  const aliases: Array<[RegExp, string]> = [
-    [/^(微冲|微冲枪|smg|submachinegun|submachine)$/iu, "冲锋枪"],
-    [/(冲锋枪|微型冲锋枪)/u, "冲锋枪"],
-    [/^(喷子|霰弹|shotgun)$/iu, "霰弹枪"],
-    [/(霰弹枪)/u, "霰弹枪"],
-    [/^(筒子|火箭|火箭筒|rocket|rocketlauncher)$/iu, "火箭发射器"],
-    [/(火箭发射器)/u, "火箭发射器"],
-    [/^(榴弹|榴弹发射器|gl|grenadelauncher)$/iu, "榴弹发射器"],
-    [/^(手炮|hc|handcannon)$/iu, "手炮"],
-    [/^(脉冲|脉冲步枪|pulse|pulserifle)$/iu, "脉冲步枪"],
-    [/^(斥候|斥候步枪|scout|scoutrifle)$/iu, "斥候步枪"],
-    [/^(自动|自动步枪|ar|autorifle)$/iu, "自动步枪"],
-    [/^(狙|狙击|狙击枪|sniper|sniperrifle)$/iu, "狙击步枪"],
-    [/^(融合|融合枪|fusion|fusionrifle)$/iu, "融合步枪"],
-    [/^(线融|线性融合|线性融合步枪|linear|linearfusion)$/iu, "线性融合步枪"],
-    [/^(机枪|mg|machinegun)$/iu, "机枪"],
-    [/^(刀剑|剑|sword)$/iu, "剑"],
-    [/^(弓|bow)$/iu, "弓"],
-    [/^(手枪|sidearm)$/iu, "手枪"]
-  ];
-  return aliases.filter(([pattern]) => pattern.test(compact)).map(([, canonical]) => canonical);
+  const weaponType = normalizeInventoryWeaponType(compact);
+  return weaponType ? [weaponType] : [];
+}
+
+function inventorySearchCriteria(options: {
+  query?: string;
+  weaponType?: string;
+  rpm?: number;
+  slot?: string;
+  damageType?: string;
+  perk?: string;
+}): InventorySearchCriteria {
+  const rawQuery = normalizeSearchText(options.query);
+  const detectedWeaponType = inventoryWeaponTypeFromText(rawQuery);
+  const explicitWeaponType = normalizeInventoryWeaponType(options.weaponType);
+  const weaponType = explicitWeaponType ?? detectedWeaponType;
+  const explicitRpm = parseInventoryRpm(options.rpm);
+  const rpm = explicitRpm ?? inventoryRpmFromText(rawQuery, Boolean(weaponType));
+  const slot = normalizeInventoryFilterText(options.slot);
+  const damageType = normalizeInventoryFilterText(options.damageType);
+  const perk = normalizeInventoryFilterText(options.perk);
+
+  let query = normalizeInventorySearchPhrase(rawQuery);
+  if (weaponType) {
+    query = removeInventoryWeaponTypeWords(query, weaponType);
+  }
+  if (rpm !== undefined) {
+    query = removeInventoryRpmWords(query, rpm);
+  }
+  query = normalizeInventorySearchPhrase(query);
+
+  return {
+    query,
+    ...(weaponType ? { weaponType } : {}),
+    ...(rpm !== undefined ? { rpm } : {}),
+    ...(slot ? { slot } : {}),
+    ...(damageType ? { damageType } : {}),
+    ...(perk ? { perk } : {})
+  };
+}
+
+function parseInventoryRpm(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 && number <= 2000 ? number : undefined;
+}
+
+function inventoryRpmFromText(value: string, hasWeaponType: boolean): number | undefined {
+  const text = normalizeSearchText(value);
+  const explicit = /(?:^|[^\d])([1-9][0-9]{1,3})\s*(?:rpm|r\/m|射速|每分钟发射数|每分钟发射|发\/分)/iu.exec(text);
+  const explicitValue = parseInventoryRpm(explicit?.[1]);
+  if (explicitValue !== undefined) {
+    return explicitValue;
+  }
+  if (!hasWeaponType) {
+    return undefined;
+  }
+  const numbers = [...text.matchAll(/(?:^|[^\d])([1-9][0-9]{1,3})(?!\d)/giu)]
+    .map((match) => parseInventoryRpm(match[1]))
+    .filter((number): number is number => number !== undefined);
+  return numbers.length === 1 ? numbers[0] : undefined;
+}
+
+function normalizeInventoryWeaponType(value: unknown): string | undefined {
+  const text = normalizeSearchText(value);
+  if (!text) {
+    return undefined;
+  }
+  for (const alias of INVENTORY_WEAPON_TYPE_ALIASES) {
+    if (alias.terms.some((term) => inventoryTextHasTerm(text, term, true))) {
+      return alias.canonical;
+    }
+  }
+  return undefined;
+}
+
+function inventoryWeaponTypeFromText(value: string): string | undefined {
+  const text = normalizeSearchText(value);
+  if (!text) {
+    return undefined;
+  }
+  for (const alias of INVENTORY_WEAPON_TYPE_ALIASES) {
+    if (alias.terms.some((term) => inventoryTextHasTerm(text, term, false))) {
+      return alias.canonical;
+    }
+  }
+  return undefined;
+}
+
+function inventoryTextHasTerm(value: string, term: string, exact: boolean): boolean {
+  const text = normalizeSearchText(value);
+  const normalizedTerm = normalizeSearchText(term);
+  if (!text || !normalizedTerm) {
+    return false;
+  }
+  if (exact) {
+    return text === normalizedTerm || text.replace(/\s+/gu, "") === normalizedTerm.replace(/\s+/gu, "");
+  }
+  return text.includes(normalizedTerm) || text.replace(/\s+/gu, "").includes(normalizedTerm.replace(/\s+/gu, ""));
+}
+
+function removeInventoryWeaponTypeWords(value: string, weaponType: string): string {
+  const aliases = INVENTORY_WEAPON_TYPE_ALIASES.find((alias) => alias.canonical === weaponType);
+  return (aliases?.terms ?? [weaponType]).reduce((text, term) => {
+    const pattern = escapeRegExp(normalizeSearchText(term)).replace(/\s+/gu, "\\s*");
+    return text.replace(new RegExp(pattern, "giu"), " ");
+  }, value);
+}
+
+function removeInventoryRpmWords(value: string, rpm: number): string {
+  return value
+    .replace(new RegExp(`${rpm}\\s*(?:rpm|r\\/m|射速|每分钟发射数|每分钟发射|发\\/分)`, "giu"), " ")
+    .replace(new RegExp(`${rpm}`, "gu"), " ");
+}
+
+function normalizeInventoryFilterText(value: unknown): string | undefined {
+  const text = normalizeInventorySearchPhrase(String(value ?? ""));
+  return text.length > 0 ? text : undefined;
+}
+
+function inventoryItemMatchesStructuredSearch(item: InventoryItemSummary, criteria: InventorySearchCriteria): boolean {
+  if (criteria.weaponType && !inventoryItemMatchesText([criteria.weaponType], inventoryItemTypeText(item))) {
+    return false;
+  }
+  if (criteria.rpm !== undefined && item.weaponStats?.rpm !== criteria.rpm) {
+    return false;
+  }
+  if (criteria.slot && !inventoryItemMatchesText([criteria.slot], `${item.bucketName ?? ""}`)) {
+    return false;
+  }
+  if (criteria.damageType && !inventoryItemMatchesText([criteria.damageType], `${item.damageType ?? ""}`)) {
+    return false;
+  }
+  if (criteria.perk && !inventoryItemMatchesText(inventorySearchCandidates(criteria.perk), inventoryItemPlugText(item))) {
+    return false;
+  }
+  return true;
+}
+
+function inventoryItemMatchesText(queries: string[], text: string): boolean {
+  const normalized = normalizeSearchText(text);
+  return queries.some((query) => normalized.includes(query) || inventorySearchCandidates(query).some((alias) => normalized.includes(alias)));
+}
+
+function inventoryItemTypeText(item: InventoryItemSummary): string {
+  return `${item.itemTypeDisplayName ?? ""} ${item.bucketName ?? ""} ${item.name ?? ""}`;
+}
+
+function inventoryItemPlugText(item: InventoryItemSummary): string {
+  return asArray(item.sockets)
+    .flatMap((socket) => {
+      const record = asRecord(socket);
+      const selected = asRecord(record.selectedPlug);
+      const reusable = asArray(record.reusablePlugs).map((plug) => asRecord(plug).name);
+      return [selected.name, ...reusable];
+    })
+    .map((value) => String(value ?? ""))
+    .join(" ");
+}
+
+function inventoryItemSearchText(item: InventoryItemSummary): string {
+  const rpm = item.weaponStats?.rpm !== undefined ? `${item.weaponStats.rpm} rpm ${item.weaponStats.rpm}射速` : "";
+  return normalizeSearchText(
+    `${item.name} ${item.itemTypeDisplayName ?? ""} ${item.bucketName ?? ""} ${inventoryItemPlugText(item)} ${rpm}`
+  );
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function uniqueStrings(values: string[]): string[] {
@@ -4234,7 +4424,7 @@ function inventoryStatModifiersFromDefinition(
       const statDefinition = statDefinitions[String(hash)];
       return {
         hash,
-        name: optionalString(statDefinition?.displayProperties?.name) ?? ARMOR_STAT_FALLBACK_NAMES[hash] ?? String(hash),
+        name: armorStatDisplayName(hash, statDefinition),
         value
       };
     })
@@ -4272,10 +4462,7 @@ function inventoryArmorStatsForItem(
     const statDefinition = statDefinitions[String(hash)];
     return {
       hash,
-      name:
-        optionalString(statDefinition?.displayProperties?.name) ??
-        ARMOR_STAT_FALLBACK_NAMES[hash] ??
-        String(hash),
+      name: armorStatDisplayName(hash, statDefinition),
       value
     };
   });
@@ -4293,9 +4480,79 @@ function inventoryArmorStatsForItem(
   };
 }
 
+function inventoryWeaponStatsForItem(
+  definition: InventoryItemDefinition | undefined,
+  statComponent: Record<string, unknown>,
+  statDefinitions: Record<string, StatDefinition>
+): { weaponStats?: { rpm?: number; stats: InventoryWeaponStatSummary[] } } {
+  if (!inventoryDefinitionLooksLikeWeapon(definition)) {
+    return {};
+  }
+
+  const rpm =
+    inventoryStatComponentValue(statComponent, WEAPON_RPM_STAT_HASH) ??
+    inventoryInvestmentStatValue(definition, WEAPON_RPM_STAT_HASH);
+  if (rpm === undefined) {
+    return {};
+  }
+
+  const statDefinition = statDefinitions[String(WEAPON_RPM_STAT_HASH)];
+  return {
+    weaponStats: {
+      rpm,
+      stats: [
+        {
+          hash: WEAPON_RPM_STAT_HASH,
+          name: optionalString(statDefinition?.displayProperties?.name) ?? "RPM",
+          value: rpm
+        }
+      ]
+    }
+  };
+}
+
+function inventoryStatComponentValue(statComponent: Record<string, unknown>, statHash: number): number | undefined {
+  const rawStats = asRecord(statComponent.stats);
+  const rawStat = asRecord(rawStats[String(statHash)]);
+  const value = optionalNumber(rawStat.value) ?? optionalNumber(rawStat.statValue);
+  return value !== undefined && Number.isFinite(value) ? value : undefined;
+}
+
+function inventoryInvestmentStatValue(
+  definition: InventoryItemDefinition | undefined,
+  statHash: number
+): number | undefined {
+  const row = asArray(definition?.investmentStats)
+    .map((rawStat) => asRecord(rawStat))
+    .find((stat) => {
+      const hash = optionalNumber(stat.statTypeHash) ?? numberFrom(stat.statTypeHash, Number.NaN);
+      return hash === statHash;
+    });
+  const value = optionalNumber(row?.value) ?? optionalNumber(row?.statValue);
+  return value !== undefined && Number.isFinite(value) ? value : undefined;
+}
+
+function inventoryDefinitionLooksLikeWeapon(definition: InventoryItemDefinition | undefined): boolean {
+  const bucketHash =
+    optionalNumber(definition?.inventory?.bucketTypeHash) ?? numberFrom(definition?.inventory?.bucketTypeHash, Number.NaN);
+  if (KINETIC_BUCKET_HASHES.has(bucketHash) || ENERGY_BUCKET_HASHES.has(bucketHash) || POWER_BUCKET_HASHES.has(bucketHash)) {
+    return true;
+  }
+  const text = `${asString(definition?.itemTypeDisplayName)} ${asString(definition?.inventory?.bucketTypeName)}`.toLowerCase();
+  return /weapon|rifle|cannon|shotgun|launcher|sword|bow|sidearm|glaive|武器|步枪|手炮|冲锋枪|霰弹|发射器|机枪|剑|弓|手枪|偃月/u.test(text);
+}
+
 function inventoryDefinitionLooksLikeArmor(definition: InventoryItemDefinition | undefined): boolean {
   const text = `${asString(definition?.itemTypeDisplayName)} ${asString(definition?.inventory?.bucketTypeName)}`.toLowerCase();
   return /armor|helmet|gauntlet|chest|leg|class item|头盔|臂铠|手套|胸甲|腿甲|护腿|职业物品|护甲/u.test(text);
+}
+
+function armorStatDisplayName(hash: number, statDefinition: StatDefinition | undefined): string {
+  const manifestName = optionalString(statDefinition?.displayProperties?.name);
+  if (manifestName && ARMOR_3_STAT_NAMES.has(manifestName)) {
+    return manifestName;
+  }
+  return ARMOR_STAT_FALLBACK_NAMES[hash] ?? manifestName ?? String(hash);
 }
 
 function compareInventoryItems(left: InventoryItemSummary, right: InventoryItemSummary): number {
@@ -4495,7 +4752,7 @@ function isLikelyArmorStatModPlug(plug: InventoryPlugSummary): boolean {
   if (!modifiers.length || modifiers.some((modifier) => Math.abs(modifier.value) > 10)) {
     return false;
   }
-  return /mod|模组|机动|韧性|恢复|纪律|智慧|力量|mobility|resilience|recovery|discipline|intellect|strength/iu.test(text);
+  return /mod|模组|生命值|近战|手雷|超能|职业|武器|机动|韧性|恢复|纪律|智慧|力量|health|melee|grenade|super|class|weapon|mobility|resilience|recovery|discipline|intellect|strength/iu.test(text);
 }
 
 function pruneOptimizerArmorCandidates(
@@ -4812,8 +5069,7 @@ function selectOptimizerCharacter(characters: CharacterSummary[], classType: num
 }
 
 function normalizeOptimizerTargets(input: Record<string, unknown> | undefined): LoadoutOptimizerTargetStat[] {
-  const raw = input && Object.keys(input).length > 0 ? input : LOADOUT_OPTIMIZER_DEFAULT_TARGETS;
-  const targets = Object.entries(raw)
+  const targets = Object.entries(input ?? {})
     .map(([key, value]): LoadoutOptimizerTargetStat | null => {
       const statKey = normalizeOptimizerStatKey(key);
       if (!statKey) return null;
@@ -4821,24 +5077,24 @@ function normalizeOptimizerTargets(input: Record<string, unknown> | undefined): 
         hash: LOADOUT_OPTIMIZER_STAT_HASHES[statKey],
         key: statKey,
         name: LOADOUT_OPTIMIZER_STAT_LABELS[statKey],
-        target: clampIntegerValue(value, 100, 0, 100)
+        target: clampIntegerValue(value, 100, 0, 200)
       };
     })
     .filter((target): target is LoadoutOptimizerTargetStat => target !== null && target.target > 0);
   if (targets.length === 0) {
-    throw new BadRequestError("targetStats must include at least one armor stat target");
+    throw new BadRequestError("targetStats must include at least one Armor 3.0 stat target");
   }
   return targets;
 }
 
 function normalizeOptimizerStatKey(value: string): OptimizerStatKey | null {
   const text = value.trim().toLowerCase();
-  if (/^(mobility|mob|机动)$/iu.test(text)) return "mobility";
-  if (/^(resilience|res|韧性)$/iu.test(text)) return "resilience";
-  if (/^(recovery|rec|恢复)$/iu.test(text)) return "recovery";
-  if (/^(discipline|dis|纪律)$/iu.test(text)) return "discipline";
-  if (/^(intellect|int|智慧)$/iu.test(text)) return "intellect";
-  if (/^(strength|str|力量)$/iu.test(text)) return "strength";
+  if (/^(weapon|weapons|武器|mobility|mob|机动)$/iu.test(text)) return "mobility";
+  if (/^(health|hp|生命|生命值|resilience|res|韧性)$/iu.test(text)) return "resilience";
+  if (/^(class|classability|职业|职业技能|recovery|rec|恢复)$/iu.test(text)) return "recovery";
+  if (/^(grenade|grenades|手雷|雷|discipline|dis|纪律)$/iu.test(text)) return "discipline";
+  if (/^(super|超能|大招|intellect|int|智慧)$/iu.test(text)) return "intellect";
+  if (/^(melee|近战|近戰|strength|str|力量)$/iu.test(text)) return "strength";
   return null;
 }
 

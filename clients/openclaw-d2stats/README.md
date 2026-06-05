@@ -6,7 +6,7 @@ Adds OpenClaw tools:
 - `destiny2_bind_qq`: creates a QQ -> Bungie membership binding. If no Bungie target is provided, it returns a 3-minute Bungie OAuth binding link.
 - `destiny2_inventory_query`: queries the QQ OAuth owner's inventory/vault/equipped items and returns an image card. It supports `view=vault`, `view=equipped`, `view=inventory`, `view=overview`, and `view=search`.
 - `destiny2_item_action`: safely transfers, equips, bulk-equips, locks/unlocks, or equips an in-game loadout after explicit confirmation.
-- `destiny2_loadout_optimize`: searches the QQ OAuth owner's armor for DIM-like triple-100 builds, defaulting to recovery + discipline + strength.
+- `destiny2_loadout_optimize`: searches the QQ OAuth owner's armor for DIM-like Armor 3.0 builds. It uses the current stat labels `生命值 / 近战 / 手雷 / 超能 / 职业 / 武器`; old labels such as `韧性` are accepted only as input aliases.
 - `destiny2_loadout_apply`: applies an optimizer build after explicit confirmation. It equips armor only and leaves mods/fragments as manual instructions.
 
 Default backend:
@@ -62,15 +62,20 @@ targets are rejected because catalyst progress comes from private Bungie
 Inventory and equipment operations are also QQ OAuth only. Use `/仓库` for a full
 vault long image, `/装备` or `/当前装备` for the currently equipped gear by
 character, `/背包` for carried inventory, and `/仓库搜索` to identify
-itemInstanceId/characterId. Natural language searches such as `查仓库所有冲锋枪`
-should pass only the cleaned type/name to `q`, for example `冲锋枪`; common aliases
-include `微冲`/`SMG` -> `冲锋枪`, `喷子` -> `霰弹枪`, and `筒子` -> `火箭发射器`.
+itemInstanceId/characterId. Natural language searches should pass structured
+conditions when possible: `120射速手炮` becomes `weaponType=手炮`, `rpm=120`,
+with `q` left empty unless an item name or perk keyword remains. Common aliases
+include `微冲`/`SMG` -> `冲锋枪`, `喷子` -> `霰弹枪`, `筒子` -> `火箭发射器`,
+and `HC`/`hand cannon` -> `手炮`.
 Write operations such as `/转移`, `/锁定`, `/解锁`, `/套装`, or equipping a
 specific item must be confirmed before execution.
 
 Loadout optimization is QQ OAuth only. Use `/配装`, `三百套`, or natural language
-such as `恢复纪律力量有没有三百套`. If the class is missing, ask for `术士`,
-`猎人`, or `泰坦`; then call `destiny2_loadout_optimize` with the same sender QQ.
+such as `生命值手雷武器有没有套装`. If the class is missing, ask for `术士`,
+`猎人`, or `泰坦`; if the target stats are missing, ask which Armor 3.0 stats and
+values to target. Then call `destiny2_loadout_optimize` with the same sender QQ.
+The tool displays only the current Armor 3.0 names `生命值 / 近战 / 手雷 / 超能 / 职业 / 武器`;
+legacy terms such as `机动 / 韧性 / 恢复 / 纪律 / 智慧 / 力量` remain input aliases.
 Applying a result requires the returned `sessionId` + `buildId` and explicit
 confirmation, and only equips the recommended armor.
 

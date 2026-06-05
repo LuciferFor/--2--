@@ -633,9 +633,9 @@ const fakeDestinyService = {
       classType: 2,
       characterId: "2305843009",
       targets: [
-        { key: "recovery", statKey: "recovery", statHash: 1943323491, statName: "恢复", target: 100 },
-        { key: "discipline", statKey: "discipline", statHash: 1735777505, statName: "纪律", target: 100 },
-        { key: "strength", statKey: "strength", statHash: 4244567218, statName: "力量", target: 100 }
+        { key: "recovery", statKey: "recovery", statHash: 1943323491, statName: "职业", target: 100 },
+        { key: "discipline", statKey: "discipline", statHash: 1735777505, statName: "手雷", target: 100 },
+        { key: "strength", statKey: "strength", statHash: 4244567218, statName: "近战", target: 100 }
       ],
       options: { includeCurrentSubclassFragments: true, simulateStatMods: true, limit: 3 },
       builds: [
@@ -646,9 +646,9 @@ const fakeDestinyService = {
           score: 0,
           waste: 0,
           missing: [],
-          stats: [{ key: "recovery", statKey: "recovery", statHash: 1943323491, statName: "恢复", value: 100 }],
+          stats: [{ key: "recovery", statKey: "recovery", statHash: 1943323491, statName: "职业", value: 100 }],
           armor: [{ slot: "helmet", slotLabel: "头盔", itemHash: 401, itemInstanceId: "691752903001", name: "配装头盔", owner: "vault", exotic: false, baseStats: [], currentStats: [], removedStatMods: [] }],
-          statMods: [{ statHash: 1943323491, statKey: "recovery", statName: "恢复", value: 10, count: 1 }],
+          statMods: [{ statHash: 1943323491, statKey: "recovery", statName: "职业", value: 10, count: 1 }],
           fragments: [],
           notes: []
         }
@@ -667,7 +667,7 @@ const fakeDestinyService = {
       characterId: request.characterId || "2305843009",
       transferredItemIds: ["691752903001"],
       equippedItemIds: ["691752903001"],
-      statMods: [{ statHash: 1943323491, statKey: "recovery", statName: "恢复", value: 10, count: 1 }],
+      statMods: [{ statHash: 1943323491, statKey: "recovery", statName: "职业", value: 10, count: 1 }],
       fragments: [],
       bungieResponses: [],
       message: "已应用配装防具",
@@ -1285,7 +1285,7 @@ describe("Fastify routes", () => {
       url: "/api/d2/loadout-optimizer/qq/607972716/search",
       payload: {
         className: "术士",
-        targetStats: { recovery: 100, discipline: 100, strength: 100 },
+        targetStats: { class: 100, grenade: 100, melee: 100 },
         limit: 3
       }
     });

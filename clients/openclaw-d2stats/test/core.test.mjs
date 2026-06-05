@@ -1172,6 +1172,80 @@ describe("d2stats core", () => {
     ]);
   });
 
+  it("passes structured inventory filters and renders rpm labels", async () => {
+    const seenUrls = [];
+    const result = await queryInventory(
+      { target: "607972716", view: "search", bucket: "vault", weaponType: "手炮", rpm: 120 },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async (url) => {
+          seenUrls.push(String(url));
+          if (String(url).includes("/bindings/qq/")) {
+            return jsonResponse({
+              success: true,
+              data: {
+                qq: "607972716",
+                membershipType: 3,
+                membershipId: "4611686018428939884",
+                bungieName: "Lucifer#8571",
+                displayName: "Lucifer",
+                displayNameCode: 8571,
+              },
+            });
+          }
+          if (String(url).includes("/namecard/")) {
+            return jsonResponse({
+              success: true,
+              data: {
+                membershipType: 3,
+                membershipId: "4611686018428939884",
+                profile: { characters: [] },
+              },
+            });
+          }
+          return jsonResponse({
+            success: true,
+            data: {
+              membershipType: 3,
+              membershipId: "4611686018428939884",
+              query: "",
+              bucket: "vault",
+              weaponType: "手炮",
+              rpm: 120,
+              items: [
+                {
+                  itemHash: 304,
+                  itemInstanceId: "691752902767",
+                  owner: "vault",
+                  name: "玫瑰",
+                  bucketName: "动能武器",
+                  itemTypeDisplayName: "手炮",
+                  locked: true,
+                  canEquip: true,
+                  weaponStats: { rpm: 120, stats: [{ hash: 4284893193, name: "每分钟发射数", value: 120 }] },
+                },
+              ],
+              total: 1,
+            },
+          });
+        },
+        renderHtmlToPng: async (html) => {
+          assert.match(html, /库存搜索 · 仓库 · 手炮 · 120 RPM/);
+          assert.match(html, /玫瑰/);
+          assert.match(html, /120 RPM/);
+          return Buffer.from("png-bytes");
+        },
+      },
+    );
+
+    assert.equal(result.content[0].type, "image");
+    assert.deepEqual(seenUrls, [
+      "http://d2.local/api/d2/bindings/qq/607972716",
+      "http://d2.local/api/d2/namecard/3/4611686018428939884",
+      "http://d2.local/api/d2/inventory/qq/607972716/search?weaponType=%E6%89%8B%E7%82%AE&rpm=120&bucket=vault",
+    ]);
+  });
+
   it("uses qq as an inventory query target alias", async () => {
     const seenUrls = [];
     const result = await queryInventory(
@@ -1367,7 +1441,8 @@ describe("d2stats core", () => {
           assert.match(html, /重建/);
           assert.doesNotMatch(html, /杀戮弹匣/);
           assert.match(html, /防具属性/);
-          assert.match(html, /韧性/);
+          assert.match(html, /生命值/);
+          assert.doesNotMatch(html, /韧性/);
           assert.match(html, /68/);
           assert.doesNotMatch(html, /背包物品/);
           assert.doesNotMatch(html, /已装备物品/);
@@ -1644,7 +1719,8 @@ describe("d2stats core", () => {
           assert.match(html, /禅意时刻/);
           assert.doesNotMatch(html, /斩首武器/);
           assert.match(html, /总 64/);
-          assert.match(html, /力 8/);
+          assert.match(html, /近 8/);
+          assert.doesNotMatch(html, /力 8/);
           assert.doesNotMatch(html, /纪念/);
           return Buffer.from("png-bytes");
         },
@@ -1701,10 +1777,28 @@ describe("d2stats core", () => {
     assert.match(result.content[0].text, /术士、猎人或泰坦/);
   });
 
+  it("asks for Armor 3.0 target stats before loadout optimization", async () => {
+    let called = false;
+    const result = await queryLoadoutOptimizer(
+      { target: "607972716", className: "术士" },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async () => {
+          called = true;
+          return jsonResponse({ success: true, data: {} });
+        },
+      },
+    );
+
+    assert.equal(called, false);
+    assert.equal(result.details.status, "needs_target_stats");
+    assert.match(result.content[0].text, /生命值100 手雷100 武器100/);
+  });
+
   it("renders loadout optimizer results from QQ OAuth data", async () => {
     const seenUrls = [];
     const result = await queryLoadoutOptimizer(
-      { target: "607972716", className: "术士", targetStats: { recovery: 100, discipline: 100, strength: 100 } },
+      { target: "607972716", className: "术士", targetStats: { health: 100, grenade: 100, weapon: 100 } },
       { baseUrl: "http://d2.local" },
       {
         fetchImpl: async (url, init = {}) => {
@@ -1748,7 +1842,7 @@ describe("d2stats core", () => {
           assert.equal(init.method, "POST");
           assert.deepEqual(JSON.parse(init.body), {
             className: "术士",
-            targetStats: { recovery: 100, discipline: 100, strength: 100 },
+            targetStats: { resilience: 100, discipline: 100, mobility: 100 },
             includeCurrentSubclassFragments: true,
             simulateStatMods: true,
             limit: 3,
@@ -1764,9 +1858,9 @@ describe("d2stats core", () => {
               classType: 2,
               characterId: "2305843009",
               targets: [
-                { key: "recovery", statKey: "recovery", statHash: 1943323491, statName: "恢复", target: 100 },
+                { key: "resilience", statKey: "resilience", statHash: 392767087, statName: "韧性", target: 100 },
                 { key: "discipline", statKey: "discipline", statHash: 1735777505, statName: "纪律", target: 100 },
-                { key: "strength", statKey: "strength", statHash: 4244567218, statName: "力量", target: 100 },
+                { key: "mobility", statKey: "mobility", statHash: 2996146975, statName: "机动", target: 100 },
               ],
               options: { includeCurrentSubclassFragments: true, simulateStatMods: true, limit: 3 },
               builds: [
@@ -1778,9 +1872,9 @@ describe("d2stats core", () => {
                   waste: 0,
                   missing: [],
                   stats: [
-                    { key: "recovery", statKey: "recovery", statHash: 1943323491, statName: "恢复", value: 100 },
+                    { key: "resilience", statKey: "resilience", statHash: 392767087, statName: "韧性", value: 100 },
                     { key: "discipline", statKey: "discipline", statHash: 1735777505, statName: "纪律", value: 100 },
-                    { key: "strength", statKey: "strength", statHash: 4244567218, statName: "力量", value: 100 },
+                    { key: "mobility", statKey: "mobility", statHash: 2996146975, statName: "机动", value: 100 },
                   ],
                   armor: [
                     {
@@ -1793,12 +1887,12 @@ describe("d2stats core", () => {
                       owner: "vault",
                       tierTypeName: "传说",
                       exotic: false,
-                      baseStats: [{ key: "recovery", statKey: "recovery", statName: "恢复", value: 20 }],
+                      baseStats: [{ key: "resilience", statKey: "resilience", statName: "韧性", value: 20 }],
                       currentStats: [],
                       removedStatMods: [],
                     },
                   ],
-                  statMods: [{ statHash: 1943323491, statKey: "recovery", statName: "恢复", value: 10, count: 2 }],
+                  statMods: [{ statHash: 392767087, statKey: "resilience", statName: "韧性", value: 10, count: 2 }],
                   fragments: [{ socketIndex: 3, name: "慰藉余烬", statModifiers: [{ hash: 1735777505, name: "纪律", value: 10 }] }],
                   notes: ["属性模组和碎片需要手动调整"],
                 },
@@ -1814,7 +1908,9 @@ describe("d2stats core", () => {
           assert.match(html, /session-1/);
           assert.match(html, /第 1 套/);
           assert.match(html, /配装头盔/);
-          assert.match(html, /恢复 \+10（2 个）/);
+          assert.match(html, /生命值 \+10（2 个）/);
+          assert.doesNotMatch(html, /韧性/);
+          assert.doesNotMatch(html, /恢复 \+10/);
           assert.match(html, /慰藉余烬/);
           return Buffer.from("png-bytes");
         },
@@ -1830,7 +1926,7 @@ describe("d2stats core", () => {
     assert.equal(result.details.sessionId, "session-1");
   });
 
-  it("does not add default strength when explicit loadout target stats are provided", async () => {
+  it("accepts legacy loadout target stats but renders Armor 3.0 names", async () => {
     const result = await queryLoadoutOptimizer(
       { target: "607972716", className: "术士", targetStats: { resilience: 100, recovery: 100, discipline: 100 } },
       { baseUrl: "http://d2.local" },
@@ -1886,7 +1982,9 @@ describe("d2stats core", () => {
           });
         },
         renderHtmlToPng: async (html) => {
-          assert.match(html, /韧性 100 \+ 恢复 100 \+ 纪律 100/);
+          assert.match(html, /生命值 100 \+ 职业 100 \+ 手雷 100/);
+          assert.doesNotMatch(html, /韧性 100/);
+          assert.doesNotMatch(html, /恢复 100/);
           return Buffer.from("png-bytes");
         },
       },

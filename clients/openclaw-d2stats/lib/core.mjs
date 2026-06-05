@@ -217,6 +217,7 @@ export function buildPublicDataUrl(kind, target, params = {}, config = resolveCo
 function buildInventoryDataUrl(qq, params = {}, config = resolveConfig()) {
   const query = new URLSearchParams();
   const searchText = String(params.q || params.query || "").trim();
+  const structuredFilters = inventoryStructuredFilterParams(params);
   const view = normalizeInventoryView(params.view, params);
   const explicitBucket = String(params.bucket || "").trim().length > 0;
   const bucket = explicitBucket
@@ -226,12 +227,15 @@ function buildInventoryDataUrl(qq, params = {}, config = resolveConfig()) {
       : "all";
   const characterId = String(params.characterId || "").trim();
 
-  if (searchText.length === 0 && characterId.length === 0 && view !== "search") {
+  if (searchText.length === 0 && characterId.length === 0 && !structuredFilters.length && view !== "search") {
     return `${config.baseUrl}/api/d2/inventory/qq/${encodeURIComponent(qq)}`;
   }
 
   if (searchText.length > 0) {
     query.set("q", searchText);
+  }
+  for (const [key, value] of structuredFilters) {
+    query.set(key, value);
   }
   query.set("bucket", bucket);
   if (characterId.length > 0) {
@@ -584,6 +588,14 @@ export async function queryLoadoutOptimizer(params = {}, rawConfig = {}, options
       expected: ["术士", "猎人", "泰坦"],
     });
   }
+  const targetStats = normalizeOptimizerTargetStats(params.targetStats, params);
+  if (!Object.keys(targetStats).length) {
+    return textResult("要配哪几项 Armor 3.0 属性？请直接说例如：生命值100 手雷100 武器100。", {
+      status: "needs_target_stats",
+      qq: target.qq,
+      expected: ["生命值", "近战", "手雷", "超能", "职业", "武器"],
+    });
+  }
 
   try {
     const resolved = await withCardIdentity(await resolveTargetMembership(target.qq, config, options), config, options);
@@ -592,7 +604,7 @@ export async function queryLoadoutOptimizer(params = {}, rawConfig = {}, options
       url,
       {
         className,
-        targetStats: normalizeOptimizerTargetStats(params.targetStats, params),
+        targetStats,
         includeCurrentSubclassFragments: params.includeCurrentSubclassFragments !== false,
         simulateStatMods: params.simulateStatMods !== false,
         limit: clampInteger(params.limit, 3, 1, 10),
@@ -822,6 +834,72 @@ function inventoryViewTitle(view) {
   if (view === "inventory") return "背包";
   if (view === "search") return "库存搜索";
   return "库存";
+}
+
+function inventoryScopeLabel(view) {
+  if (view === "vault") return "仓库";
+  if (view === "equipped") return "已装备";
+  if (view === "inventory") return "背包";
+  return "";
+}
+
+function inventoryStructuredFilterParams(params = {}) {
+  const pairs = [];
+  const textKeys = ["weaponType", "slot", "damageType", "perk"];
+  for (const key of textKeys) {
+    const value = String(params[key] || "").trim();
+    if (value) {
+      pairs.push([key, value]);
+    }
+  }
+  const rpm = Number(params.rpm);
+  if (Number.isInteger(rpm) && rpm > 0) {
+    pairs.push(["rpm", String(rpm)]);
+  }
+  return pairs;
+}
+
+function inventorySearchLabel(params = {}, inventory = {}, scope = "") {
+  const query = String(params.q || params.query || inventory?.query || "").trim();
+  const hasCondition =
+    Boolean(query) ||
+    Boolean(String(params.weaponType || inventory?.weaponType || "").trim()) ||
+    Boolean(Number(params.rpm ?? inventory?.rpm)) ||
+    Boolean(String(params.slot || inventory?.slot || "").trim()) ||
+    Boolean(String(params.damageType || inventory?.damageType || "").trim()) ||
+    Boolean(String(params.perk || inventory?.perk || "").trim());
+  if (!hasCondition) {
+    return "";
+  }
+  const parts = [];
+  const resolvedScope = scope || inventoryScopeLabel(normalizeInventoryBucket(inventory?.bucket || params.bucket));
+  if (resolvedScope) {
+    parts.push(resolvedScope);
+  }
+  const weaponType = String(params.weaponType || inventory?.weaponType || "").trim();
+  if (weaponType) {
+    parts.push(weaponType);
+  }
+  const rpm = Number(params.rpm ?? inventory?.rpm);
+  if (Number.isInteger(rpm) && rpm > 0) {
+    parts.push(`${rpm} RPM`);
+  }
+  const slot = String(params.slot || inventory?.slot || "").trim();
+  if (slot) {
+    parts.push(slot);
+  }
+  const damageType = String(params.damageType || inventory?.damageType || "").trim();
+  if (damageType) {
+    parts.push(damageType);
+  }
+  const perk = String(params.perk || inventory?.perk || "").trim();
+  if (perk) {
+    parts.push(`Perk ${perk}`);
+  }
+  if (query) {
+    parts.push(query);
+  }
+  return parts.length ? `库存搜索 · ${parts.join(" · ")}` : "";
 }
 
 function shareInventoryDescription(images) {
@@ -2022,6 +2100,7 @@ function renderInventoryHtml(player, inventory, params = {}) {
 function renderVaultInventoryHtml(player, inventory, params = {}) {
   const items = Array.isArray(inventory?.items) ? inventory.items : [];
   const query = String(params.q || params.query || inventory?.query || "").trim();
+  const searchLabel = inventorySearchLabel(params, inventory, "仓库");
   const vaultItems = filterInventoryItemsForView(items, "vault");
   const groups = inventoryBucketGroups(vaultItems);
   const pageIndex = Number(params.vaultPageIndex || 0);
@@ -2034,8 +2113,8 @@ function renderVaultInventoryHtml(player, inventory, params = {}) {
     player,
     title: formatPlayerName(player),
     eyebrow: "DESTINY 2 VAULT",
-    subtitle: query
-      ? `仓库搜索 · ${query}${isPaged ? ` · ${pageLabel}` : ""}`
+    subtitle: searchLabel
+      ? `${searchLabel}${isPaged ? ` · ${pageLabel}` : ""}`
       : `仓库全量 · ${dateOnly(inventory?.updatedAt)}${isPaged ? ` · ${pageLabel}` : ""}`,
     body: `
       <section class="metrics metrics-4">
@@ -2093,12 +2172,13 @@ function renderEquippedInventoryHtml(player, inventory, params = {}) {
 function renderInventoryListHtml(player, inventory, params = {}, view = "overview") {
   const allItems = Array.isArray(inventory?.items) ? inventory.items : [];
   const query = String(params.q || params.query || inventory?.query || "").trim();
+  const searchLabel = inventorySearchLabel(params, inventory, inventoryScopeLabel(view));
   const scopedItems = filterInventoryItemsForView(allItems, view);
   const shouldLimit = view === "overview";
   const visibleItems = shouldLimit ? scopedItems.slice(0, 80) : scopedItems;
   const groups = view === "inventory" ? inventoryBucketGroups(visibleItems) : inventoryOwnerGroups(visibleItems);
-  const subtitle = query
-    ? `库存搜索 · ${query}`
+  const subtitle = searchLabel
+    ? searchLabel
     : view === "inventory"
       ? `角色背包 · ${dateOnly(inventory?.updatedAt)}`
       : `库存管理 · ${dateOnly(inventory?.updatedAt)}`;
@@ -2130,7 +2210,7 @@ function renderLoadoutOptimizerHtml(player, optimizer) {
   const targets = Array.isArray(optimizer?.targets) ? optimizer.targets : [];
   const best = builds[0];
   const achieved = builds.filter((build) => build?.achieved).length;
-  const targetLine = targets.map((target) => `${optimizerStatName(target)} ${int(target.target)}`).join(" + ") || "恢复 100 + 纪律 100 + 力量 100";
+  const targetLine = targets.map((target) => `${optimizerStatName(target)} ${int(target.target)}`).join(" + ") || "等待选择 Armor 3.0 目标属性";
   return cardPage({
     width: CARD_WIDTH,
     player,
@@ -2199,7 +2279,7 @@ function optimizerStatBars(stats, targets) {
       const target = targetMap.get(key);
       const value = Number(stat?.value || 0);
       const wanted = Number(target?.target || 0);
-      const width = Math.max(0, Math.min(100, value));
+      const width = Math.max(0, Math.min(100, (value / 200) * 100));
       const tone = wanted > 0 ? (value >= wanted ? "hit" : "miss") : "muted";
       return `
         <div class="optimizer-stat ${tone}">
@@ -2268,25 +2348,27 @@ function optimizerFragmentStats(fragment) {
 function optimizerStatName(stat) {
   const key = String(stat?.statKey || stat?.key || "").trim();
   const names = {
-    mobility: "机动",
-    resilience: "韧性",
-    recovery: "恢复",
-    discipline: "纪律",
-    intellect: "智慧",
-    strength: "力量",
+    mobility: "武器",
+    resilience: "生命值",
+    recovery: "职业",
+    discipline: "手雷",
+    intellect: "超能",
+    strength: "近战",
   };
-  return stat?.statName || stat?.name || names[key] || key || "-";
+  const rawName = stat?.statName || stat?.name;
+  const normalized = normalizeArmor3StatDisplayName(rawName || key);
+  return normalized || names[key] || key || "-";
 }
 
 function optimizerShortStatName(stat) {
   const name = optimizerStatName(stat);
   const shortNames = new Map([
-    ["机动", "机"],
-    ["韧性", "韧"],
-    ["恢复", "恢"],
-    ["纪律", "纪"],
-    ["智慧", "智"],
-    ["力量", "力"],
+    ["武器", "武"],
+    ["生命值", "命"],
+    ["职业", "职"],
+    ["手雷", "雷"],
+    ["超能", "超"],
+    ["近战", "近"],
   ]);
   return shortNames.get(name) || name;
 }
@@ -2330,7 +2412,7 @@ function inventoryGroupHtml(title, items, tone) {
 function inventoryItemHtml(item) {
   const iconUrl = item?.iconPath ? bungieAssetUrl(item.iconPath) : "";
   const tone = item?.locked ? "green" : "red";
-  const subtitle = [item?.itemTypeDisplayName, item?.bucketName, item?.power ? `光等 ${int(item.power)}` : ""]
+  const subtitle = [item?.itemTypeDisplayName, item?.bucketName, inventoryWeaponStatsLabel(item), item?.power ? `光等 ${int(item.power)}` : ""]
     .filter(Boolean)
     .join(" · ");
   const idLine = item?.itemInstanceId ? `ID ${item.itemInstanceId}` : `Hash ${item?.itemHash || "-"}`;
@@ -2393,7 +2475,7 @@ function inventoryBucketGroupHtml(group) {
 function inventoryItemCardHtml(item) {
   const iconUrl = item?.iconPath ? bungieAssetUrl(item.iconPath) : "";
   const tone = item?.locked ? "green" : "red";
-  const subtitle = [item?.itemTypeDisplayName, item?.bucketName, item?.power ? `光等 ${int(item.power)}` : ""]
+  const subtitle = [item?.itemTypeDisplayName, item?.bucketName, inventoryWeaponStatsLabel(item), item?.power ? `光等 ${int(item.power)}` : ""]
     .filter(Boolean)
     .join(" · ");
   const meta = [
@@ -2449,12 +2531,15 @@ function inventoryArmorStatsHtml(item) {
       <div class="inventory-stat-grid">
         ${stats
           .map(
-            (stat) => `
+            (stat) => {
+              const name = normalizeArmor3StatDisplayName(stat?.name || stat?.statName || stat?.key || stat?.hash);
+              return `
               <div class="inventory-stat">
-                <span>${escapeHtml(stat?.name || "-")}</span>
+                <span>${escapeHtml(name || "-")}</span>
                 <b>${int(stat?.value)}</b>
               </div>
-            `,
+            `;
+            },
           )
           .join("")}
       </div>
@@ -2521,7 +2606,7 @@ function equippedCharacterHtml(character, items) {
 function equippedWideItemHtml(item) {
   const iconUrl = item?.iconPath ? bungieAssetUrl(item.iconPath) : "";
   const tone = item?.locked ? "green" : "red";
-  const subtitle = [item?.bucketName, item?.itemTypeDisplayName, item?.power ? `光等 ${int(item.power)}` : ""]
+  const subtitle = [item?.bucketName, item?.itemTypeDisplayName, inventoryWeaponStatsLabel(item), item?.power ? `光等 ${int(item.power)}` : ""]
     .filter(Boolean)
     .join(" · ");
   const selectedPerks = equippedSelectedPlugNames(item).slice(0, 6);
@@ -2603,19 +2688,34 @@ function equippedArmorStatsLine(item) {
     return "";
   }
   const shortNames = new Map([
-    ["机动", "机"],
-    ["韧性", "韧"],
-    ["恢复", "恢"],
-    ["纪律", "纪"],
-    ["智慧", "智"],
-    ["力量", "力"],
+    ["武器", "武"],
+    ["生命值", "命"],
+    ["职业", "职"],
+    ["手雷", "雷"],
+    ["超能", "超"],
+    ["近战", "近"],
   ]);
   return `
     <div class="equipped-statline">
       <b>总 ${int(armorStats?.total)}</b>
-      ${stats.map((stat) => `<span>${escapeHtml(shortNames.get(stat?.name) || stat?.name || "-")} ${int(stat?.value)}</span>`).join("")}
+      ${stats.map((stat) => {
+        const name = normalizeArmor3StatDisplayName(stat?.name || stat?.statName || stat?.key || stat?.hash);
+        return `<span>${escapeHtml(shortNames.get(name) || name || "-")} ${int(stat?.value)}</span>`;
+      }).join("")}
     </div>
   `;
+}
+
+function normalizeArmor3StatDisplayName(value) {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (!text) return "";
+  if (/^(2996146975|mobility|mob|机动|機動|敏捷|武器|weapon|weapons)$/iu.test(text)) return "武器";
+  if (/^(392767087|resilience|res|韧性|韌性|韧|生命|生命值|health|hp)$/iu.test(text)) return "生命值";
+  if (/^(1943323491|recovery|rec|恢复|恢復|回复|职业|職業|class|class ability|classability)$/iu.test(text)) return "职业";
+  if (/^(1735777505|discipline|dis|纪律|紀律|手雷|雷|grenade|grenades)$/iu.test(text)) return "手雷";
+  if (/^(144602215|intellect|int|智慧|智力|超能|大招|super)$/iu.test(text)) return "超能";
+  if (/^(4244567218|strength|str|力量|近战|近戰|melee)$/iu.test(text)) return "近战";
+  return String(value ?? "").trim();
 }
 
 function filterInventoryItemsForView(items, view) {
@@ -2729,6 +2829,14 @@ function inventoryEnergyLabel(item) {
   }
   if (capacity > 0) {
     return `能量 ${capacity}`;
+  }
+  return "";
+}
+
+function inventoryWeaponStatsLabel(item) {
+  const rpm = Number(item?.weaponStats?.rpm);
+  if (Number.isInteger(rpm) && rpm > 0) {
+    return `${rpm} RPM`;
   }
   return "";
 }
@@ -6449,7 +6557,7 @@ function normalizeInventoryView(value, params = {}) {
   }
 
   const searchText = String(params.q || params.query || "").trim();
-  if (searchText) {
+  if (searchText || inventoryStructuredFilterParams(params).length > 0) {
     return "search";
   }
   const bucket = normalizeInventoryBucket(params.bucket);
@@ -6486,7 +6594,7 @@ function normalizeOptimizerTargetStats(input, params = {}) {
     }
     const number = Number(value);
     if (Number.isFinite(number) && number >= 0) {
-      result[normalized] = clampInteger(number, 100, 0, 100);
+      result[normalized] = clampInteger(number, 100, 0, 200);
       hasExplicitTarget = true;
     }
   };
@@ -6503,6 +6611,18 @@ function normalizeOptimizerTargetStats(input, params = {}) {
     "discipline",
     "intellect",
     "strength",
+    "weapon",
+    "health",
+    "class",
+    "grenade",
+    "super",
+    "melee",
+    "武器",
+    "生命值",
+    "职业",
+    "手雷",
+    "超能",
+    "近战",
     "机动",
     "韧性",
     "恢复",
@@ -6514,22 +6634,18 @@ function normalizeOptimizerTargetStats(input, params = {}) {
       applyValue(key, params[key]);
     }
   }
-  return hasExplicitTarget ? result : {
-    recovery: 100,
-    discipline: 100,
-    strength: 100,
-  };
+  return hasExplicitTarget ? result : {};
 }
 
 function normalizeOptimizerStatKey(value) {
   const text = String(value || "").trim().toLowerCase();
   if (!text) return "";
-  if (/mobility|机动|機動/u.test(text)) return "mobility";
-  if (/resilience|韧性|韌性/u.test(text)) return "resilience";
-  if (/recovery|恢复|恢復/u.test(text)) return "recovery";
-  if (/discipline|纪律|紀律/u.test(text)) return "discipline";
-  if (/intellect|智慧|智力/u.test(text)) return "intellect";
-  if (/strength|力量/u.test(text)) return "strength";
+  if (/weapon|武器|mobility|机动|機動/u.test(text)) return "mobility";
+  if (/health|hp|生命|生命值|resilience|韧性|韌性/u.test(text)) return "resilience";
+  if (/class|职业|職業|recovery|恢复|恢復/u.test(text)) return "recovery";
+  if (/grenade|手雷|discipline|纪律|紀律/u.test(text)) return "discipline";
+  if (/super|超能|大招|intellect|智慧|智力/u.test(text)) return "intellect";
+  if (/melee|近战|近戰|strength|力量/u.test(text)) return "strength";
   return "";
 }
 

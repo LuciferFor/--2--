@@ -19,7 +19,8 @@ describe("onebot d2 direct bridge", () => {
     assert.equal(invocation.target, "1665240495");
     assert.deepEqual(invocation.params, {
       target: "1665240495",
-      q: "冲锋枪",
+      q: "",
+      weaponType: "冲锋枪",
       view: "search",
       bucket: "all",
     });
@@ -31,9 +32,38 @@ describe("onebot d2 direct bridge", () => {
     assert.equal(invocation.card, "inventory");
     assert.deepEqual(invocation.params, {
       target: "1665240495",
-      q: "冲锋枪",
+      q: "",
+      weaponType: "冲锋枪",
       view: "search",
       bucket: "vault",
+    });
+  });
+
+  it("extracts structured rpm and weapon type from natural inventory queries", () => {
+    const invocation = bridge.buildD2DirectInvocation(event, "查下我的仓库里的120射速手炮");
+
+    assert.equal(invocation.card, "inventory");
+    assert.deepEqual(invocation.params, {
+      target: "1665240495",
+      q: "",
+      weaponType: "手炮",
+      rpm: 120,
+      view: "search",
+      bucket: "vault",
+    });
+  });
+
+  it("understands english rpm and weapon type aliases", () => {
+    const invocation = bridge.buildD2DirectInvocation(event, "查我的120rpm hc");
+
+    assert.equal(invocation.card, "inventory");
+    assert.deepEqual(invocation.params, {
+      target: "1665240495",
+      q: "",
+      weaponType: "手炮",
+      rpm: 120,
+      view: "search",
+      bucket: "all",
     });
   });
 
@@ -50,7 +80,7 @@ describe("onebot d2 direct bridge", () => {
   });
 
   it("routes stat target suit queries to the loadout optimizer", () => {
-    const invocation = bridge.buildD2DirectInvocation(event, "查下我的术士有没有能凑100纪律 100恢复 100韧性的套装");
+    const invocation = bridge.buildD2DirectInvocation(event, "查下我的术士有没有能凑100手雷 100职业 100生命值的套装");
 
     assert.equal(invocation.card, "loadout_optimizer");
     assert.equal(invocation.target, "1665240495");
@@ -64,11 +94,18 @@ describe("onebot d2 direct bridge", () => {
     });
   });
 
-  it("keeps the default loadout optimizer target when no stats are named", () => {
+  it("does not invent default loadout optimizer targets when no stats are named", () => {
     const invocation = bridge.buildD2DirectInvocation(event, "我的术士配装");
 
     assert.equal(invocation.card, "loadout_optimizer");
-    assert.deepEqual(invocation.params.targetStats, { recovery: 100, discipline: 100, strength: 100 });
+    assert.deepEqual(invocation.params.targetStats, {});
+  });
+
+  it("accepts legacy loadout stat words as aliases", () => {
+    const invocation = bridge.buildD2DirectInvocation(event, "查下我的术士有没有能凑100纪律 100恢复 100韧性的套装");
+
+    assert.equal(invocation.card, "loadout_optimizer");
+    assert.deepEqual(invocation.params.targetStats, { resilience: 100, recovery: 100, discipline: 100 });
   });
 
   it("recognizes image resend requests", () => {

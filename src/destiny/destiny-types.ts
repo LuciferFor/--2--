@@ -134,6 +134,17 @@ export interface InventoryArmorStatsSummary {
   stats: InventoryArmorStatSummary[];
 }
 
+export interface InventoryWeaponStatSummary {
+  hash: number;
+  name: string;
+  value: number;
+}
+
+export interface InventoryWeaponStatsSummary {
+  rpm?: number;
+  stats: InventoryWeaponStatSummary[];
+}
+
 export interface InventoryItemSummary {
   itemHash: number;
   itemInstanceId?: string;
@@ -157,6 +168,7 @@ export interface InventoryItemSummary {
   energyUsed?: number;
   sockets?: InventorySocketSummary[];
   armorStats?: InventoryArmorStatsSummary;
+  weaponStats?: InventoryWeaponStatsSummary;
 }
 
 export interface InventorySummary {
@@ -181,6 +193,11 @@ export interface InventorySearchSummary {
   query: string;
   bucket: InventoryBucketFilter;
   characterId?: string;
+  weaponType?: string;
+  rpm?: number;
+  slot?: string;
+  damageType?: string;
+  perk?: string;
   items: InventoryItemSummary[];
   total: number;
   updatedAt: string;
