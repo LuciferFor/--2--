@@ -1,4 +1,7 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const MODES = new Set(["all", "raid", "dungeon", "trials", "pvp", "gambit"]);
 const CARDS = new Set([
@@ -21,6 +24,8 @@ const CARDS = new Set([
 ]);
 const CARD_WIDTH = 1200;
 const HEATMAP_CARD_WIDTH = 900;
+const EQUIPPED_CARD_WIDTH = 1920;
+const VAULT_IMAGE_PAGE_SIZE = 80;
 const CJK_FONT_URL = new URL("../assets/NotoSansSC-VF.ttf", import.meta.url).href;
 let cachedFontFaceCss;
 const imageDataUrlCache = new Map();
@@ -72,6 +77,9 @@ export function resolveConfig(raw = {}) {
     enabled: raw.enabled !== false,
     baseUrl: String(raw.baseUrl || "http://192.168.31.11:3011").replace(/\/+$/u, ""),
     timeoutMs: clampInteger(raw.timeoutMs, 60000, 1000, 120000),
+    shareUploadToken: String(raw.shareUploadToken || process.env.D2_SHARE_UPLOAD_TOKEN || ""),
+    shareThresholdBytes: clampInteger(raw.shareThresholdBytes, 8 * 1024 * 1024, 1024 * 1024, 128 * 1024 * 1024),
+    shareImageCountThreshold: clampInteger(raw.shareImageCountThreshold, 4, 1, 64),
     defaultCard: CARDS.has(raw.defaultCard) ? raw.defaultCard : "summary",
     defaultMode: MODES.has(raw.defaultMode) ? raw.defaultMode : "all",
     defaultMembershipType: clampInteger(raw.defaultMembershipType, 3, 1, 254),
@@ -264,6 +272,9 @@ export async function queryCard(params = {}, rawConfig = {}, options = {}) {
     card = normalizeCard(normalizedParams.card || inferCardFromCommand(normalizedParams.command || normalizedParams.query), config.defaultCard);
   } catch (error) {
     if (error instanceof D2StatsInputError) {
+      if (isQqOauthBindingMessage(error.message)) {
+        return textResult(error.message, { status: "ok", kind: "oauth_bind_link" });
+      }
       return textResult(error.message, { status: "invalid_input" });
     }
     throw error;
@@ -277,6 +288,29 @@ export async function queryCard(params = {}, rawConfig = {}, options = {}) {
       signal: options.signal,
       renderer: options.renderHtmlToPng,
     });
+
+    const shareResult = await maybeShareImages(
+      {
+        config,
+        options,
+        card,
+        sourceUrl: rendered.sourceUrl,
+        title: `Destiny 2 ${card}`,
+        description: "图片较大，已生成网页方便查看。",
+        images: [
+          {
+            base64: png.toString("base64"),
+            mimeType: "image/png",
+            bytes: png.length,
+            html: rendered.html,
+            caption: "查询结果"
+          }
+        ]
+      }
+    );
+    if (shareResult) {
+      return shareResult;
+    }
 
     return imageResult({
       label: `Destiny 2 ${card} card`,
@@ -293,6 +327,9 @@ export async function queryCard(params = {}, rawConfig = {}, options = {}) {
     });
   } catch (error) {
     if (error instanceof D2StatsInputError) {
+      if (isQqOauthBindingMessage(error.message)) {
+        return textResult(error.message, { status: "ok", kind: "oauth_bind_link" });
+      }
       return textResult(error.message, { status: "invalid_input" });
     }
     if (error instanceof D2StatsBackendError) {
@@ -312,17 +349,51 @@ export async function queryCard(params = {}, rawConfig = {}, options = {}) {
 
 function normalizeCardParams(params = {}) {
   const normalized = { ...params };
-  if (!String(normalized.target || "").trim() && String(normalized.qq || "").trim()) {
-    normalized.target = String(normalized.qq).trim();
+  if (!String(normalized.target || "").trim()) {
+    const qq = qqInputFromParams(normalized);
+    if (qq) {
+      normalized.target = qq;
+      normalized.qq = qq;
+    }
   }
   return normalized;
+}
+
+function targetInputFromParams(params = {}) {
+  const target = String(params.target || "").trim();
+  if (target) {
+    return target;
+  }
+  return qqInputFromParams(params);
+}
+
+function qqInputFromParams(params = {}) {
+  const aliases = [
+    params.qq,
+    params.senderQq,
+    params.senderQQ,
+    params.sender_qq,
+    params.userQq,
+    params.userQQ,
+    params.user_id,
+    params.userId,
+    params.authorId,
+    params.author_id,
+  ];
+  for (const value of aliases) {
+    const text = String(value || "").trim();
+    if (/^[0-9]{5,15}$/u.test(text)) {
+      return text;
+    }
+  }
+  return "";
 }
 
 function missingTargetMessage() {
   return [
     "这条命令缺少查询目标，请在命令后面带 QQ 号、BungieName#1234 或 membershipType:membershipId。",
     "示例：/地牢 1665240495、/raid Lucifer#8571、/战绩 3:4611686018494693796。",
-    "如果你想查自己，需要 OpenClaw 能把发送者 QQ 传给工具；当前这次调用没有传到。",
+    "如果用户只说 /raid、查下 raid、/地牢 这类命令，要把发言人的 QQ 作为目标传入；当前这次调用没有传到。",
   ].join("\n");
 }
 
@@ -332,7 +403,7 @@ export async function bindQq(params = {}, rawConfig = {}, options = {}) {
     return textResult("命运2查询工具当前未启用。", { status: "disabled" });
   }
 
-  const qq = String(params.qq || "").trim();
+  const qq = qqInputFromParams(params);
   if (!/^[0-9]{5,15}$/u.test(qq)) {
     return textResult("QQ 号格式不对，需要 5 到 15 位数字。", { status: "invalid_input" });
   }
@@ -391,9 +462,12 @@ export async function queryInventory(params = {}, rawConfig = {}, options = {}) 
 
   let target;
   try {
-    target = parseTarget(params.target, config);
+    target = parseTarget(targetInputFromParams(params), config);
   } catch (error) {
     if (error instanceof D2StatsInputError) {
+      if (isQqOauthBindingMessage(error.message)) {
+        return textResult(error.message, { status: "ok", kind: "oauth_bind_link", qq: target.qq });
+      }
       return textResult(error.message, { status: "invalid_input" });
     }
     throw error;
@@ -406,28 +480,65 @@ export async function queryInventory(params = {}, rawConfig = {}, options = {}) 
     const resolved = await withCardIdentity(await resolveTargetMembership(target.qq, config, options), config, options);
     const sourceUrl = buildInventoryDataUrl(target.qq, params, config);
     const inventory = await fetchEnvelope(sourceUrl, config, options);
-    const html = renderInventoryHtml(resolved.player, inventory, params);
-    const png = await renderHtmlToPng(html, {
-      width: HEATMAP_CARD_WIDTH,
-      height: estimateInventoryHeight(inventory, params),
-      signal: options.signal,
-      renderer: options.renderHtmlToPng,
+    const view = normalizeInventoryView(params.view, params);
+    const renderedImages = await renderInventoryImageParts(resolved.player, inventory, params, sourceUrl, options);
+    const shareResult = await maybeShareImages({
+      config,
+      options,
+      card: `inventory:${view}`,
+      sourceUrl,
+      title: `Destiny 2 ${inventoryViewTitle(view)}`,
+      description: shareInventoryDescription(renderedImages),
+      images: renderedImages.map((image, index) => ({
+        base64: image.png.toString("base64"),
+        mimeType: "image/png",
+        bytes: image.png.length,
+        html: image.html,
+        caption: image.details?.pageCount ? `第 ${image.details.page}/${image.details.pageCount} 页` : `第 ${index + 1} 张`
+      }))
     });
-    return imageResult({
+    if (shareResult) {
+      return shareResult;
+    }
+    if (renderedImages.length === 1) {
+      const png = renderedImages[0].png;
+      return imageResult({
+        label: "Destiny 2 inventory card",
+        path: sourceUrl,
+        base64: png.toString("base64"),
+        mimeType: "image/png",
+        details: {
+          status: "ok",
+          card: `inventory:${view}`,
+          bytes: png.length,
+          sourceUrl,
+          renderedBy: "openclaw-html",
+          ...renderedImages[0].details,
+        },
+      });
+    }
+    return imagesResult({
       label: "Destiny 2 inventory card",
       path: sourceUrl,
-      base64: png.toString("base64"),
       mimeType: "image/png",
+      images: renderedImages.map((image) => ({
+        base64: image.png.toString("base64"),
+        details: image.details,
+      })),
       details: {
         status: "ok",
-        card: `inventory:${normalizeInventoryView(params.view, params)}`,
-        bytes: png.length,
+        card: `inventory:${view}`,
+        imageCount: renderedImages.length,
+        bytes: renderedImages.reduce((sum, image) => sum + image.png.length, 0),
         sourceUrl,
         renderedBy: "openclaw-html",
       },
     });
   } catch (error) {
     if (error instanceof D2StatsInputError) {
+      if (isQqOauthBindingMessage(error.message)) {
+        return textResult(error.message, { status: "ok", kind: "oauth_bind_link", qq: target.qq });
+      }
       return textResult(error.message, { status: "invalid_input" });
     }
     if (error instanceof D2StatsBackendError && (error.status === 401 || error.status === 403 || error.status === 404)) {
@@ -448,6 +559,301 @@ export async function queryInventory(params = {}, rawConfig = {}, options = {}) 
   }
 }
 
+function inventoryCardWidth(params = {}) {
+  return normalizeInventoryView(params.view, params) === "equipped" ? EQUIPPED_CARD_WIDTH : HEATMAP_CARD_WIDTH;
+}
+
+async function renderInventoryImageParts(player, inventory, params = {}, sourceUrl, options = {}) {
+  const view = normalizeInventoryView(params.view, params);
+  const pageSize = inventoryPageSize(params, view);
+  const items = Array.isArray(inventory?.items) ? inventory.items : [];
+
+  if (view === "vault") {
+    const vaultItems = filterInventoryItemsForView(items, "vault").slice().sort(compareInventoryItems);
+    if (vaultItems.length > pageSize) {
+      const chunks = chunkArray(vaultItems, pageSize);
+      const images = [];
+      for (let index = 0; index < chunks.length; index += 1) {
+        const pageParams = {
+          ...params,
+          vaultPageIndex: index + 1,
+          vaultPageCount: chunks.length,
+          vaultTotal: vaultItems.length,
+          vaultPageSize: pageSize,
+        };
+        const pageInventory = {
+          ...inventory,
+          items: chunks[index],
+          totals: {
+            ...(inventory?.totals || {}),
+            vault: chunks[index].length,
+            vaultTotal: vaultItems.length,
+          },
+        };
+        const html = renderInventoryHtml(player, pageInventory, pageParams);
+        const png = await renderHtmlToPng(html, {
+          width: inventoryCardWidth(pageParams),
+          height: estimateInventoryHeight(pageInventory, pageParams),
+          signal: options.signal,
+          renderer: options.renderHtmlToPng,
+        });
+        images.push({
+          png,
+          html,
+          details: {
+            page: index + 1,
+            pageCount: chunks.length,
+            pageSize,
+            itemCount: chunks[index].length,
+            totalItems: vaultItems.length,
+          },
+        });
+      }
+      return images;
+    }
+  }
+
+  const html = renderInventoryHtml(player, inventory, params);
+  const png = await renderHtmlToPng(html, {
+    width: inventoryCardWidth(params),
+    height: estimateInventoryHeight(inventory, params),
+    signal: options.signal,
+    renderer: options.renderHtmlToPng,
+  });
+  return [{ png, html, details: {} }];
+}
+
+function inventoryPageSize(params = {}, view = "") {
+  const raw = Number(params.pageSize || params.imagePageSize || params.limit || 0);
+  if (Number.isFinite(raw) && raw >= 20) {
+    return Math.max(20, Math.min(120, Math.floor(raw)));
+  }
+  return view === "vault" ? VAULT_IMAGE_PAGE_SIZE : 120;
+}
+
+function chunkArray(items, size) {
+  const chunks = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks.length ? chunks : [[]];
+}
+
+function inventoryViewTitle(view) {
+  if (view === "vault") return "仓库";
+  if (view === "equipped") return "当前装备";
+  if (view === "inventory") return "背包";
+  if (view === "search") return "库存搜索";
+  return "库存";
+}
+
+function shareInventoryDescription(images) {
+  const pageCount = images.length;
+  const totalItems = images.find((image) => image.details?.totalItems)?.details?.totalItems;
+  if (totalItems) {
+    return `共 ${totalItems} 件，图片较多，已生成网页方便查看。`;
+  }
+  if (pageCount > 1) {
+    return `共 ${pageCount} 张图，已生成网页方便查看。`;
+  }
+  return "图片较大，已生成网页方便查看。";
+}
+
+function shareableCardHtml(html) {
+  const withoutFont = stripFontFaceRules(String(html || ""))
+    .replaceAll("\"D2CJK\", ", "")
+    .replace(/html,\s*body\s*\{([^}]*)background:\s*transparent;([^}]*)\}/u, "html, body {$1background: #202020;$2");
+  return injectShareResponsiveCss(withoutFont);
+}
+
+function injectShareResponsiveCss(html) {
+  const css = `
+    <style>
+      html, body {
+        min-width: 0 !important;
+        overflow-x: hidden !important;
+      }
+      #d2-card {
+        width: 100% !important;
+        max-width: none !important;
+        min-height: 0 !important;
+        padding: 22px clamp(18px, 2.2vw, 36px) 34px !important;
+      }
+      #d2-card .content {
+        width: min(100%, 1920px);
+        margin: 0 auto;
+      }
+      #d2-card .inventory-groups {
+        gap: 18px !important;
+      }
+      #d2-card .inventory-group {
+        padding: 16px !important;
+      }
+      #d2-card .inventory-grid {
+        grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)) !important;
+        gap: 12px !important;
+        align-items: start !important;
+      }
+      #d2-card .inventory-item {
+        min-height: 0 !important;
+        height: 100% !important;
+      }
+      @media (min-width: 1500px) {
+        #d2-card .inventory-grid {
+          grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)) !important;
+        }
+      }
+      @media (max-width: 760px) {
+        #d2-card {
+          padding: 14px 10px 24px !important;
+        }
+        #d2-card .header {
+          grid-template-columns: 64px minmax(0, 1fr) !important;
+          min-height: 110px !important;
+          padding: 14px !important;
+        }
+        #d2-card .player-emblem {
+          width: 58px !important;
+          height: 58px !important;
+        }
+        #d2-card h1 {
+          font-size: 34px !important;
+        }
+        #d2-card .eyebrow {
+          font-size: 16px !important;
+        }
+        #d2-card .metrics {
+          grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+        }
+        #d2-card .inventory-grid {
+          grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)) !important;
+        }
+      }
+    </style>`;
+  return html.includes("</head>") ? html.replace("</head>", `${css}\n</head>`) : `${css}${html}`;
+}
+
+function stripFontFaceRules(value) {
+  let result = "";
+  let cursor = 0;
+  while (cursor < value.length) {
+    const start = value.indexOf("@font-face", cursor);
+    if (start < 0) {
+      result += value.slice(cursor);
+      break;
+    }
+    result += value.slice(cursor, start);
+    const open = value.indexOf("{", start);
+    if (open < 0) {
+      break;
+    }
+    let depth = 0;
+    let end = open;
+    for (; end < value.length; end += 1) {
+      if (value[end] === "{") depth += 1;
+      if (value[end] === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          end += 1;
+          break;
+        }
+      }
+    }
+    cursor = end;
+  }
+  return result;
+}
+
+async function maybeShareImages({ config, options, card, sourceUrl, title, description, images }) {
+  if (!shouldShareImages(config, images)) {
+    return null;
+  }
+  try {
+    const htmlPages = images
+      .filter((image) => String(image.html || "").trim())
+      .map((image) => ({
+        html: shareableCardHtml(image.html),
+        caption: image.caption,
+      }));
+    const fallbackImages = images.map((image) => ({
+      mimeType: image.mimeType,
+      base64: image.base64,
+      caption: image.caption,
+    }));
+    const share = await uploadSharePage(config, options, {
+      title,
+      description,
+      sourceUrl,
+      ...(htmlPages.length > 0 ? { htmlPages } : { images: fallbackImages }),
+    });
+    return textResult(sharePageText(share, images), {
+      status: "ok",
+      kind: "share_page",
+      card,
+      url: share.url,
+      pageCount: htmlPages.length || 0,
+      imageCount: images.length,
+      bytes: images.reduce((sum, image) => sum + Number(image.bytes || 0), 0),
+      sourceUrl,
+    });
+  } catch {
+    return null;
+  }
+}
+
+function shouldShareImages(config, images) {
+  if (!config.shareUploadToken || !Array.isArray(images) || images.length === 0) {
+    return false;
+  }
+  const totalBytes = images.reduce((sum, image) => sum + Number(image.bytes || 0), 0);
+  const maxBytes = Math.max(...images.map((image) => Number(image.bytes || 0)));
+  return totalBytes > config.shareThresholdBytes || maxBytes > config.shareThresholdBytes || images.length > config.shareImageCountThreshold;
+}
+
+async function uploadSharePage(config, options, payload) {
+  const response = await fetchWithTimeout(`${config.baseUrl}/api/d2/share-pages`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${config.shareUploadToken}`,
+    },
+    body: JSON.stringify(payload),
+    signal: options.signal,
+    timeoutMs: Math.max(config.timeoutMs, 120000),
+    fetchImpl: options.fetchImpl,
+  });
+  const envelope = await safeJson(response);
+  if (!response.ok || envelope?.success !== true || !envelope?.data?.url) {
+    throw new Error(envelope?.error?.message || `Share upload failed: ${response.status}`);
+  }
+  return envelope.data;
+}
+
+function sharePageText(share, images) {
+  const totalBytes = images.reduce((sum, image) => sum + Number(image.bytes || 0), 0);
+  const pageCount = Number(share.pageCount || 0) || images.length;
+  return [
+    "这次命运2查询结果比较大，我给你生成了网页布局版：",
+    share.url,
+    "",
+    `网页：${pageCount} 页，原始渲染约 ${formatBytes(totalBytes)}。直接点开链接查看即可，放大也不会糊。`,
+  ].join("\n");
+  return [
+    "这次命运2查询结果比较大，我给你生成了网页：",
+    share.url,
+    "",
+    `图片：${images.length} 张，约 ${formatBytes(totalBytes)}。直接点开链接查看即可。`,
+  ].join("\n");
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes || 0);
+  if (value >= 1024 * 1024) {
+    return `${(value / 1024 / 1024).toFixed(1)} MB`;
+  }
+  return `${Math.max(1, Math.round(value / 1024))} KB`;
+}
+
 export async function itemAction(params = {}, rawConfig = {}, options = {}) {
   const config = resolveConfig(rawConfig);
   if (!config.enabled) {
@@ -456,7 +862,7 @@ export async function itemAction(params = {}, rawConfig = {}, options = {}) {
 
   let target;
   try {
-    target = parseTarget(params.qq || params.target, config);
+    target = parseTarget(targetInputFromParams(params), config);
   } catch (error) {
     if (error instanceof D2StatsInputError) {
       return textResult(error.message, { status: "invalid_input" });
@@ -684,7 +1090,7 @@ async function renderCardFromPublicJson(card, params, config, options) {
     const sourceUrl = buildPublicDataUrl("dungeons", resolved, params, config);
     const overview = await fetchEnvelope(sourceUrl, config, options);
     return {
-      width: HEATMAP_CARD_WIDTH,
+      width: CARD_WIDTH,
       height: estimateDungeonHeight(overview),
       sourceUrl,
       html: await renderDungeonOverviewHtml(resolved.player, overview, config, options),
@@ -842,6 +1248,10 @@ async function startQqOauthBindingMessage(qq, config, options = {}) {
   return message;
 }
 
+function isQqOauthBindingMessage(message) {
+  return /请在3分钟之内访问该链接进行绑定/u.test(String(message || ""));
+}
+
 async function renderHtmlToPng(html, options = {}) {
   if (typeof options.renderer === "function") {
     return Buffer.from(await options.renderer(html, options));
@@ -854,9 +1264,10 @@ async function renderHtmlToPng(html, options = {}) {
       headless: true,
       args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
     });
+    const renderScale = clampInteger(options.renderScale, 2, 1, 3);
     const page = await browser.newPage({
       viewport: { width: options.width || 1100, height: options.height || 720 },
-      deviceScaleFactor: 1,
+      deviceScaleFactor: renderScale,
     });
     options.signal?.throwIfAborted?.();
     await page.setContent(html, { waitUntil: "domcontentloaded" });
@@ -882,7 +1293,7 @@ async function renderHtmlToPng(html, options = {}) {
       )
       .catch(() => {});
     const card = page.locator("#d2-card");
-    return await card.screenshot({ type: "png" });
+    return await card.screenshot({ type: "png", scale: "device" });
   } finally {
     await browser?.close();
   }
@@ -1436,23 +1847,30 @@ function renderVaultInventoryHtml(player, inventory, params = {}) {
   const query = String(params.q || params.query || inventory?.query || "").trim();
   const vaultItems = filterInventoryItemsForView(items, "vault");
   const groups = inventoryBucketGroups(vaultItems);
+  const pageIndex = Number(params.vaultPageIndex || 0);
+  const pageCount = Number(params.vaultPageCount || 0);
+  const isPaged = pageIndex > 0 && pageCount > 1;
+  const vaultTotal = Number(params.vaultTotal || inventory?.totals?.vaultTotal || inventory?.totals?.vault || vaultItems.length);
+  const pageLabel = isPaged ? `第 ${pageIndex}/${pageCount} 页` : "单页";
   return cardPage({
-    width: HEATMAP_CARD_WIDTH,
+    width: CARD_WIDTH,
     player,
     title: formatPlayerName(player),
     eyebrow: "DESTINY 2 VAULT",
-    subtitle: query ? `仓库搜索 · ${query}` : `仓库全量 · ${dateOnly(inventory?.updatedAt)}`,
+    subtitle: query
+      ? `仓库搜索 · ${query}${isPaged ? ` · ${pageLabel}` : ""}`
+      : `仓库全量 · ${dateOnly(inventory?.updatedAt)}${isPaged ? ` · ${pageLabel}` : ""}`,
     body: `
       <section class="metrics metrics-4">
-        ${metric("仓库物品", int(inventory?.totals?.vault ?? inventory?.total ?? vaultItems.length))}
+        ${metric(isPaged ? "本页物品" : "仓库物品", int(vaultItems.length))}
+        ${metric("仓库总数", int(vaultTotal))}
         ${metric("已锁定", int(vaultItems.filter((item) => item?.locked).length))}
-        ${metric("可装备", int(vaultItems.filter((item) => item?.canEquip).length))}
-        ${metric("分组", int(groups.length))}
+        ${metric("页码", isPaged ? `${pageIndex}/${pageCount}` : pageLabel)}
       </section>
       <section class="inventory-groups">
         ${groups.map((group) => inventoryBucketGroupHtml(group)).join("") || emptyState(query ? "仓库里没有找到匹配的物品。" : "仓库为空。")}
       </section>
-      <footer class="card-footer">仓库全量长图按物品栏位分组；写操作仍需 itemInstanceId、characterId 和二次确认。</footer>
+      <footer class="card-footer">仓库按物品栏位分组；物品过多时会自动分页发送，写操作仍需 itemInstanceId、characterId 和二次确认。</footer>
       ${membershipBlock(inventory?.membershipType, inventory?.membershipId)}
     `,
   });
@@ -1472,7 +1890,7 @@ function renderEquippedInventoryHtml(player, inventory, params = {}) {
     )
     .join("");
   return cardPage({
-    width: HEATMAP_CARD_WIDTH,
+    width: EQUIPPED_CARD_WIDTH,
     player,
     title: formatPlayerName(player),
     eyebrow: "DESTINY 2 EQUIPPED",
@@ -1484,12 +1902,12 @@ function renderEquippedInventoryHtml(player, inventory, params = {}) {
         ${metric("武器", int(equippedItems.filter(inventoryItemLooksLikeWeapon).length))}
         ${metric("护甲", int(equippedItems.filter(inventoryItemLooksLikeArmor).length))}
       </section>
-      <section class="inventory-equipped-grid">
+      <section class="equipped-wide-list">
         ${characterCards}
         ${unknownItems.length ? equippedCharacterHtml({ className: "未识别角色", characterId: "" }, unknownItems) : ""}
         ${equippedItems.length === 0 ? emptyState("没有可显示的已装备物品。") : ""}
       </section>
-      <footer class="card-footer">当前装备按角色分栏展示；装备/转移/锁定操作仍需要二次确认。</footer>
+      <footer class="card-footer">当前装备按 16:9 横屏优先布局展示；Perk 只显示当前已选中项，装备/转移/锁定操作仍需要二次确认。</footer>
       ${membershipBlock(inventory?.membershipType, inventory?.membershipId)}
     `,
   });
@@ -1508,7 +1926,7 @@ function renderInventoryListHtml(player, inventory, params = {}, view = "overvie
       ? `角色背包 · ${dateOnly(inventory?.updatedAt)}`
       : `库存管理 · ${dateOnly(inventory?.updatedAt)}`;
   return cardPage({
-    width: HEATMAP_CARD_WIDTH,
+    width: CARD_WIDTH,
     player,
     title: formatPlayerName(player),
     eyebrow: "DESTINY 2 INVENTORY",
@@ -1642,6 +2060,68 @@ function inventoryItemCardHtml(item) {
         <strong>${escapeHtml(item?.name || "Unknown Item")}</strong>
         <span>${escapeHtml(subtitle || ownerLabel(item?.owner))}</span>
         <b>${escapeHtml(meta || ownerLabel(item?.owner))}</b>
+        ${inventoryArmorStatsHtml(item)}
+        ${inventorySocketsHtml(item)}
+      </div>
+    </div>
+  `;
+}
+
+function inventoryArmorStatsHtml(item) {
+  const armorStats = item?.armorStats;
+  const stats = Array.isArray(armorStats?.stats) ? armorStats.stats : [];
+  if (!stats.length) {
+    return "";
+  }
+  return `
+    <div class="inventory-armor-stats">
+      <div class="inventory-armor-total">防具属性 <strong>${int(armorStats?.total)}</strong></div>
+      <div class="inventory-stat-grid">
+        ${stats
+          .map(
+            (stat) => `
+              <div class="inventory-stat">
+                <span>${escapeHtml(stat?.name || "-")}</span>
+                <b>${int(stat?.value)}</b>
+              </div>
+            `,
+          )
+          .join("")}
+      </div>
+    </div>
+  `;
+}
+
+function inventorySocketsHtml(item) {
+  if (!inventoryItemShouldShowSockets(item)) {
+    return "";
+  }
+  const sockets = Array.isArray(item?.sockets) ? item.sockets.filter(inventorySocketHasContent) : [];
+  if (!sockets.length) {
+    return "";
+  }
+  return `
+    <div class="inventory-sockets">
+      ${sockets.map(inventorySocketHtml).join("")}
+    </div>
+  `;
+}
+
+function inventorySocketHasContent(socket) {
+  return Boolean(selectedInventoryPlugName(socket));
+}
+
+function inventoryItemShouldShowSockets(item) {
+  return inventoryItemLooksLikeWeapon(item) || inventoryItemLooksLikeArmor(item);
+}
+
+function inventorySocketHtml(socket) {
+  const selectedName = selectedInventoryPlugName(socket);
+  return `
+    <div class="inventory-socket">
+      <div class="inventory-socket-head">
+        <span>${escapeHtml(socket?.name || `插槽 ${Number(socket?.socketIndex || 0) + 1}`)}</span>
+        ${selectedName ? `<b>${escapeHtml(selectedName)}</b>` : ""}
       </div>
     </div>
   `;
@@ -1650,18 +2130,121 @@ function inventoryItemCardHtml(item) {
 function equippedCharacterHtml(character, items) {
   const sortedItems = items.slice().sort(compareInventoryItems);
   return `
-    <section class="equipped-character">
-      <div class="equipped-character-head" style="${careerImageStyle(character?.emblemBackgroundPath || character?.emblemPath)}">
+    <section class="equipped-wide-character">
+      <div class="equipped-wide-head" style="${careerImageStyle(character?.emblemBackgroundPath || character?.emblemPath)}">
         <div>
           <strong>${escapeHtml(displayClassName(character))}</strong>
           <span>${escapeHtml(character?.light ? `光等 ${int(character.light)}` : "当前角色")}</span>
         </div>
         <small>${escapeHtml(character?.dateLastPlayed ? `最后在线 ${dateOnly(character.dateLastPlayed)}` : "")}</small>
       </div>
-      <div class="equipped-item-list">
-        ${sortedItems.map(inventoryItemCardHtml).join("") || emptyState("这个角色没有可显示的已装备物品。")}
+      <div class="equipped-wide-items">
+        ${sortedItems.map(equippedWideItemHtml).join("") || emptyState("这个角色没有可显示的已装备物品。")}
       </div>
     </section>
+  `;
+}
+
+function equippedWideItemHtml(item) {
+  const iconUrl = item?.iconPath ? bungieAssetUrl(item.iconPath) : "";
+  const tone = item?.locked ? "green" : "red";
+  const subtitle = [item?.bucketName, item?.itemTypeDisplayName, item?.power ? `光等 ${int(item.power)}` : ""]
+    .filter(Boolean)
+    .join(" · ");
+  const selectedPerks = equippedSelectedPlugNames(item).slice(0, 6);
+  return `
+    <article class="equipped-wide-item ${tone}">
+      <div class="equipped-wide-icon ${iconUrl ? "" : "empty"}">
+        ${iconUrl ? `<img src="${escapeHtml(iconUrl)}" />` : "?"}
+      </div>
+      <div class="equipped-wide-main">
+        <div class="equipped-wide-title">
+          <strong>${escapeHtml(item?.name || "Unknown Item")}</strong>
+          <span>${escapeHtml(subtitle || ownerLabel(item?.owner))}</span>
+        </div>
+        ${selectedPerks.length ? `<div class="equipped-perks">${selectedPerks.map((name) => `<i>${escapeHtml(name)}</i>`).join("")}</div>` : ""}
+        ${equippedArmorStatsLine(item)}
+      </div>
+    </article>
+  `;
+}
+
+function selectedInventoryPlugNames(item) {
+  if (!inventoryItemShouldShowSockets(item)) {
+    return [];
+  }
+  const sockets = Array.isArray(item?.sockets) ? item.sockets : [];
+  const names = [];
+  const seen = new Set();
+  for (const socket of sockets) {
+    const name = selectedInventoryPlugName(socket);
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    names.push(name);
+  }
+  return names;
+}
+
+function equippedSelectedPlugNames(item) {
+  if (!inventoryItemLooksLikeWeapon(item)) {
+    return [];
+  }
+  return selectedInventoryPlugNames(item).filter(relevantEquippedPerkName);
+}
+
+function relevantEquippedPerkName(name) {
+  const normalized = String(name || "").trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  const cosmeticWords = [
+    "默认",
+    "空",
+    "纪念",
+    "记录器",
+    "追踪",
+    "着色",
+    "皮肤",
+    "装饰",
+    "投影",
+    "全息",
+    "shader",
+    "memento",
+    "tracker",
+    "ornament",
+    "projection",
+  ];
+  return !cosmeticWords.some((word) => normalized.includes(word));
+}
+
+function selectedInventoryPlugName(socket) {
+  const selected = socket?.selectedPlug;
+  if (selected?.name) {
+    return selected.name;
+  }
+  const reusable = Array.isArray(socket?.reusablePlugs) ? socket.reusablePlugs : [];
+  return reusable.find((plug) => plug?.selected && plug?.name)?.name || "";
+}
+
+function equippedArmorStatsLine(item) {
+  const armorStats = item?.armorStats;
+  const stats = Array.isArray(armorStats?.stats) ? armorStats.stats : [];
+  if (!stats.length) {
+    return "";
+  }
+  const shortNames = new Map([
+    ["机动", "机"],
+    ["韧性", "韧"],
+    ["恢复", "恢"],
+    ["纪律", "纪"],
+    ["智慧", "智"],
+    ["力量", "力"],
+  ]);
+  return `
+    <div class="equipped-statline">
+      <b>总 ${int(armorStats?.total)}</b>
+      ${stats.map((stat) => `<span>${escapeHtml(shortNames.get(stat?.name) || stat?.name || "-")} ${int(stat?.value)}</span>`).join("")}
+    </div>
   `;
 }
 
@@ -1782,7 +2365,7 @@ function shortInventoryId(value) {
 function renderCraftingHtml(player, craftables) {
   const groups = Array.isArray(craftables?.groups) ? craftables.groups : [];
   return cardPage({
-    width: HEATMAP_CARD_WIDTH,
+    width: CARD_WIDTH,
     player,
     title: formatPlayerName(player),
     eyebrow: "DESTINY 2 CRAFTING",
@@ -2036,7 +2619,7 @@ async function renderDungeonOverviewHtml(player, overview, config, options) {
     })),
   );
   return cardPage({
-    width: HEATMAP_CARD_WIDTH,
+    width: CARD_WIDTH,
     player,
     title: formatPlayerName(player),
     eyebrow: "DESTINY 2 DUNGEON OVERVIEW",
@@ -2349,20 +2932,26 @@ function estimateInventoryHeight(inventory, params = {}) {
 
   if (view === "vault") {
     const groups = inventoryBucketGroups(filterInventoryItemsForView(allItems, "vault"));
-    const groupHeights = groups.reduce((height, group) => height + 72 + Math.ceil(Math.max(1, group.items.length) / 3) * 98, 0);
+    const groupHeights = groups.reduce((height, group) => height + 72 + inventoryGridEstimatedHeight(group.items), 0);
     return Math.max(760, 360 + groupHeights);
   }
 
   if (view === "equipped") {
     const equippedItems = filterInventoryItemsForView(allItems, "equipped");
     const characters = normalizeInventoryCharacters(inventory, equippedItems);
-    const maxItems = Math.max(
-      1,
-      ...characters.map(
-        (character) => equippedItems.filter((item) => String(item?.characterId || "") === String(character.characterId || "")).length,
-      ),
-    );
-    return Math.max(760, 390 + maxItems * 98);
+    const unknownItems = equippedItems.filter((item) => !String(item?.characterId || "").trim());
+    const panelHeights = characters.map((character) => {
+      const count = equippedItems.filter((item) => String(item?.characterId || "") === String(character.characterId || "")).length;
+      return equippedWideCharacterEstimatedHeight(count);
+    });
+    if (unknownItems.length) {
+      panelHeights.push(equippedWideCharacterEstimatedHeight(unknownItems.length));
+    }
+    const rowHeights = [];
+    for (let index = 0; index < panelHeights.length; index += 3) {
+      rowHeights.push(Math.max(...panelHeights.slice(index, index + 3)));
+    }
+    return Math.max(900, 360 + rowHeights.reduce((sum, height) => sum + height + 18, 0));
   }
 
   const scopedItems = filterInventoryItemsForView(allItems, view);
@@ -2372,9 +2961,33 @@ function estimateInventoryHeight(inventory, params = {}) {
     if (!group.items.length) {
       return height;
     }
-    return height + 72 + Math.ceil(Math.max(1, group.items.length) / 3) * 98;
+    return height + 72 + inventoryGridEstimatedHeight(group.items);
   }, 0);
   return Math.max(720, 340 + groupHeights);
+}
+
+function inventoryGridEstimatedHeight(items, columns = 3) {
+  const list = Array.isArray(items) && items.length ? items : [{}];
+  let height = 0;
+  for (let index = 0; index < list.length; index += columns) {
+    const row = list.slice(index, index + columns);
+    height += Math.max(...row.map(inventoryItemEstimatedHeight)) + 12;
+  }
+  return height;
+}
+
+function inventoryItemEstimatedHeight(item) {
+  const sockets =
+    inventoryItemShouldShowSockets(item) && Array.isArray(item?.sockets)
+      ? item.sockets.filter(inventorySocketHasContent)
+      : [];
+  const armorStats = Array.isArray(item?.armorStats?.stats) && item.armorStats.stats.length ? 72 : 0;
+  const socketHeight = sockets.reduce((height) => height + 38, 0);
+  return 96 + armorStats + socketHeight;
+}
+
+function equippedWideCharacterEstimatedHeight(itemCount) {
+  return 160 + Math.ceil(Math.max(1, itemCount) / 2) * 106;
 }
 
 function estimateDungeonHeight(overview) {
@@ -3102,7 +3715,7 @@ function cardPage({ eyebrow, title, subtitle, body, player, width = CARD_WIDTH }
       display: grid;
       grid-template-columns: 54px 5px minmax(0, 1fr);
       gap: 10px;
-      align-items: center;
+      align-items: start;
       min-height: 82px;
       min-width: 0;
       padding: 8px;
@@ -3132,6 +3745,7 @@ function cardPage({ eyebrow, title, subtitle, body, player, width = CARD_WIDTH }
     .inventory-rail {
       width: 5px;
       height: 58px;
+      align-self: stretch;
       border-radius: 999px;
       background: #d84d4d;
     }
@@ -3169,6 +3783,109 @@ function cardPage({ eyebrow, title, subtitle, body, player, width = CARD_WIDTH }
       font-weight: 900;
     }
     .inventory-item.green .inventory-item-main b { color: #21d07a; }
+    .inventory-armor-stats {
+      display: grid;
+      gap: 6px;
+      margin-top: 5px;
+      padding-top: 7px;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .inventory-armor-total {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+      color: #aeb7c2;
+      font-size: 11px;
+      font-weight: 900;
+    }
+    .inventory-armor-total strong {
+      color: #ffffff;
+      font-size: 18px;
+      line-height: 1;
+    }
+    .inventory-stat-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 4px;
+    }
+    .inventory-stat {
+      min-width: 0;
+      padding: 4px 5px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.055);
+    }
+    .inventory-stat span,
+    .inventory-stat b {
+      display: block;
+      text-align: center;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    .inventory-stat span {
+      color: #9faaad;
+      font-size: 10px;
+      font-weight: 900;
+    }
+    .inventory-stat b {
+      color: #ffffff;
+      font-size: 14px;
+      line-height: 1.05;
+      font-weight: 950;
+    }
+    .inventory-sockets {
+      display: grid;
+      gap: 6px;
+      margin-top: 6px;
+      padding-top: 7px;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .inventory-socket {
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+      padding: 6px;
+      border-radius: 5px;
+      background: rgba(255, 255, 255, 0.04);
+    }
+    .inventory-socket-head {
+      display: grid;
+      gap: 2px;
+      min-width: 0;
+    }
+    .inventory-socket-head span {
+      color: #8f9baa;
+      font-size: 10px;
+      font-weight: 950;
+      letter-spacing: 0;
+    }
+    .inventory-socket-head b {
+      color: #ffffff;
+      font-size: 12px;
+      line-height: 1.15;
+      font-weight: 950;
+    }
+    .inventory-socket p {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin: 0;
+      min-width: 0;
+    }
+    .inventory-socket i {
+      display: inline-flex;
+      max-width: 100%;
+      padding: 2px 5px;
+      border-radius: 3px;
+      color: #c9d1dc;
+      background: rgba(255, 255, 255, 0.07);
+      font-style: normal;
+      font-size: 10px;
+      line-height: 1.2;
+      font-weight: 850;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
     .inventory-equipped-grid {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -3221,6 +3938,168 @@ function cardPage({ eyebrow, title, subtitle, body, player, width = CARD_WIDTH }
     .equipped-item-list {
       display: grid;
       gap: 10px;
+    }
+    .equipped-wide-list {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 18px;
+      align-items: start;
+    }
+    .equipped-wide-character {
+      display: grid;
+      gap: 12px;
+      min-width: 0;
+      padding: 14px;
+      border-radius: 8px;
+      background: rgba(17, 17, 17, 0.88);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .equipped-wide-head {
+      min-height: 118px;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      gap: 6px;
+      padding: 14px;
+      border-radius: 7px;
+      background-color: rgba(255, 255, 255, 0.07);
+      background-size: cover;
+      background-position: center;
+      box-shadow: inset 0 -82px 74px rgba(0, 0, 0, 0.8);
+    }
+    .equipped-wide-head strong,
+    .equipped-wide-head span,
+    .equipped-wide-head small {
+      display: block;
+      text-shadow: 0 1px 8px rgba(0, 0, 0, 0.86);
+    }
+    .equipped-wide-head strong {
+      font-size: 30px;
+      line-height: 1.05;
+      font-weight: 950;
+    }
+    .equipped-wide-head span {
+      margin-top: 3px;
+      color: #ffffff;
+      font-size: 18px;
+      font-weight: 900;
+    }
+    .equipped-wide-head small {
+      color: #c4ced9;
+      font-size: 12px;
+      font-weight: 850;
+    }
+    .equipped-wide-items {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      align-content: start;
+      min-width: 0;
+    }
+    .equipped-wide-item {
+      display: grid;
+      grid-template-columns: 58px minmax(0, 1fr);
+      gap: 10px;
+      min-width: 0;
+      min-height: 92px;
+      padding: 10px;
+      border-radius: 7px;
+      background: rgba(7, 7, 7, 0.48);
+      border-left: 4px solid #d84d4d;
+    }
+    .equipped-wide-item.green {
+      border-left-color: #21d07a;
+    }
+    .equipped-wide-icon {
+      width: 58px;
+      height: 58px;
+      display: grid;
+      place-items: center;
+      border-radius: 5px;
+      overflow: hidden;
+      color: #7f8a97;
+      font-size: 22px;
+      font-weight: 950;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.07);
+    }
+    .equipped-wide-icon img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .equipped-wide-main {
+      display: grid;
+      align-content: start;
+      gap: 6px;
+      min-width: 0;
+    }
+    .equipped-wide-title {
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+    }
+    .equipped-wide-title strong {
+      color: #ffffff;
+      font-size: 17px;
+      line-height: 1.08;
+      font-weight: 950;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    .equipped-wide-title span {
+      color: #aab4bf;
+      font-size: 11px;
+      line-height: 1.24;
+      font-weight: 850;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    .equipped-perks {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      min-width: 0;
+    }
+    .equipped-perks i {
+      display: inline-flex;
+      max-width: 100%;
+      padding: 3px 6px;
+      border-radius: 4px;
+      color: #22d784;
+      background: rgba(34, 215, 132, 0.1);
+      border: 1px solid rgba(34, 215, 132, 0.2);
+      font-style: normal;
+      font-size: 11px;
+      line-height: 1.15;
+      font-weight: 900;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    .equipped-statline {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      min-width: 0;
+      padding-top: 1px;
+    }
+    .equipped-statline b,
+    .equipped-statline span {
+      display: inline-flex;
+      align-items: center;
+      min-height: 19px;
+      padding: 3px 5px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.055);
+      color: #d8e0e8;
+      font-size: 10px;
+      line-height: 1;
+      font-weight: 900;
+    }
+    .equipped-statline b {
+      color: #ffffff;
+      background: rgba(255, 255, 255, 0.095);
     }
     .catalyst-groups {
       display: grid;
@@ -4128,10 +5007,10 @@ function cardPage({ eyebrow, title, subtitle, body, player, width = CARD_WIDTH }
       border: 1px solid rgba(255,255,255,.035);
     }
     .dungeon-detail-row {
-      grid-template-columns: 200px 116px repeat(4, minmax(0, 1fr));
-      gap: 14px;
+      grid-template-columns: 220px 130px repeat(3, minmax(118px, 1fr)) minmax(154px, 1.15fr);
+      gap: 16px;
       min-height: 132px;
-      padding: 16px 18px;
+      padding: 16px 20px;
     }
     .raid-detail-thumb {
       position: relative;
@@ -4231,13 +5110,11 @@ function cardPage({ eyebrow, title, subtitle, body, player, width = CARD_WIDTH }
       font-size: 28px;
       font-weight: 950;
       line-height: 1.05;
-      overflow: hidden;
-      text-overflow: ellipsis;
       white-space: nowrap;
     }
     .dungeon-detail-row .raid-progress-metric span { font-size: 14px; }
-    .dungeon-detail-row .raid-progress-metric i { width: 84px; }
-    .dungeon-detail-row .raid-progress-metric strong { font-size: 24px; }
+    .dungeon-detail-row .raid-progress-metric i { width: 104px; }
+    .dungeon-detail-row .raid-progress-metric strong { font-size: 24px; overflow: visible; }
     .raid-list {
       display: grid;
       gap: 12px;
@@ -5008,6 +5885,8 @@ function formatBackendError(payload, status) {
 }
 
 function imageResult(params) {
+  const mediaPath = persistImageResultMedia(params.base64, params.mimeType);
+  const mediaUrl = mediaPath ? pathToFileUrl(mediaPath) : params.path;
   return {
     content: [
       {
@@ -5018,12 +5897,63 @@ function imageResult(params) {
     ],
     details: {
       path: params.path,
+      mediaPath,
       ...params.details,
       media: {
-        mediaUrl: params.path,
+        mediaUrl,
+        sourceUrl: params.path,
       },
     },
   };
+}
+
+function imagesResult(params) {
+  const parts = [];
+  const media = [];
+  for (let index = 0; index < params.images.length; index += 1) {
+    const image = params.images[index];
+    const mediaPath = persistImageResultMedia(image.base64, params.mimeType);
+    const mediaUrl = mediaPath ? pathToFileUrl(mediaPath) : params.path;
+    parts.push({
+      type: "image",
+      data: image.base64,
+      mimeType: params.mimeType,
+    });
+    media.push({
+      mediaUrl,
+      sourceUrl: params.path,
+      mediaPath,
+      index: index + 1,
+      ...(image.details || {}),
+    });
+  }
+  return {
+    content: parts,
+    details: {
+      path: params.path,
+      ...params.details,
+      media,
+    },
+  };
+}
+
+function persistImageResultMedia(base64, mimeType) {
+  if (!base64 || !String(mimeType || "").includes("png")) {
+    return "";
+  }
+  try {
+    const dir = join(tmpdir(), "openclaw-d2stats-media");
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, `d2-${Date.now()}-${randomBytes(4).toString("hex")}.png`);
+    writeFileSync(file, Buffer.from(String(base64), "base64"));
+    return file;
+  } catch {
+    return "";
+  }
+}
+
+function pathToFileUrl(file) {
+  return `file://${String(file).replace(/\\/g, "/")}`;
 }
 
 function textResult(text, details = {}) {

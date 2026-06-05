@@ -336,6 +336,44 @@ describe("d2stats core", () => {
     assert.equal(result.details.card, "summary");
   });
 
+  it("uses sender QQ for command-only raid queries and returns a bind link when unbound", async () => {
+    const calls = [];
+    const result = await queryCard(
+      { senderQq: "99887766", command: "查下raid" },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async (url, init) => {
+          calls.push(String(url));
+          if (String(url).includes("/bindings/qq/oauth/start")) {
+            assert.equal(init.method, "POST");
+            assert.deepEqual(JSON.parse(init.body), { qq: "99887766" });
+            return jsonResponse({
+              success: true,
+              data: {
+                bindUrl: "http://d2.local/bind",
+                message: "请在3分钟之内访问该链接进行绑定\nhttp://d2.local/bind\n\n该链接🔗被腾讯标识为危险网站",
+              },
+            });
+          }
+          assert.equal(String(url), "http://d2.local/api/d2/bindings/qq/99887766");
+          return jsonResponse(
+            { success: false, data: null, error: { code: "NOT_FOUND", message: "qq binding was not found" } },
+            404,
+          );
+        },
+      },
+    );
+
+    assert.equal(result.content[0].type, "text");
+    assert.match(result.content[0].text, /请在3分钟之内访问该链接进行绑定/);
+    assert.equal(result.details.status, "ok");
+    assert.equal(result.details.kind, "oauth_bind_link");
+    assert.deepEqual(calls, [
+      "http://d2.local/api/d2/bindings/qq/99887766",
+      "http://d2.local/api/d2/bindings/qq/oauth/start",
+    ]);
+  });
+
   it("returns actionable guidance when a non-help command has no target", async () => {
     const result = await queryCard({ command: "/地牢" }, { baseUrl: "http://d2.local" });
 
@@ -459,7 +497,8 @@ describe("d2stats core", () => {
             },
           });
         },
-        renderHtmlToPng: async (html) => {
+        renderHtmlToPng: async (html, options) => {
+          assert.equal(options.width, 1200);
           assert.match(html, /DESTINY 2 DUNGEON OVERVIEW/);
           assert.match(html, /二象性/);
           assert.match(html, /Flawless Solo/);
@@ -1012,6 +1051,8 @@ describe("d2stats core", () => {
 
     assert.equal(result.content[0].type, "text");
     assert.match(result.content[0].text, /请在3分钟之内访问该链接进行绑定/);
+    assert.equal(result.details.status, "ok");
+    assert.equal(result.details.kind, "oauth_bind_link");
     assert.deepEqual(seenUrls, [
       "http://d2.local/api/d2/bindings/qq/607972716",
       "http://d2.local/api/d2/bindings/qq/oauth/start",
@@ -1083,6 +1124,17 @@ describe("d2stats core", () => {
                   itemTypeDisplayName: "机枪",
                   locked: true,
                   canEquip: true,
+                  sockets: [
+                    {
+                      socketIndex: 0,
+                      name: "插槽 1",
+                      selectedPlug: { itemHash: 9001, name: "重建", selected: true },
+                      reusablePlugs: [
+                        { itemHash: 9001, name: "重建", selected: true },
+                        { itemHash: 9002, name: "不稳定弹药", selected: false },
+                      ],
+                    },
+                  ],
                 },
               ],
               total: 1,
@@ -1093,6 +1145,8 @@ describe("d2stats core", () => {
           assert.match(html, /DESTINY 2 INVENTORY/);
           assert.match(html, /纪念/);
           assert.match(html, /691752902764/);
+          assert.match(html, /重建/);
+          assert.doesNotMatch(html, /不稳定弹药/);
           return Buffer.from("png-bytes");
         },
       },
@@ -1103,6 +1157,105 @@ describe("d2stats core", () => {
       "http://d2.local/api/d2/bindings/qq/607972716",
       "http://d2.local/api/d2/namecard/3/4611686018428939884",
       "http://d2.local/api/d2/inventory/qq/607972716/search?q=%E7%BA%AA%E5%BF%B5&bucket=all",
+    ]);
+  });
+
+  it("uses qq as an inventory query target alias", async () => {
+    const seenUrls = [];
+    const result = await queryInventory(
+      { qq: "607972716", view: "equipped", bucket: "equipped" },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async (url) => {
+          seenUrls.push(String(url));
+          if (String(url).includes("/bindings/qq/")) {
+            return jsonResponse({
+              success: true,
+              data: {
+                qq: "607972716",
+                membershipType: 3,
+                membershipId: "4611686018428939884",
+                bungieName: "Lucifer#8571",
+              },
+            });
+          }
+          if (String(url).includes("/namecard/")) {
+            return jsonResponse({
+              success: true,
+              data: {
+                membershipType: 3,
+                membershipId: "4611686018428939884",
+                profile: { characters: [] },
+              },
+            });
+          }
+          return jsonResponse({
+            success: true,
+            data: {
+              membershipType: 3,
+              membershipId: "4611686018428939884",
+              updatedAt: "2026-06-05T00:00:00.000Z",
+              characters: [],
+              items: [
+                { itemHash: 201, itemInstanceId: "691752902801", owner: "equipped", bucketName: "动能武器", name: "翼狼", itemTypeDisplayName: "自动步枪" },
+              ],
+            },
+          });
+        },
+        renderHtmlToPng: async (html) => {
+          assert.match(html, /DESTINY 2 EQUIPPED/);
+          assert.match(html, /翼狼/);
+          return Buffer.from("png-bytes");
+        },
+      },
+    );
+
+    assert.equal(result.content[0].type, "image");
+    assert.equal(result.details.card, "inventory:equipped");
+    assert.deepEqual(seenUrls, [
+      "http://d2.local/api/d2/bindings/qq/607972716",
+      "http://d2.local/api/d2/namecard/3/4611686018428939884",
+      "http://d2.local/api/d2/inventory/qq/607972716",
+    ]);
+  });
+
+  it("returns an OAuth binding link for unbound inventory QQ aliases", async () => {
+    const seenUrls = [];
+    const result = await queryInventory(
+      { qq: "607972716", view: "vault", bucket: "vault" },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async (url, init) => {
+          seenUrls.push(String(url));
+          if (String(url).includes("/bindings/qq/oauth/start")) {
+            assert.equal(init.method, "POST");
+            assert.deepEqual(JSON.parse(init.body), { qq: "607972716" });
+            return jsonResponse({
+              success: true,
+              data: {
+                message: "请在3分钟之内访问该链接进行绑定\nhttp://d2.local/bind\n\n该链接🔗被腾讯标识为危险网站",
+              },
+            });
+          }
+          return jsonResponse(
+            {
+              success: false,
+              error: { code: "NOT_FOUND", message: "qq binding was not found" },
+            },
+            404,
+          );
+        },
+        renderHtmlToPng: async () => Buffer.from("should-not-render"),
+      },
+    );
+
+    assert.equal(result.content[0].type, "text");
+    assert.match(result.content[0].text, /请在3分钟之内访问该链接进行绑定/);
+    assert.equal(result.details.status, "ok");
+    assert.equal(result.details.kind, "oauth_bind_link");
+    assert.deepEqual(seenUrls, [
+      "http://d2.local/api/d2/bindings/qq/607972716",
+      "http://d2.local/api/d2/bindings/qq/oauth/start",
     ]);
   });
 
@@ -1146,8 +1299,48 @@ describe("d2stats core", () => {
               totals: { items: 4, vault: 2, inventory: 1, equipped: 1 },
               characters: [],
               items: [
-                { itemHash: 101, itemInstanceId: "691752902764", owner: "vault", bucketName: "威能武器", name: "纪念", itemTypeDisplayName: "机枪", locked: true, canEquip: true },
-                { itemHash: 102, itemInstanceId: "691752902765", owner: "vault", bucketName: "动能武器", name: "条件终局", itemTypeDisplayName: "霰弹枪", locked: false, canEquip: true },
+                {
+                  itemHash: 101,
+                  itemInstanceId: "691752902764",
+                  owner: "vault",
+                  bucketName: "威能武器",
+                  name: "纪念",
+                  itemTypeDisplayName: "机枪",
+                  locked: true,
+                  canEquip: true,
+                  sockets: [
+                    {
+                      socketIndex: 0,
+                      name: "插槽 1",
+                      selectedPlug: { itemHash: 9001, name: "重建", selected: true },
+                      reusablePlugs: [
+                        { itemHash: 9001, name: "重建", selected: true },
+                        { itemHash: 9002, name: "杀戮弹匣", selected: false },
+                      ],
+                    },
+                  ],
+                },
+                {
+                  itemHash: 102,
+                  itemInstanceId: "691752902765",
+                  owner: "vault",
+                  bucketName: "头盔",
+                  name: "条件终局",
+                  itemTypeDisplayName: "术士头盔",
+                  locked: false,
+                  canEquip: true,
+                  armorStats: {
+                    total: 68,
+                    stats: [
+                      { hash: 2996146975, name: "机动", value: 2 },
+                      { hash: 392767087, name: "韧性", value: 30 },
+                      { hash: 1943323491, name: "恢复", value: 18 },
+                      { hash: 1735777505, name: "纪律", value: 10 },
+                      { hash: 144602215, name: "智慧", value: 2 },
+                      { hash: 4244567218, name: "力量", value: 6 },
+                    ],
+                  },
+                },
                 { itemHash: 103, itemInstanceId: "691752902766", owner: "inventory", bucketName: "动能武器", name: "背包物品", itemTypeDisplayName: "手炮", locked: false, canEquip: true },
                 { itemHash: 104, itemInstanceId: "691752902767", owner: "equipped", bucketName: "能量武器", name: "已装备物品", itemTypeDisplayName: "弓", locked: false, canEquip: true },
               ],
@@ -1159,6 +1352,11 @@ describe("d2stats core", () => {
           assert.match(html, /仓库全量/);
           assert.match(html, /纪念/);
           assert.match(html, /条件终局/);
+          assert.match(html, /重建/);
+          assert.doesNotMatch(html, /杀戮弹匣/);
+          assert.match(html, /防具属性/);
+          assert.match(html, /韧性/);
+          assert.match(html, /68/);
           assert.doesNotMatch(html, /背包物品/);
           assert.doesNotMatch(html, /已装备物品/);
           return Buffer.from("png-bytes");
@@ -1173,6 +1371,163 @@ describe("d2stats core", () => {
       "http://d2.local/api/d2/namecard/3/4611686018428939884",
       "http://d2.local/api/d2/inventory/qq/607972716",
     ]);
+  });
+
+  it("splits large vault inventory into paged images", async () => {
+    const renderedPages = [];
+    const vaultItems = Array.from({ length: 85 }, (_, index) => ({
+      itemHash: 5000 + index,
+      itemInstanceId: `69175290${String(index).padStart(4, "0")}`,
+      owner: "vault",
+      bucketName: index % 2 === 0 ? "动能武器" : "头盔",
+      name: `仓库物品${index + 1}`,
+      itemTypeDisplayName: index % 2 === 0 ? "自动步枪" : "术士头盔",
+      locked: index % 3 === 0,
+      canEquip: true,
+    }));
+    const result = await queryInventory(
+      { qq: "607972716", view: "vault", bucket: "vault", pageSize: 40 },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async (url) => {
+          if (String(url).includes("/bindings/qq/")) {
+            return jsonResponse({
+              success: true,
+              data: {
+                qq: "607972716",
+                membershipType: 3,
+                membershipId: "4611686018428939884",
+                bungieName: "Lucifer#8571",
+              },
+            });
+          }
+          if (String(url).includes("/namecard/")) {
+            return jsonResponse({
+              success: true,
+              data: {
+                membershipType: 3,
+                membershipId: "4611686018428939884",
+                profile: { characters: [] },
+              },
+            });
+          }
+          return jsonResponse({
+            success: true,
+            data: {
+              membershipType: 3,
+              membershipId: "4611686018428939884",
+              updatedAt: "2026-06-05T00:00:00.000Z",
+              totals: { items: vaultItems.length, vault: vaultItems.length, inventory: 0, equipped: 0 },
+              characters: [],
+              items: vaultItems,
+            },
+          });
+        },
+        renderHtmlToPng: async (html) => {
+          renderedPages.push(html);
+          assert.match(html, /DESTINY 2 VAULT/);
+          assert.match(html, /仓库全量/);
+          assert.match(html, /仓库总数/);
+          return Buffer.from(`png-page-${renderedPages.length}`);
+        },
+      },
+    );
+
+    assert.equal(result.content.length, 3);
+    assert.equal(result.content.every((part) => part.type === "image"), true);
+    assert.equal(result.details.imageCount, 3);
+    assert.match(renderedPages[0], /第 1\/3 页/);
+    assert.match(renderedPages[1], /第 2\/3 页/);
+    assert.match(renderedPages[2], /第 3\/3 页/);
+  });
+
+  it("returns a share page link for oversized inventory output when configured", async () => {
+    const vaultItems = Array.from({ length: 85 }, (_, index) => ({
+      itemHash: 6000 + index,
+      itemInstanceId: `69175291${String(index).padStart(4, "0")}`,
+      owner: "vault",
+      bucketName: "动能武器",
+      name: `仓库物品${index + 1}`,
+      itemTypeDisplayName: "自动步枪",
+      locked: true,
+      canEquip: true,
+    }));
+    const shareUploads = [];
+    const result = await queryInventory(
+      { qq: "607972716", view: "vault", bucket: "vault", pageSize: 40 },
+      {
+        baseUrl: "http://d2.local",
+        shareUploadToken: "share-token",
+        shareImageCountThreshold: 2,
+      },
+      {
+        fetchImpl: async (url, init = {}) => {
+          if (String(url).includes("/api/d2/share-pages")) {
+            assert.equal(init.method, "POST");
+            assert.equal(init.headers.authorization, "Bearer share-token");
+            const payload = JSON.parse(init.body);
+            shareUploads.push(payload);
+            assert.equal(payload.images, undefined);
+            assert.equal(payload.htmlPages.length, 3);
+            assert.match(payload.htmlPages[0].html, /<!doctype html>/i);
+            assert.doesNotMatch(payload.htmlPages[0].html, /data:font\/ttf;base64/);
+            assert.match(payload.title, /仓库/);
+            return jsonResponse({
+              success: true,
+              data: {
+                id: "shareid",
+                url: "https://www.luciferfore.com/share/shareid/index.html",
+                pageCount: 3,
+                imageCount: 3,
+                bytes: 3072,
+              },
+            });
+          }
+          if (String(url).includes("/bindings/qq/")) {
+            return jsonResponse({
+              success: true,
+              data: {
+                qq: "607972716",
+                membershipType: 3,
+                membershipId: "4611686018428939884",
+                bungieName: "Lucifer#8571",
+              },
+            });
+          }
+          if (String(url).includes("/namecard/")) {
+            return jsonResponse({
+              success: true,
+              data: {
+                membershipType: 3,
+                membershipId: "4611686018428939884",
+                profile: { characters: [] },
+              },
+            });
+          }
+          return jsonResponse({
+            success: true,
+            data: {
+              membershipType: 3,
+              membershipId: "4611686018428939884",
+              updatedAt: "2026-06-05T00:00:00.000Z",
+              totals: { items: vaultItems.length, vault: vaultItems.length, inventory: 0, equipped: 0 },
+              characters: [],
+              items: vaultItems,
+            },
+          });
+        },
+        renderHtmlToPng: async () => Buffer.alloc(1024, 7),
+      },
+    );
+
+    assert.equal(result.content[0].type, "text");
+    assert.match(result.content[0].text, /https:\/\/www\.luciferfore\.com\/share\/shareid\/index\.html/);
+    assert.match(result.content[0].text, /网页布局版/);
+    assert.match(result.content[0].text, /放大也不会糊/);
+    assert.equal(result.details.kind, "share_page");
+    assert.equal(result.details.pageCount, 3);
+    assert.equal(result.details.imageCount, 3);
+    assert.equal(shareUploads.length, 1);
   });
 
   it("renders equipped inventory grouped by character", async () => {
@@ -1217,20 +1572,67 @@ describe("d2stats core", () => {
                 { characterId: "2305843002", className: "猎人", light: 15, dateLastPlayed: "2026-06-04T00:00:00.000Z" },
               ],
               items: [
-                { itemHash: 201, itemInstanceId: "691752902801", owner: "equipped", characterId: "2305843001", bucketName: "动能武器", name: "翼狼", itemTypeDisplayName: "自动步枪", locked: true, canEquip: true },
-                { itemHash: 202, itemInstanceId: "691752902802", owner: "equipped", characterId: "2305843002", bucketName: "胸甲", name: "不散恐惧", itemTypeDisplayName: "猎人护甲", energyCapacity: 10, energyUsed: 6 },
+                {
+                  itemHash: 201,
+                  itemInstanceId: "691752902801",
+                  owner: "equipped",
+                  characterId: "2305843001",
+                  bucketName: "动能武器",
+                  name: "翼狼",
+                  itemTypeDisplayName: "自动步枪",
+                  locked: true,
+                  canEquip: true,
+                  sockets: [
+                    {
+                      socketIndex: 0,
+                      selectedPlug: { itemHash: 9010, name: "禅意时刻", selected: true },
+                      reusablePlugs: [
+                        { itemHash: 9010, name: "禅意时刻", selected: true },
+                        { itemHash: 9011, name: "斩首武器", selected: false },
+                      ],
+                    },
+                  ],
+                },
+                {
+                  itemHash: 202,
+                  itemInstanceId: "691752902802",
+                  owner: "equipped",
+                  characterId: "2305843002",
+                  bucketName: "胸甲",
+                  name: "不散恐惧",
+                  itemTypeDisplayName: "猎人护甲",
+                  energyCapacity: 10,
+                  energyUsed: 6,
+                  armorStats: {
+                    total: 64,
+                    stats: [
+                      { hash: 2996146975, name: "机动", value: 10 },
+                      { hash: 392767087, name: "韧性", value: 20 },
+                      { hash: 1943323491, name: "恢复", value: 8 },
+                      { hash: 1735777505, name: "纪律", value: 12 },
+                      { hash: 144602215, name: "智慧", value: 6 },
+                      { hash: 4244567218, name: "力量", value: 8 },
+                    ],
+                  },
+                },
                 { itemHash: 203, itemInstanceId: "691752902803", owner: "vault", bucketName: "威能武器", name: "纪念", itemTypeDisplayName: "机枪" },
               ],
             },
           });
         },
-        renderHtmlToPng: async (html) => {
+        renderHtmlToPng: async (html, options) => {
+          assert.equal(options.width, 1920);
           assert.match(html, /DESTINY 2 EQUIPPED/);
           assert.match(html, /当前装备/);
+          assert.match(html, /equipped-wide-list/);
           assert.match(html, /术士/);
           assert.match(html, /猎人/);
           assert.match(html, /翼狼/);
           assert.match(html, /不散恐惧/);
+          assert.match(html, /禅意时刻/);
+          assert.doesNotMatch(html, /斩首武器/);
+          assert.match(html, /总 64/);
+          assert.match(html, /力 8/);
           assert.doesNotMatch(html, /纪念/);
           return Buffer.from("png-bytes");
         },

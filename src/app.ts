@@ -23,6 +23,7 @@ import { QqOAuthService } from "./oauth/qq-oauth-service.js";
 import { registerBungieProxyRoutes } from "./routes/bungie-proxy-routes.js";
 import { registerD2Routes } from "./routes/d2-routes.js";
 import { registerHealthRoutes } from "./routes/health.js";
+import { registerShareRoutes } from "./routes/share-routes.js";
 
 export interface AppDeps {
   config?: AppConfig;
@@ -87,6 +88,7 @@ export async function buildApp(overrides: AppDeps = {}): Promise<FastifyInstance
   });
 
   await registerHealthRoutes(app);
+  await registerShareRoutes(app, config);
   await registerAdminRoutes(app, {
     config,
     cache,

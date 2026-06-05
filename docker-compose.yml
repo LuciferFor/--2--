@@ -1,3 +1,5 @@
+name: destiny2-public-stats
+
 services:
   app:
     build: .
@@ -5,6 +7,8 @@ services:
       - .env
     ports:
       - "${HOST_PORT:-3000}:${PORT:-3000}"
+    volumes:
+      - share-data:/app/data/share
     depends_on:
       postgres:
         condition: service_healthy
@@ -43,3 +47,4 @@ services:
 volumes:
   postgres-data:
   redis-data:
+  share-data:

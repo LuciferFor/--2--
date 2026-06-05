@@ -1,5 +1,20 @@
 import { bindQq, itemAction, queryCard, queryInventory, resolveConfig } from "./core.mjs";
 
+const senderQqProperties = {
+  senderQq: {
+    type: "string",
+    description: "Sender QQ number from the chat adapter. Use this as the query target when the user says '/raid', '查下raid', '/地牢', or '查我' without an explicit target.",
+  },
+  userId: {
+    type: "string",
+    description: "OneBot sender user_id when it is the user's QQ number. Use it as the query QQ for command-only personal Destiny 2 queries.",
+  },
+  user_id: {
+    type: "string",
+    description: "OneBot sender user_id alias when it is the user's QQ number.",
+  },
+};
+
 const cardQueryParameters = {
   type: "object",
   additionalProperties: false,
@@ -14,9 +29,10 @@ const cardQueryParameters = {
       description:
         "Optional sender QQ alias. If the user says '/地牢' or '查我' and OpenClaw knows the sender QQ, pass it here or as target.",
     },
+    ...senderQqProperties,
     command: {
       type: "string",
-      description: "Optional natural command alias, such as /raid, /pvp, /地牢, /宗师, /热力图, /生涯, /名片, /战绩, /最近, /活动, /武器, /资料, /帮助.",
+      description: "Optional natural command alias, such as /raid, 查下raid, /pvp, /地牢, /宗师, /热力图, /生涯, /名片, /战绩, /最近, /活动, /武器, /资料, /帮助. In this plugin, raid means the player's raid stats, not weekly rotator info.",
     },
     card: {
       type: "string",
@@ -84,6 +100,9 @@ const cardQueryParameters = {
   anyOf: [
     { required: ["target"] },
     { required: ["qq"] },
+    { required: ["senderQq"] },
+    { required: ["userId"] },
+    { required: ["user_id"] },
     { properties: { card: { const: "help" } }, required: ["card"] },
     { properties: { command: { enum: ["/帮助", "帮助", "菜单", "help"] } }, required: ["command"] },
   ],
@@ -98,6 +117,7 @@ const bindQqParameters = {
       type: "string",
       description: "QQ number to bind.",
     },
+    ...senderQqProperties,
     target: {
       type: "string",
       description: "BungieName#1234 or membershipType:membershipId.",
@@ -115,7 +135,8 @@ const bindQqParameters = {
       description: "Optional Destiny membership ID.",
     },
   },
-  required: ["qq"],
+  anyOf: [{ required: ["qq"] }, { required: ["senderQq"] }, { required: ["userId"] }, { required: ["user_id"] }],
+  required: [],
 };
 
 const inventoryQueryParameters = {
@@ -126,6 +147,11 @@ const inventoryQueryParameters = {
       type: "string",
       description: "QQ number only. Inventory requires the QQ owner's Bungie OAuth authorization.",
     },
+    qq: {
+      type: "string",
+      description: "Optional sender QQ alias. Use this when the user says '/仓库', '/装备', or '查我' and OpenClaw knows the sender QQ.",
+    },
+    ...senderQqProperties,
     q: {
       type: "string",
       description: "Optional item search keyword, such as weapon name.",
@@ -149,7 +175,8 @@ const inventoryQueryParameters = {
       description: "Optional Destiny character ID filter.",
     },
   },
-  required: ["target"],
+  anyOf: [{ required: ["target"] }, { required: ["qq"] }, { required: ["senderQq"] }, { required: ["userId"] }, { required: ["user_id"] }],
+  required: [],
 };
 
 const itemActionParameters = {
@@ -164,6 +191,7 @@ const itemActionParameters = {
       type: "string",
       description: "Optional explicit QQ number; same as target.",
     },
+    ...senderQqProperties,
     action: {
       type: "string",
       enum: ["transfer", "equip", "equip_items", "lock", "unlock", "equip_loadout"],
@@ -207,6 +235,7 @@ const itemActionParameters = {
       description: "Must be true to execute. Omit or false returns a confirmation prompt only.",
     },
   },
+  anyOf: [{ required: ["target"] }, { required: ["qq"] }, { required: ["senderQq"] }, { required: ["userId"] }, { required: ["user_id"] }],
   required: ["action"],
 };
 
@@ -218,7 +247,7 @@ export function registerD2StatsRuntime(api, options = {}) {
     {
       name: "destiny2_card_query",
       description:
-        "Return Destiny 2 stat data as an OpenClaw-rendered HTML PNG card. Except for card=help, always pass target or qq; command alone like '/地牢' is not enough unless sender QQ is available and passed as qq. Use card=help for the menu, card=career for career overview, card=crafting for craftable weapon patterns/锻造, card=catalysts for QQ OAuth catalyst progress/催化, card=grandmasters for Grandmaster Nightfall stats/宗师, card=pvp for PvP/trials, card=dungeon_overview for dungeon stats, card=heatmap for activity heatmap, card=activities for recent activity history, and card=raid_overview when the user asks for raid overview, per-raid clears, day-one, or flawless raid stats. Prefer this tool for Destiny 2 stats, PvP, trials, weapons, catalysts, crafting, grandmasters, profile, or recent activity. If a QQ number is unbound or lacks OAuth, the tool returns a 3-minute Bungie OAuth binding link.",
+        "Return Destiny 2 stat data as an OpenClaw-rendered HTML PNG card. Except for card=help, always pass target, qq, senderQq, userId, or user_id. When a user says '@bot 查下raid', '/raid', '/地牢', or another command without a target, use the speaker's QQ/user_id as the target. In this plugin, raid means the player's raid stats, not weekly raid rotator/schedule info. Use card=help for the menu, card=career for career overview, card=crafting for craftable weapon patterns/锻造, card=catalysts for QQ OAuth catalyst progress/催化, card=grandmasters for Grandmaster Nightfall stats/宗师, card=pvp for PvP/trials, card=dungeon_overview for dungeon stats, card=heatmap for activity heatmap, card=activities for recent activity history, and card=raid_overview when the user asks for raid overview, per-raid clears, day-one, or flawless raid stats. Prefer this tool for Destiny 2 stats, PvP, trials, weapons, catalysts, crafting, grandmasters, profile, or recent activity. If a QQ number is unbound or lacks OAuth, the tool returns a 3-minute Bungie OAuth binding link.",
       parameters: cardQueryParameters,
       async execute(_toolCallId, params, signal) {
         const config = getConfig();

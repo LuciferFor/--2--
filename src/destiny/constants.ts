@@ -13,7 +13,10 @@ export const PRIVATE_INVENTORY_COMPONENTS = [
   205, // CharacterEquipment
   206, // CharacterLoadouts
   300, // ItemInstances
-  307 // ItemCommonData
+  304, // ItemStats
+  305, // ItemSockets
+  307, // ItemCommonData
+  310 // ItemReusablePlugs
 ] as const;
 
 export const CACHE_TTL = {
@@ -42,6 +45,7 @@ export const COMMON_MANIFEST_ENTITY_TYPES = [
   "DestinyDestinationDefinition",
   "DestinyInventoryItemDefinition",
   "DestinyInventoryBucketDefinition",
+  "DestinyStatDefinition",
   "DestinyPlaceDefinition",
   "DestinyPresentationNodeDefinition",
   "DestinyRecordDefinition"

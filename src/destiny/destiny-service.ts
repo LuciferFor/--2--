@@ -38,11 +38,14 @@ import type {
   HeatmapCalendarYear,
   HeatmapRange,
   HeatmapSummary,
+  InventoryArmorStatsSummary,
   InventoryActionResult,
   InventoryBucketFilter,
   InventoryItemSummary,
   InventoryOwner,
+  InventoryPlugSummary,
   InventorySearchSummary,
+  InventorySocketSummary,
   InventorySummary,
   LoadoutsSummary,
   NamecardSummary,
@@ -86,6 +89,22 @@ const CATALYST_SLOT_LABELS: Record<CatalystSlot, string> = {
   energy: "能量武器",
   power: "威能武器",
   unknown: "未知武器"
+};
+const ARMOR_STAT_HASHES = [
+  2996146975, // Mobility
+  392767087, // Resilience
+  1943323491, // Recovery
+  1735777505, // Discipline
+  144602215, // Intellect
+  4244567218 // Strength
+] as const;
+const ARMOR_STAT_FALLBACK_NAMES: Record<number, string> = {
+  2996146975: "机动",
+  392767087: "韧性",
+  1943323491: "恢复",
+  1735777505: "纪律",
+  144602215: "智慧",
+  4244567218: "力量"
 };
 
 export class DestinyService {
@@ -1796,6 +1815,14 @@ export class DestinyService {
     }
   }
 
+  private async safeStatDefinitions(): Promise<Record<string, StatDefinition>> {
+    try {
+      return await this.manifest.getDefinitionMap<StatDefinition>("DestinyStatDefinition");
+    } catch {
+      return {};
+    }
+  }
+
   private async getPrivateProfile(
     membershipType: number,
     membershipId: string,
@@ -1823,12 +1850,17 @@ export class DestinyService {
         this.toCharacterSummary(characterId, asRecord(value))
       )
     );
-    const [inventoryDefinitions, bucketDefinitions] = await Promise.all([
+    const [inventoryDefinitions, bucketDefinitions, statDefinitions] = await Promise.all([
       this.safeInventoryDefinitions(),
-      this.safeInventoryBucketDefinitions()
+      this.safeInventoryBucketDefinitions(),
+      this.safeStatDefinitions()
     ]);
-    const itemInstances = asRecord(asRecord(asRecord(profileResponse.itemComponents).instances).data);
-    const itemCommonData = asRecord(asRecord(asRecord(profileResponse.itemComponents).commonData).data);
+    const itemComponents = asRecord(profileResponse.itemComponents);
+    const itemInstances = asRecord(asRecord(asRecord(itemComponents.instances).data));
+    const itemCommonData = asRecord(asRecord(asRecord(itemComponents.commonData).data));
+    const itemSockets = asRecord(asRecord(asRecord(itemComponents.sockets).data));
+    const itemReusablePlugs = asRecord(asRecord(asRecord(itemComponents.reusablePlugs).data));
+    const itemStats = asRecord(asRecord(asRecord(itemComponents.stats).data));
     const items: InventoryItemSummary[] = [];
 
     this.addInventoryItems(
@@ -1838,8 +1870,12 @@ export class DestinyService {
       undefined,
       inventoryDefinitions,
       bucketDefinitions,
+      statDefinitions,
       itemInstances,
-      itemCommonData
+      itemCommonData,
+      itemSockets,
+      itemReusablePlugs,
+      itemStats
     );
 
     const characterInventories = asRecord(asRecord(profileResponse.characterInventories).data);
@@ -1851,8 +1887,12 @@ export class DestinyService {
         characterId,
         inventoryDefinitions,
         bucketDefinitions,
+        statDefinitions,
         itemInstances,
-        itemCommonData
+        itemCommonData,
+        itemSockets,
+        itemReusablePlugs,
+        itemStats
       );
     }
 
@@ -1865,8 +1905,12 @@ export class DestinyService {
         characterId,
         inventoryDefinitions,
         bucketDefinitions,
+        statDefinitions,
         itemInstances,
-        itemCommonData
+        itemCommonData,
+        itemSockets,
+        itemReusablePlugs,
+        itemStats
       );
     }
 
@@ -1889,8 +1933,12 @@ export class DestinyService {
     characterId: string | undefined,
     inventoryDefinitions: Record<string, InventoryItemDefinition>,
     bucketDefinitions: Record<string, InventoryBucketDefinition>,
+    statDefinitions: Record<string, StatDefinition>,
     itemInstances: Record<string, unknown>,
-    itemCommonData: Record<string, unknown>
+    itemCommonData: Record<string, unknown>,
+    itemSockets: Record<string, unknown>,
+    itemReusablePlugs: Record<string, unknown>,
+    itemStats: Record<string, unknown>
   ): void {
     for (const rawItem of rawItems) {
       const item = this.toInventoryItemSummary(
@@ -1900,7 +1948,11 @@ export class DestinyService {
         inventoryDefinitions,
         bucketDefinitions,
         itemInstances,
-        itemCommonData
+        itemCommonData,
+        itemSockets,
+        itemReusablePlugs,
+        itemStats,
+        statDefinitions
       );
       if (item) {
         target.push(item);
@@ -1915,7 +1967,11 @@ export class DestinyService {
     inventoryDefinitions: Record<string, InventoryItemDefinition>,
     bucketDefinitions: Record<string, InventoryBucketDefinition>,
     itemInstances: Record<string, unknown>,
-    itemCommonData: Record<string, unknown>
+    itemCommonData: Record<string, unknown>,
+    itemSockets: Record<string, unknown>,
+    itemReusablePlugs: Record<string, unknown>,
+    itemStats: Record<string, unknown>,
+    statDefinitions: Record<string, StatDefinition>
   ): InventoryItemSummary | null {
     const itemHash = optionalNumber(item.itemHash) ?? numberFrom(item.itemHash, Number.NaN);
     if (!Number.isFinite(itemHash)) {
@@ -1925,6 +1981,9 @@ export class DestinyService {
     const definition = inventoryDefinitions[String(itemHash)];
     const instance = asRecord(instanceId ? itemInstances[instanceId] : undefined);
     const common = asRecord(instanceId ? itemCommonData[instanceId] : undefined);
+    const socketComponent = asRecord(instanceId ? itemSockets[instanceId] : undefined);
+    const reusablePlugComponent = asRecord(instanceId ? itemReusablePlugs[instanceId] : undefined);
+    const statComponent = asRecord(instanceId ? itemStats[instanceId] : undefined);
     const bucketHash =
       optionalNumber(item.bucketHash) ??
       optionalNumber(definition?.inventory?.bucketTypeHash) ??
@@ -1957,7 +2016,9 @@ export class DestinyService {
       classType: optionalNumber(definition?.classType),
       damageType: optionalString(instance.damageType),
       energyCapacity: optionalNumber(energy.energyCapacity),
-      energyUsed: optionalNumber(energy.energyUsed)
+      energyUsed: optionalNumber(energy.energyUsed),
+      ...inventorySocketsForItem(definition, socketComponent, reusablePlugComponent, inventoryDefinitions),
+      ...inventoryArmorStatsForItem(definition, statComponent, statDefinitions)
     };
   }
 
@@ -3744,6 +3805,7 @@ interface InventoryItemDefinition {
   displayProperties?: {
     name?: string;
     icon?: string;
+    description?: string;
   };
   itemTypeDisplayName?: string;
   classType?: number;
@@ -3751,6 +3813,9 @@ interface InventoryItemDefinition {
     bucketTypeHash?: string | number;
     bucketTypeName?: string;
     tierTypeName?: string;
+  };
+  sockets?: {
+    socketEntries?: unknown[];
   };
   quality?: {
     displayVersionWatermarkIcons?: string[];
@@ -3761,6 +3826,14 @@ interface InventoryItemDefinition {
 }
 
 interface InventoryBucketDefinition {
+  displayProperties?: {
+    name?: string;
+    description?: string;
+  };
+  [key: string]: unknown;
+}
+
+interface StatDefinition {
   displayProperties?: {
     name?: string;
     description?: string;
@@ -3805,6 +3878,165 @@ function inventoryOwnerCounts(items: InventoryItemSummary[]): InventorySummary["
 
 function isLockedInventoryItem(state: number | undefined): boolean {
   return state !== undefined && (state & 1) === 1;
+}
+
+function inventorySocketsForItem(
+  definition: InventoryItemDefinition | undefined,
+  socketComponent: Record<string, unknown>,
+  reusablePlugComponent: Record<string, unknown>,
+  inventoryDefinitions: Record<string, InventoryItemDefinition>
+): { sockets?: InventorySocketSummary[] } {
+  const rawSockets = asArray(socketComponent.sockets);
+  if (rawSockets.length === 0) {
+    return {};
+  }
+
+  const socketEntries = asArray(asRecord(definition?.sockets).socketEntries);
+  const reusableBySocket = reusablePlugComponent.plugs;
+  const sockets = rawSockets
+    .map((rawSocket, index): InventorySocketSummary | null => {
+      const socket = asRecord(rawSocket);
+      const socketEntry = asRecord(socketEntries[index]);
+      const selectedPlugHash = optionalNumber(socket.plugHash) ?? numberFrom(socket.plugHash, Number.NaN);
+      const selectedPlug = Number.isFinite(selectedPlugHash)
+        ? toInventoryPlugSummary(selectedPlugHash, inventoryDefinitions, {
+            selected: true,
+            enabled: asBoolean(socket.isEnabled, true)
+          })
+        : undefined;
+      const reusablePlugs = reusablePlugsForSocket(reusableBySocket, index, selectedPlugHash, inventoryDefinitions);
+      const socketTypeHash =
+        optionalNumber(socketEntry.socketTypeHash) ??
+        optionalNumber(socket.socketTypeHash) ??
+        numberFrom(socketEntry.socketTypeHash, Number.NaN);
+
+      if (!selectedPlug && reusablePlugs.length === 0) {
+        return null;
+      }
+
+      return {
+        socketIndex: index,
+        name: inventorySocketDisplayName(index, selectedPlug, reusablePlugs),
+        ...(Number.isFinite(socketTypeHash) ? { socketTypeHash } : {}),
+        ...(Number.isFinite(selectedPlugHash) ? { selectedPlugHash } : {}),
+        ...(selectedPlug ? { selectedPlug } : {}),
+        reusablePlugs
+      };
+    })
+    .filter((socket): socket is InventorySocketSummary => socket !== null);
+
+  return sockets.length > 0 ? { sockets } : {};
+}
+
+function reusablePlugsForSocket(
+  reusableBySocket: unknown,
+  socketIndex: number,
+  selectedPlugHash: number,
+  inventoryDefinitions: Record<string, InventoryItemDefinition>
+): InventoryPlugSummary[] {
+  const rawPlugs = Array.isArray(reusableBySocket)
+    ? asArray(reusableBySocket[socketIndex])
+    : asArray(asRecord(reusableBySocket)[String(socketIndex)]);
+  const seen = new Set<number>();
+  const plugs: InventoryPlugSummary[] = [];
+
+  for (const rawPlug of rawPlugs) {
+    const plug = asRecord(rawPlug);
+    const itemHash =
+      optionalNumber(plug.plugItemHash) ??
+      optionalNumber(plug.plugHash) ??
+      numberFrom(plug.plugItemHash ?? plug.plugHash, Number.NaN);
+    if (!Number.isFinite(itemHash) || seen.has(itemHash)) {
+      continue;
+    }
+    seen.add(itemHash);
+    plugs.push(
+      toInventoryPlugSummary(itemHash, inventoryDefinitions, {
+        selected: itemHash === selectedPlugHash,
+        enabled: asBoolean(plug.enabled, asBoolean(plug.canInsert, true))
+      })
+    );
+  }
+
+  return plugs.sort((left, right) => {
+    if (left.selected !== right.selected) {
+      return left.selected ? -1 : 1;
+    }
+    return left.name.localeCompare(right.name);
+  });
+}
+
+function toInventoryPlugSummary(
+  itemHash: number,
+  inventoryDefinitions: Record<string, InventoryItemDefinition>,
+  options: { selected: boolean; enabled?: boolean }
+): InventoryPlugSummary {
+  const definition = inventoryDefinitions[String(itemHash)];
+  return {
+    itemHash,
+    name: asString(definition?.displayProperties?.name, `Plug ${itemHash}`),
+    iconPath: optionalString(definition?.displayProperties?.icon),
+    description: optionalString(definition?.displayProperties?.description),
+    selected: options.selected,
+    ...(options.enabled !== undefined ? { enabled: options.enabled } : {})
+  };
+}
+
+function inventorySocketDisplayName(
+  index: number,
+  selectedPlug: InventoryPlugSummary | undefined,
+  reusablePlugs: InventoryPlugSummary[]
+): string {
+  const firstCandidate = reusablePlugs.find((plug) => !plug.selected);
+  if (selectedPlug?.name) {
+    return `插槽 ${index + 1}`;
+  }
+  if (firstCandidate?.name) {
+    return `插槽 ${index + 1}`;
+  }
+  return `插槽 ${index + 1}`;
+}
+
+function inventoryArmorStatsForItem(
+  definition: InventoryItemDefinition | undefined,
+  statComponent: Record<string, unknown>,
+  statDefinitions: Record<string, StatDefinition>
+): { armorStats?: InventoryArmorStatsSummary } {
+  const rawStats = asRecord(statComponent.stats);
+  const hasArmorStatComponent = ARMOR_STAT_HASHES.some((hash) => rawStats[String(hash)] !== undefined);
+  if (!hasArmorStatComponent) {
+    return {};
+  }
+  const rows = ARMOR_STAT_HASHES.map((hash) => {
+    const rawStat = asRecord(rawStats[String(hash)]);
+    const value = optionalNumber(rawStat.value) ?? optionalNumber(rawStat.statValue) ?? 0;
+    const statDefinition = statDefinitions[String(hash)];
+    return {
+      hash,
+      name:
+        optionalString(statDefinition?.displayProperties?.name) ??
+        ARMOR_STAT_FALLBACK_NAMES[hash] ??
+        String(hash),
+      value
+    };
+  });
+
+  if (!rows.some((row) => row.value > 0) && !inventoryDefinitionLooksLikeArmor(definition)) {
+    return {};
+  }
+
+  const total = rows.reduce((sum, row) => sum + row.value, 0);
+  return {
+    armorStats: {
+      total,
+      stats: rows
+    }
+  };
+}
+
+function inventoryDefinitionLooksLikeArmor(definition: InventoryItemDefinition | undefined): boolean {
+  const text = `${asString(definition?.itemTypeDisplayName)} ${asString(definition?.inventory?.bucketTypeName)}`.toLowerCase();
+  return /armor|helmet|gauntlet|chest|leg|class item|头盔|臂铠|手套|胸甲|腿甲|护腿|职业物品|护甲/u.test(text);
 }
 
 function compareInventoryItems(left: InventoryItemSummary, right: InventoryItemSummary): number {

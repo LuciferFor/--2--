@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { buildApp } from "../src/app.js";
 import { MemoryCacheStore } from "../src/cache/cache.js";
 import { makeTestConfig } from "../src/config.js";
@@ -748,6 +751,141 @@ describe("Fastify routes", () => {
       }
     });
     await app.close();
+  });
+
+  it("requires a token for share page uploads", async () => {
+    const app = await buildApp({
+      config: makeTestConfig(),
+      cache: new MemoryCacheStore(),
+      store: new NullStore(),
+      destinyService: fakeDestinyService as never,
+      cardService: fakeCardService as never
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/d2/share-pages",
+      payload: {
+        title: "Vault",
+        images: [{ mimeType: "image/png", base64: Buffer.from("png").toString("base64") }]
+      }
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({ success: false, error: { code: "CONFIG_ERROR" } });
+    await app.close();
+  });
+
+  it("creates public share pages for large rendered cards", async () => {
+    const shareDir = mkdtempSync(path.join(tmpdir(), "d2-share-test-"));
+    const app = await buildApp({
+      config: makeTestConfig({
+        PUBLIC_BASE_URL: "https://www.luciferfore.com",
+        SHARE_PUBLIC_DIR: shareDir,
+        SHARE_UPLOAD_TOKEN: "test-share-token"
+      }),
+      cache: new MemoryCacheStore(),
+      store: new NullStore(),
+      destinyService: fakeDestinyService as never,
+      cardService: fakeCardService as never
+    });
+
+    try {
+      const create = await app.inject({
+        method: "POST",
+        url: "/api/d2/share-pages",
+        headers: { authorization: "Bearer test-share-token" },
+        payload: {
+          title: "仓库分页",
+          description: "超过 8MB 自动转网页",
+          sourceUrl: "https://example.test/source",
+          images: [
+            {
+              mimeType: "image/png",
+              base64: Buffer.from("png-page-1").toString("base64"),
+              caption: "第 1/2 页"
+            },
+            {
+              mimeType: "image/png",
+              base64: Buffer.from("png-page-2").toString("base64"),
+              caption: "第 2/2 页"
+            }
+          ]
+        }
+      });
+      expect(create.statusCode).toBe(200);
+      const body = create.json();
+      expect(body).toMatchObject({ success: true, data: { imageCount: 2 } });
+      expect(body.data.url).toMatch(/^https:\/\/www\.luciferfore\.com\/share\/[a-f0-9]+\/index\.html$/u);
+
+      const pathname = new URL(body.data.url).pathname;
+      const html = await app.inject({ method: "GET", url: pathname });
+      expect(html.statusCode).toBe(200);
+      expect(html.headers["content-type"]).toContain("text/html");
+      expect(html.body).toContain("仓库分页");
+      expect(html.body).toContain("第 1/2 页");
+
+      const image = await app.inject({ method: "GET", url: pathname.replace("index.html", "image-01.png") });
+      expect(image.statusCode).toBe(200);
+      expect(image.body).toBe("png-page-1");
+    } finally {
+      await app.close();
+      rmSync(shareDir, { recursive: true, force: true });
+    }
+  });
+
+  it("creates public share pages from HTML card layouts", async () => {
+    const shareDir = mkdtempSync(path.join(tmpdir(), "d2-share-html-test-"));
+    const app = await buildApp({
+      config: makeTestConfig({
+        PUBLIC_BASE_URL: "https://www.luciferfore.com",
+        SHARE_PUBLIC_DIR: shareDir,
+        SHARE_UPLOAD_TOKEN: "test-share-token"
+      }),
+      cache: new MemoryCacheStore(),
+      store: new NullStore(),
+      destinyService: fakeDestinyService as never,
+      cardService: fakeCardService as never
+    });
+
+    try {
+      const create = await app.inject({
+        method: "POST",
+        url: "/api/d2/share-pages",
+        headers: { authorization: "Bearer test-share-token" },
+        payload: {
+          title: "仓库网页",
+          description: "直接 HTML 布局",
+          sourceUrl: "https://example.test/source",
+          htmlPages: [
+            {
+              html: "<!doctype html><html lang=\"zh-CN\"><body><main>第一页 HTML 卡片</main></body></html>",
+              caption: "第 1 页"
+            },
+            {
+              html: "<!doctype html><html lang=\"zh-CN\"><body><main>第二页 HTML 卡片</main></body></html>",
+              caption: "第 2 页"
+            }
+          ]
+        }
+      });
+      expect(create.statusCode).toBe(200);
+      const body = create.json();
+      expect(body).toMatchObject({ success: true, data: { pageCount: 2, imageCount: 0 } });
+
+      const pathname = new URL(body.data.url).pathname;
+      const html = await app.inject({ method: "GET", url: pathname });
+      expect(html.statusCode).toBe(200);
+      expect(html.body).toContain("仓库网页");
+      expect(html.body).toContain("page-01.html");
+      expect(html.body).toContain("单独打开");
+
+      const page = await app.inject({ method: "GET", url: pathname.replace("index.html", "page-01.html") });
+      expect(page.statusCode).toBe(200);
+      expect(page.body).toContain("第一页 HTML 卡片");
+    } finally {
+      await app.close();
+      rmSync(shareDir, { recursive: true, force: true });
+    }
   });
 
   it("creates and resolves QQ bindings with BungieName input", async () => {

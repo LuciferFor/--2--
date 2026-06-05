@@ -38,9 +38,12 @@ Every stat card except the help menu needs a target. For example:
 /战绩 3:4611686018494693796
 ```
 
-If an OpenClaw adapter exposes the sender QQ separately, pass it as `qq` or
-`target`; calling the card tool with only `command=/地牢` is intentionally
-treated as missing input.
+If an OpenClaw adapter exposes the sender QQ separately, pass it as `qq`,
+`senderQq`, `userId`, `user_id`, or `target`. A command-only chat message such
+as `/raid`, `查下raid`, `/地牢`, or `/生涯` should query the speaker's own
+Destiny 2 data by using that sender QQ. In this plugin, `raid` means the
+player's raid overview card; it is not weekly featured raid / rotator schedule
+information.
 
 When a QQ number is not bound, `destiny2_card_query` calls the backend OAuth start
 endpoint and returns the binding link text instead of asking the user to provide

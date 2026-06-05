@@ -24,6 +24,8 @@ const schema = z.object({
     .optional()
     .transform((value) => value === "true"),
   CARD_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(600),
+  SHARE_PUBLIC_DIR: z.string().min(1).default("data/share"),
+  SHARE_UPLOAD_TOKEN: z.string().optional().default(""),
   ADMIN_USERNAME: z.string().min(1).default("admin"),
   ADMIN_PASSWORD_HASH: z.string().optional().default(""),
   ADMIN_SESSION_SECRET: z.string().optional().default(""),
@@ -57,6 +59,8 @@ export function makeTestConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     MANIFEST_LOCALE: "zh-chs",
     MANIFEST_PRELOAD: false,
     CARD_CACHE_TTL_SECONDS: 600,
+    SHARE_PUBLIC_DIR: "data/test-share",
+    SHARE_UPLOAD_TOKEN: "",
     ADMIN_USERNAME: "admin",
     ADMIN_PASSWORD_HASH: "",
     ADMIN_SESSION_SECRET: "",

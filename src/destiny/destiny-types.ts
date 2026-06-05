@@ -104,6 +104,35 @@ export interface WeaponsSummary {
 export type InventoryOwner = "vault" | "inventory" | "equipped";
 export type InventoryBucketFilter = "all" | "vault" | "inventory" | "equipped";
 
+export interface InventoryPlugSummary {
+  itemHash: number;
+  name: string;
+  iconPath?: string;
+  description?: string;
+  selected: boolean;
+  enabled?: boolean;
+}
+
+export interface InventorySocketSummary {
+  socketIndex: number;
+  socketTypeHash?: number;
+  name?: string;
+  selectedPlugHash?: number;
+  selectedPlug?: InventoryPlugSummary;
+  reusablePlugs: InventoryPlugSummary[];
+}
+
+export interface InventoryArmorStatSummary {
+  hash: number;
+  name: string;
+  value: number;
+}
+
+export interface InventoryArmorStatsSummary {
+  total: number;
+  stats: InventoryArmorStatSummary[];
+}
+
 export interface InventoryItemSummary {
   itemHash: number;
   itemInstanceId?: string;
@@ -125,6 +154,8 @@ export interface InventoryItemSummary {
   damageType?: string;
   energyCapacity?: number;
   energyUsed?: number;
+  sockets?: InventorySocketSummary[];
+  armorStats?: InventoryArmorStatsSummary;
 }
 
 export interface InventorySummary {

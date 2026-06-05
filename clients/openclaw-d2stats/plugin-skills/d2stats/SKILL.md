@@ -8,7 +8,7 @@ Prefer `destiny2_card_query` for all read-only Destiny 2 queries. It returns an 
 
 Use `destiny2_bind_qq` only when the user explicitly wants to bind a QQ number to a Bungie account, or when they ask for a binding link.
 
-Use `destiny2_inventory_query` for `/仓库`, `/仓库搜索`, `/库存`, `/背包`, `/装备`, `/现有装备`, `/身上装备`, `/当前装备`, or when the user needs itemInstanceId/characterId before an equipment operation. It only accepts QQ targets and returns an image card. Use `view=vault` for full vault, `view=equipped` for currently equipped gear, `view=inventory` for carried inventory, and `view=search` for item searches.
+Use `destiny2_inventory_query` for `/仓库`, `/仓库搜索`, `/库存`, `/背包`, `/装备`, `/现有装备`, `/身上装备`, `/当前装备`, or when the user needs itemInstanceId/characterId before an equipment operation. It accepts QQ targets or the sender QQ in `qq`, and returns an image card. Use `view=vault` for full vault, `view=equipped` for currently equipped gear, `view=inventory` for carried inventory, and `view=search` for item searches.
 
 Use `destiny2_item_action` for actual write operations such as `/转移`, `/锁定`, `/解锁`, `/套装`, or a clear request to equip/move a specific item. It only accepts QQ targets. Always call it once without `confirm=true` to produce the confirmation text, and only call again with `confirm=true` after the user explicitly confirms.
 
@@ -23,13 +23,15 @@ Accept these target formats:
 
 If the user gives a QQ number and it is already bound, query directly. If it is not bound, return the 3-minute Bungie OAuth binding link from the tool result and include the Tencent warning text exactly as returned.
 
-For every stat query except `/帮助`, always pass a target to the tool. A command alone such as `/地牢` is incomplete unless the OpenClaw runtime exposes the sender QQ; in that case pass the sender QQ as `target` or `qq`. If no sender QQ is available, ask the user to send a command like `/地牢 1665240495`.
+For every stat query except `/帮助`, always pass a target to the tool. A command alone such as `/raid`, `查下raid`, `/地牢`, `/宗师`, `/pvp`, `/生涯`, `/热力图`, `/锻造`, or `/催化` means "query the speaker's own Destiny 2 data" when the OpenClaw runtime exposes the sender QQ. Pass the sender QQ as `target`, `qq`, `senderQq`, `userId`, or `user_id`. If no sender QQ is available, ask the user to send a command like `/地牢 1665240495`.
+
+Do not reinterpret `/raid`, `查下raid`, `查 raid`, or `突袭` as weekly featured raid / raid rotator / schedule information. In this skill those words mean the player's raid overview card. If the speaker QQ is unbound, call the tool with that QQ so it returns the Bungie OAuth binding link.
 
 ## Login / OAuth Behavior
 
-- If the user says `查我`, `我的`, `绑定命运2`, or asks for an OAuth-only feature and the sender QQ is available, use that QQ as the target.
-- If OpenClaw exposes the sender QQ as a separate field, pass it as `qq` or `target`; do not call `destiny2_card_query` with only `command=/地牢`, `command=/raid`, etc.
-- If a QQ target is not bound, or the bound QQ has not completed Bungie OAuth login for an OAuth-only feature, return the 3-minute Bungie OAuth binding/login link from the tool result.
+- If the user says `查我`, `我的`, `绑定命运2`, or asks for any Destiny 2 query and the sender QQ is available, use that QQ as `target`, `qq`, `senderQq`, `userId`, or `user_id`.
+- If OpenClaw exposes the sender QQ as a separate field, pass it as `qq` or `target`; do not call `destiny2_card_query` with only `command=/地牢`, `command=/raid`, `command=查下raid`, etc.
+- If a QQ target is not bound, or the bound QQ has not completed Bungie OAuth login for an OAuth-only feature, return the 3-minute Bungie OAuth binding/login link from the tool result. Do not ask the user to manually provide a Bungie ID first.
 - For OAuth-only features (`/催化`, `/仓库`, `/仓库搜索`, `/库存`, `/背包`, `/装备`, `/现有装备`, `/身上装备`, `/当前装备`, `/转移`, `/锁定`, `/解锁`, `/套装`), do not ask for BungieName or membershipId as a fallback. Tell the user to finish the QQ Bungie login link.
 - If the sender QQ is not available and the user says `查我`, ask for their QQ number.
 
@@ -42,13 +44,13 @@ Map common Chinese commands to `destiny2_card_query`:
 - `/生涯`: `card=career`.
 - `/名片`: `card=namecard`.
 - `/pvp`, `/试炼`, `/熔炉`: `card=pvp`.
-- `/raid`, `/突袭`: `card=raid_overview`.
+- `/raid`, `查下raid`, `查 raid`, `/突袭`: `card=raid_overview`; default target is the speaker QQ, never the weekly raid rotator.
 - `/地牢`, `/dungeon`: `card=dungeon_overview`.
 - `/宗师`, `/gm`, `/日落`, `/夜幕`: `card=grandmasters`.
 - `/热力图`, `/活跃`: `card=heatmap`.
 - `/锻造`, `/图纸`: `card=crafting`.
 - `/催化`: `card=catalysts`; only use QQ targets because catalyst progress requires OAuth.
-- `/仓库`, `查仓库`: use `destiny2_inventory_query` with `view=vault` and `bucket=vault`; only use QQ targets.
+- `/仓库`, `查仓库`: use `destiny2_inventory_query` with `view=vault` and `bucket=vault`; only use QQ targets. Large vaults are automatically split into multiple images to avoid QQ/NapCat rich-media upload failures.
 - `/装备`, `/现有装备`, `/身上装备`, `/当前装备`, `我穿什么`: use `destiny2_inventory_query` with `view=equipped` and `bucket=equipped`; only use QQ targets.
 - `/库存`: use `destiny2_inventory_query` with `view=overview` and `bucket=all`; only use QQ targets.
 - `/背包`: use `destiny2_inventory_query` with `view=inventory` and `bucket=inventory`; only use QQ targets.
