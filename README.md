@@ -80,9 +80,12 @@ ADMIN_SESSION_SECRET=replace-with-a-long-random-session-secret
 - `GET /api/d2/bindings/qq/:qq`
 - `POST /api/d2/bindings/qq`
 - `POST /api/d2/bindings/qq/oauth/start`
+- `GET /api/d2/bind/:code`
 - `GET /api/d2/bindings/qq/oauth/authorize?state=...`
 - `GET /api/d2/bindings/qq/oauth/callback?code=...&state=...`
 - `POST /api/d2/bindings/qq/oauth/confirm`
+
+`/oauth/start` 会返回短绑定链接 `/api/d2/bind/:code` 供机器人发送；`/oauth/authorize?state=...` 只保留给旧链接兼容。
 - `GET /api/d2/vault/:membershipType/:membershipId/search?q=...`：需要 OAuth，当前返回 `OAUTH_REQUIRED`
 - `GET /api/d2/inventory/:membershipType/:membershipId/weapons`：需要 OAuth，当前返回 `OAUTH_REQUIRED`
 - `GET /api/d2/catalysts/:membershipType/:membershipId`：需要 OAuth，当前返回 `OAUTH_REQUIRED`

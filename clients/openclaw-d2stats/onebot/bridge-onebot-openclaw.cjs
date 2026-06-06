@@ -990,6 +990,7 @@ function shouldSendFullGroupReply(message, reply) {
   if (!text) return false;
   if (replyMediaUrls(reply).length > 0 || replyImagePaths(reply).length > 0) return true;
   if (/\n\s*[-*\u2022]/u.test(text)) return true;
+  if (/https?:\/\/|\/api\/d2\/bind\/|OAuth|请在3分钟|绑定|登录|链接/iu.test(text)) return true;
   const fullReplyKeywords = [
     "\u547d\u8fd02",
     "Destiny",
@@ -1765,5 +1766,7 @@ if (IS_MAIN) {
     inferD2DirectCard,
     isD2DirectReplayRequest,
     normalizeD2InventorySearchAlias,
+    shouldSendFullGroupReply,
+    trimGroupReply,
   };
 }

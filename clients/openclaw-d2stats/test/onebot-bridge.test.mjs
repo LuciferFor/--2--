@@ -113,4 +113,17 @@ describe("onebot d2 direct bridge", () => {
     assert.equal(bridge.isD2DirectReplayRequest("图呢"), true);
     assert.equal(bridge.isD2DirectReplayRequest("随便聊一句"), false);
   });
+
+  it("does not trim OAuth binding links in group replies", () => {
+    const message = [
+      "请在3分钟之内访问该链接进行绑定",
+      "https://www.luciferfore.com/api/d2/bind/0123456789abcdef",
+      "",
+      "如果 QQ 内无法打开，请复制上面这一整行到外部浏览器打开。"
+    ].join("\n");
+
+    assert.equal(bridge.shouldSendFullGroupReply(message, {}), true);
+    assert.doesNotMatch(message, /\.{3}|…/u);
+    assert.match(bridge.trimGroupReply("这是一段没有链接也不是命运2业务结果的很长很长普通群聊回复".repeat(4)), /…$/u);
+  });
 });

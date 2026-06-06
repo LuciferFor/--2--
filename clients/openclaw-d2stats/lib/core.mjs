@@ -1496,15 +1496,29 @@ async function startQqOauthBindingMessage(qq, config, options = {}) {
   if (!response.ok || payload?.success === false) {
     throw new D2StatsBackendError(payload, response.status, url);
   }
-  const message = payload?.data?.message;
-  if (typeof message !== "string" || message.length === 0) {
+  const bindUrl = payload?.data?.bindUrl;
+  if (typeof bindUrl !== "string" || bindUrl.length === 0) {
     throw new D2StatsInputError("后端没有返回绑定链接。");
   }
-  return message;
+  return formatQqOauthBindingMessage(bindUrl);
 }
 
 function isQqOauthBindingMessage(message) {
   return /请在3分钟之内访问该链接进行绑定/u.test(String(message || ""));
+}
+
+function formatQqOauthBindingMessage(bindUrl) {
+  const url = String(bindUrl || "").trim();
+  if (!/^https?:\/\/\S+$/iu.test(url)) {
+    throw new D2StatsInputError("后端返回的绑定链接格式不正确。");
+  }
+  return [
+    "请在3分钟之内访问该链接进行绑定",
+    url,
+    "",
+    "如果 QQ 内无法打开，请复制上面这一整行到外部浏览器打开。",
+    "不要在 QQ 点开链接后再复制。"
+  ].join("\n");
 }
 
 async function renderHtmlToPng(html, options = {}) {

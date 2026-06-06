@@ -63,6 +63,19 @@ export async function registerD2Routes(app: FastifyInstance, deps: D2RouteDeps):
     return ok(data, { tookMs: Date.now() - started });
   });
 
+  app.get("/api/d2/bind/:code", async (request, reply) => {
+    try {
+      const state = await deps.qqOAuthService.resolveShortBindCode((request.params as Params).code);
+      return reply.redirect(deps.qqOAuthService.buildAuthorizeUrl(state));
+    } catch (error) {
+      const appError = toAppError(error);
+      return reply
+        .status(appError.statusCode)
+        .type("text/html; charset=utf-8")
+        .send(renderOAuthResultHtml("绑定链接不可用", appError.message));
+    }
+  });
+
   app.get("/api/d2/bindings/qq/oauth/authorize", async (request, reply) => {
     try {
       const query = request.query as Query;

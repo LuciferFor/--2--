@@ -42,6 +42,12 @@ interface StartState {
   expiresAt: string;
 }
 
+interface ShortBindState {
+  state: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
 interface PendingSelection {
   qq: string;
   bungieMembershipId: string;
@@ -104,8 +110,18 @@ export class QqOAuthService {
       this.config.QQ_BIND_OAUTH_TTL_SECONDS
     );
 
-    const bindUrl = new URL("/api/d2/bindings/qq/oauth/authorize", this.config.PUBLIC_BASE_URL);
-    bindUrl.searchParams.set("state", state);
+    const shortCode = randomBytes(8).toString("hex");
+    await this.cache.setJson<ShortBindState>(
+      this.shortBindKey(shortCode),
+      {
+        state,
+        createdAt: new Date().toISOString(),
+        expiresAt
+      },
+      this.config.QQ_BIND_OAUTH_TTL_SECONDS
+    );
+
+    const bindUrl = new URL(`/api/d2/bind/${shortCode}`, this.config.PUBLIC_BASE_URL);
     const message = [
       "请在3分钟之内访问该链接进行绑定",
       bindUrl.toString(),
@@ -120,6 +136,18 @@ export class QqOAuthService {
       expiresAt,
       message
     };
+  }
+
+  async resolveShortBindCode(codeInput: unknown): Promise<string> {
+    const code = typeof codeInput === "string" ? codeInput.trim().toLowerCase() : "";
+    if (!/^[0-9a-f]{16}$/u.test(code)) {
+      throw new BadRequestError("Invalid OAuth binding link code");
+    }
+    const stored = await this.cache.getJson<ShortBindState>(this.shortBindKey(code));
+    if (!stored) {
+      throw new BadRequestError("OAuth binding link is expired or invalid");
+    }
+    return this.assertStartState(stored.state);
   }
 
   async assertStartState(stateInput: unknown): Promise<string> {
@@ -367,6 +395,10 @@ export class QqOAuthService {
 
   private startKey(state: string): string {
     return `d2:qq-oauth:start:${sha256Hex(state)}`;
+  }
+
+  private shortBindKey(code: string): string {
+    return `d2:qq-oauth:short:${sha256Hex(code)}`;
   }
 
   private confirmKey(confirmToken: string): string {

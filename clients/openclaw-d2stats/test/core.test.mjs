@@ -361,7 +361,7 @@ describe("d2stats core", () => {
               success: true,
               data: {
                 bindUrl: "http://d2.local/bind",
-                message: "请在3分钟之内访问该链接进行绑定\nhttp://d2.local/bind\n\n该链接🔗被腾讯标识为危险网站",
+                message: "请在3分钟之内访问该链接进行绑定\nhttps://www.luciferfore.com/api/d2/bindings/qq/oauth/authorize?state=user_bind:abc...\n\n旧长链接不应透传",
               },
             });
           }
@@ -374,10 +374,8 @@ describe("d2stats core", () => {
       },
     );
 
-    assert.equal(result.content[0].type, "text");
-    assert.match(result.content[0].text, /请在3分钟之内访问该链接进行绑定/);
+    assertOauthBindLinkResult(result);
     assert.equal(result.details.status, "ok");
-    assert.equal(result.details.kind, "oauth_bind_link");
     assert.deepEqual(calls, [
       "http://d2.local/api/d2/bindings/qq/99887766",
       "http://d2.local/api/d2/bindings/qq/oauth/start",
@@ -1043,6 +1041,7 @@ describe("d2stats core", () => {
             return jsonResponse({
               success: true,
               data: {
+                bindUrl: "http://d2.local/bind",
                 message: "请在3分钟之内访问该链接进行绑定\nhttp://d2.local/bind\n\n该链接🔗被腾讯标识为危险网站",
               },
             });
@@ -1059,10 +1058,8 @@ describe("d2stats core", () => {
       },
     );
 
-    assert.equal(result.content[0].type, "text");
-    assert.match(result.content[0].text, /请在3分钟之内访问该链接进行绑定/);
+    assertOauthBindLinkResult(result);
     assert.equal(result.details.status, "ok");
-    assert.equal(result.details.kind, "oauth_bind_link");
     assert.deepEqual(seenUrls, [
       "http://d2.local/api/d2/bindings/qq/607972716",
       "http://d2.local/api/d2/bindings/qq/oauth/start",
@@ -1319,6 +1316,7 @@ describe("d2stats core", () => {
             return jsonResponse({
               success: true,
               data: {
+                bindUrl: "http://d2.local/bind",
                 message: "请在3分钟之内访问该链接进行绑定\nhttp://d2.local/bind\n\n该链接🔗被腾讯标识为危险网站",
               },
             });
@@ -1335,10 +1333,8 @@ describe("d2stats core", () => {
       },
     );
 
-    assert.equal(result.content[0].type, "text");
-    assert.match(result.content[0].text, /请在3分钟之内访问该链接进行绑定/);
+    assertOauthBindLinkResult(result);
     assert.equal(result.details.status, "ok");
-    assert.equal(result.details.kind, "oauth_bind_link");
     assert.deepEqual(seenUrls, [
       "http://d2.local/api/d2/bindings/qq/607972716",
       "http://d2.local/api/d2/bindings/qq/oauth/start",
@@ -2051,6 +2047,7 @@ describe("d2stats core", () => {
           return jsonResponse({
             success: true,
             data: {
+              bindUrl: "http://d2.local/bind",
               message: "请在3分钟之内访问该链接进行绑定\nhttp://d2.local/bind\n\n该链接🔗被腾讯标识为危险网站",
             },
           });
@@ -2059,10 +2056,17 @@ describe("d2stats core", () => {
     );
 
     assert.equal(result.details.status, "ok");
-    assert.equal(result.details.kind, "oauth_bind_link");
-    assert.match(result.content[0].text, /http:\/\/d2\.local\/bind/);
+    assertOauthBindLinkResult(result);
   });
 });
+
+function assertOauthBindLinkResult(result) {
+  assert.equal(result.content[0].type, "text");
+  assert.match(result.content[0].text, /请在3分钟之内访问该链接进行绑定/);
+  assert.match(result.content[0].text, /http:\/\/d2\.local\/bind/u);
+  assert.doesNotMatch(result.content[0].text, /\.{3}|…|oauth\/authorize\?state/u);
+  assert.equal(result.details.kind, "oauth_bind_link");
+}
 
 function jsonResponse(payload, status = 200) {
   return new Response(JSON.stringify(payload), {

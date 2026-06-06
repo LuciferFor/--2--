@@ -743,10 +743,10 @@ const fakeOAuthBungieClient = {
 
 function oauthConfig() {
   return makeTestConfig({
-    PUBLIC_BASE_URL: "https://xrx.hitokage.cn",
+    PUBLIC_BASE_URL: "https://www.luciferfore.com",
     BUNGIE_OAUTH_CLIENT_ID: "45756",
     BUNGIE_OAUTH_CLIENT_SECRET: "client-secret",
-    BUNGIE_OAUTH_REDIRECT_URL: "https://xrx.hitokage.cn/api/d2/bindings/qq/oauth/callback",
+    BUNGIE_OAUTH_REDIRECT_URL: "https://www.luciferfore.com/api/d2/bindings/qq/oauth/callback",
     BUNGIE_OAUTH_TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 9).toString("base64"),
     QQ_BIND_OAUTH_TTL_SECONDS: 180
   });
@@ -1033,9 +1033,30 @@ describe("Fastify routes", () => {
     });
     expect(start.statusCode).toBe(200);
     const bindUrl = start.json().data.bindUrl as string;
+    const message = start.json().data.message as string;
     expect(start.json().data.message).toContain("请在3分钟之内访问该链接进行绑定");
-    const state = new URL(bindUrl).searchParams.get("state");
+    expect(message).not.toContain("/api/d2/bindings/qq/oauth/authorize");
+    expect(message).not.toMatch(/\.{3}|…/u);
+    const shortUrl = new URL(bindUrl);
+    expect(shortUrl.origin).toBe("https://www.luciferfore.com");
+    expect(shortUrl.pathname).toMatch(/^\/api\/d2\/bind\/[0-9a-f]{16}$/u);
+    expect(shortUrl.search).toBe("");
+    const state = start.json().data.state as string;
     expect(state).toMatch(/^user_bind:/);
+
+    const shortAuthorize = await app.inject({
+      method: "GET",
+      url: shortUrl.pathname
+    });
+    expect(shortAuthorize.statusCode).toBe(302);
+    expect(shortAuthorize.headers.location).toContain("https://www.bungie.net/en/oauth/authorize");
+
+    const invalidShortAuthorize = await app.inject({
+      method: "GET",
+      url: "/api/d2/bind/not-a-code"
+    });
+    expect(invalidShortAuthorize.statusCode).toBe(400);
+    expect(invalidShortAuthorize.body).toContain("绑定链接不可用");
 
     const authorize = await app.inject({
       method: "GET",
