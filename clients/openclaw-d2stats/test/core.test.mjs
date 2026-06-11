@@ -6,6 +6,7 @@ import {
   bindQq,
   buildPublicDataUrl,
   itemAction,
+  manageLoadouts,
   parseTarget,
   queryCard,
   queryInventory,
@@ -56,16 +57,36 @@ describe("d2stats core", () => {
     const catalysts = buildPublicDataUrl("catalysts", { qq: "607972716" }, {}, resolveConfig({ baseUrl: "http://d2.local" }));
     assert.equal(catalysts, "http://d2.local/api/d2/catalysts/qq/607972716");
 
+    const catalystInfo = buildPublicDataUrl("catalyst_info", undefined, { q: "挽歌" }, resolveConfig({ baseUrl: "http://d2.local" }));
+    assert.equal(catalystInfo, "http://d2.local/api/d2/catalyst-info?q=%E6%8C%BD%E6%AD%8C");
+
+    const itemInfo = buildPublicDataUrl("item_info", undefined, { q: "极高反射", limit: 6 }, resolveConfig({ baseUrl: "http://d2.local" }));
+    assert.equal(itemInfo, "http://d2.local/api/d2/item-info?q=%E6%9E%81%E9%AB%98%E5%8F%8D%E5%B0%84&limit=6");
+
+    const perkWeapons = buildPublicDataUrl(
+      "perk_weapons",
+      undefined,
+      { perks: ["爆破专家", "斩首武器"], weaponType: "冲锋枪", limit: 50 },
+      resolveConfig({ baseUrl: "http://d2.local" }),
+    );
+    assert.equal(
+      perkWeapons,
+      "http://d2.local/api/d2/perk-weapons?perks=%E7%88%86%E7%A0%B4%E4%B8%93%E5%AE%B6%2C%E6%96%A9%E9%A6%96%E6%AD%A6%E5%99%A8&weaponType=%E5%86%B2%E9%94%8B%E6%9E%AA&limit=50",
+    );
+
+    const catalystStatus = buildPublicDataUrl("catalyst_status", { qq: "607972716" }, { q: "虫狙" }, resolveConfig({ baseUrl: "http://d2.local" }));
+    assert.equal(catalystStatus, "http://d2.local/api/d2/catalysts/qq/607972716/item?q=%E8%99%AB%E7%8B%99");
+
     const dungeons = buildPublicDataUrl("dungeons", target, { historyPages: 3 }, resolveConfig({ baseUrl: "http://d2.local" }));
     assert.equal(dungeons, "http://d2.local/api/d2/dungeons/3/4611686018428939884?historyPages=3&pgcrLimit=50");
 
     const grandmasters = buildPublicDataUrl(
       "grandmasters",
       target,
-      { historyPages: 10, pgcrLimit: 50, season: "current" },
+      { historyPages: 10, pgcrLimit: 50 },
       resolveConfig({ baseUrl: "http://d2.local" }),
     );
-    assert.equal(grandmasters, "http://d2.local/api/d2/grandmasters/3/4611686018428939884?historyPages=10&pgcrLimit=50&season=current");
+    assert.equal(grandmasters, "http://d2.local/api/d2/grandmasters/3/4611686018428939884?historyPages=10&pgcrLimit=50&season=all");
 
     const heatmap = buildPublicDataUrl(
       "heatmap",
@@ -530,7 +551,7 @@ describe("d2stats core", () => {
   it("renders grandmaster cards from public JSON", async () => {
     const calls = [];
     const result = await queryCard(
-      { target: "607972716", command: "/宗师", historyPages: 10, pgcrLimit: 50, season: "current" },
+      { target: "607972716", command: "/宗师", historyPages: 10, pgcrLimit: 50 },
       { baseUrl: "http://d2.local" },
       {
         fetchImpl: async (url) => {
@@ -571,7 +592,7 @@ describe("d2stats core", () => {
               },
             });
           }
-          assert.equal(String(url), "http://d2.local/api/d2/grandmasters/3/4611686018428939884?historyPages=10&pgcrLimit=50&season=current");
+          assert.equal(String(url), "http://d2.local/api/d2/grandmasters/3/4611686018428939884?historyPages=10&pgcrLimit=50&season=all");
           return jsonResponse({
             success: true,
             data: {
@@ -648,7 +669,7 @@ describe("d2stats core", () => {
     assert.deepEqual(calls, [
       "http://d2.local/api/d2/bindings/qq/607972716",
       "http://d2.local/api/d2/namecard/3/4611686018428939884",
-      "http://d2.local/api/d2/grandmasters/3/4611686018428939884?historyPages=10&pgcrLimit=50&season=current",
+      "http://d2.local/api/d2/grandmasters/3/4611686018428939884?historyPages=10&pgcrLimit=50&season=all",
     ]);
     assert.equal(result.content[0].type, "image");
     assert.equal(result.details.card, "grandmasters");
@@ -952,6 +973,287 @@ describe("d2stats core", () => {
 
     assert.equal(result.content[0].type, "text");
     assert.match(result.content[0].text, /催化进度需要 QQ OAuth 授权/);
+  });
+
+  it("renders public catalyst effect cards by weapon name", async () => {
+    const calls = [];
+    const result = await queryCard(
+      { command: "查挽歌的催化效果" },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async (url) => {
+          calls.push(String(url));
+          assert.equal(String(url), "http://d2.local/api/d2/catalyst-info?q=%E6%8C%BD%E6%AD%8C");
+          return jsonResponse({
+            success: true,
+            data: {
+              query: "挽歌",
+              total: 1,
+              matches: [
+                {
+                  recordHash: "702",
+                  weaponHash: "202",
+                  weaponName: "挽歌",
+                  catalystName: "挽歌催化",
+                  catalystDescription: "用挽歌击败目标以解锁催化效果。",
+                  effectDescription: "增强挽歌的治疗与剑气效果。",
+                  completionDescription: "使用挽歌击败目标",
+                  iconPath: "/common/destiny2_content/icons/lament.jpg",
+                  itemTypeDisplayName: "刀剑",
+                  slot: "power",
+                  slotLabel: "威能武器",
+                  objectives: [{ objectiveHash: "9002", description: "使用挽歌击败目标", completionValue: 400 }],
+                  match: { score: 0, reason: "武器名精确匹配" },
+                },
+              ],
+              scan: { candidateRecords: 1, note: "public catalyst info" },
+              updatedAt: "2026-06-03T00:00:00.000Z",
+            },
+          });
+        },
+        renderHtmlToPng: async (html) => {
+          assert.match(html, /DESTINY 2 CATALYST INFO/);
+          assert.match(html, /挽歌/);
+          assert.match(html, /催化效果/);
+          assert.match(html, /增强挽歌/);
+          assert.match(html, /完成目标/);
+          return Buffer.from("png-bytes");
+        },
+      },
+    );
+
+    assert.deepEqual(calls, ["http://d2.local/api/d2/catalyst-info?q=%E6%8C%BD%E6%AD%8C"]);
+    assert.equal(result.content[0].type, "image");
+    assert.equal(result.details.card, "catalyst_info");
+  });
+
+  it("renders public item detail cards before any web search", async () => {
+    const calls = [];
+    const result = await queryCard(
+      { command: "查个武器，极高反射" },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async (url) => {
+          calls.push(String(url));
+          assert.equal(String(url), "http://d2.local/api/d2/item-info?q=%E6%9E%81%E9%AB%98%E5%8F%8D%E5%B0%84");
+          return jsonResponse({
+            success: true,
+            data: {
+              query: "极高反射",
+              total: 1,
+              matches: [
+                {
+                  itemHash: "601",
+                  name: "极高反射",
+                  description: "一把来自木卫二的轻型手枪。",
+                  iconPath: "/common/destiny2_content/icons/high-albedo.jpg",
+                  itemTypeDisplayName: "手枪",
+                  tierTypeName: "传说",
+                  slotLabel: "动能",
+                  damageType: "动能",
+                  ammoType: "主弹药",
+                  source: "来源：木卫二活动",
+                  craftable: true,
+                  stats: [
+                    { hash: "4284893193", name: "每分钟发射数", value: 491 },
+                    { hash: "3871231066", name: "弹匣", value: 45 },
+                  ],
+                  perks: [
+                    { itemHash: "9104", name: "适配框架", description: "均衡可靠，适合多种战斗场景。" },
+                    { itemHash: "602", name: "轻质框架", description: "装备此武器时移动速度更快。" },
+                  ],
+                  catalyst: { catalystName: "极高反射催化", effectDescription: "Manifest 催化提示。" },
+                  match: { score: 0, reason: "名称精确匹配" },
+                },
+              ],
+              scan: { inventoryDefinitions: 1, statDefinitions: 2, craftableItems: 1, note: "public item info" },
+              updatedAt: "2026-06-03T00:00:00.000Z",
+            },
+          });
+        },
+        renderHtmlToPng: async (html) => {
+          assert.match(html, /DESTINY 2 ITEM INFO/);
+          assert.match(html, /极高反射/);
+          assert.match(html, /每分钟发射数/);
+          assert.match(html, /适配框架/);
+          assert.match(html, /来源：木卫二活动/);
+          return Buffer.from("png-bytes");
+        },
+      },
+    );
+
+    assert.deepEqual(calls, ["http://d2.local/api/d2/item-info?q=%E6%9E%81%E9%AB%98%E5%8F%8D%E5%B0%84"]);
+    assert.equal(result.content[0].type, "image");
+    assert.equal(result.details.card, "item_info");
+  });
+
+  it("renders public Perk weapon roll-pool cards before ordinary chat", async () => {
+    const calls = [];
+    const result = await queryCard(
+      { command: "查爆破专家斩首武器的冲锋枪" },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async (url) => {
+          calls.push(String(url));
+          assert.equal(
+            String(url),
+            "http://d2.local/api/d2/perk-weapons?perks=%E7%88%86%E7%A0%B4%E4%B8%93%E5%AE%B6%2C%E6%96%A9%E9%A6%96%E6%AD%A6%E5%99%A8&weaponType=%E5%86%B2%E9%94%8B%E6%9E%AA&limit=50",
+          );
+          return jsonResponse({
+            success: true,
+            data: {
+              perks: ["爆破专家", "斩首武器"],
+              filters: { weaponType: "冲锋枪", limit: 50 },
+              total: 1,
+              matches: [
+                {
+                  itemHash: "303",
+                  name: "不散恐惧",
+                  iconPath: "/common/destiny2_content/icons/smg.jpg",
+                  itemTypeDisplayName: "微型冲锋枪",
+                  tierTypeName: "传说",
+                  slotLabel: "动能",
+                  damageType: "冰影",
+                  rpm: 900,
+                  source: "来源：地牢",
+                  craftable: false,
+                  matchedPerks: [
+                    { itemHash: "88001", name: "爆破专家", socketIndex: 3, socketLabel: "插槽 4", source: "randomizedPlugSetHash" },
+                    { itemHash: "88002", name: "斩首武器", socketIndex: 4, socketLabel: "插槽 5", source: "randomizedPlugSetHash" },
+                  ],
+                },
+              ],
+              scan: { inventoryDefinitions: 1, plugSetDefinitions: 1, craftableItems: 0, note: "public perk weapons" },
+              updatedAt: "2026-06-03T00:00:00.000Z",
+            },
+          });
+        },
+        renderHtmlToPng: async (html) => {
+          assert.match(html, /DESTINY 2 PERK WEAPONS/);
+          assert.match(html, /爆破专家/);
+          assert.match(html, /斩首武器/);
+          assert.match(html, /不散恐惧/);
+          assert.match(html, /900 RPM/);
+          return Buffer.from("png-bytes");
+        },
+      },
+    );
+
+    assert.deepEqual(calls, [
+      "http://d2.local/api/d2/perk-weapons?perks=%E7%88%86%E7%A0%B4%E4%B8%93%E5%AE%B6%2C%E6%96%A9%E9%A6%96%E6%AD%A6%E5%99%A8&weaponType=%E5%86%B2%E9%94%8B%E6%9E%AA&limit=50",
+    ]);
+    assert.equal(result.content[0].type, "image");
+    assert.equal(result.details.card, "perk_weapons");
+  });
+
+  it("renders personal single-weapon catalyst status cards", async () => {
+    const calls = [];
+    const result = await queryCard(
+      { target: "607972716", card: "catalyst_status", q: "虫狙" },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async (url) => {
+          calls.push(String(url));
+          if (String(url).includes("/bindings/qq/")) {
+            return jsonResponse({
+              success: true,
+              data: {
+                membershipType: 3,
+                membershipId: "4611686018428939884",
+                bungieName: "Lucifer#8571",
+                displayName: "Lucifer",
+                displayNameCode: 8571,
+              },
+            });
+          }
+          if (String(url).includes("/namecard/")) {
+            return jsonResponse({
+              success: true,
+              data: {
+                membershipType: 3,
+                membershipId: "4611686018428939884",
+                profile: {
+                  bungieName: "Lucifer#8571",
+                  displayName: "Lucifer",
+                  displayNameCode: 8571,
+                  characters: [
+                    {
+                      className: "Warlock",
+                      light: 2020,
+                      dateLastPlayed: "2026-06-03T00:00:00.000Z",
+                      emblemPath: "/common/destiny2_content/icons/current-icon.jpg",
+                      emblemBackgroundPath: "/common/destiny2_content/icons/current-card.jpg",
+                    },
+                  ],
+                },
+              },
+            });
+          }
+          const requestUrl = new URL(String(url));
+          assert.equal(`${requestUrl.origin}${requestUrl.pathname}`, "http://d2.local/api/d2/catalysts/qq/607972716/item");
+          assert.equal(requestUrl.searchParams.get("q"), "虫狙");
+          return jsonResponse({
+            success: true,
+            data: {
+              membershipType: 3,
+              membershipId: "4611686018428939884",
+              query: "虫狙",
+              total: 1,
+              totals: { obtained: 1, visible: 1, completed: 0 },
+              matches: [
+                {
+                  recordHash: "703",
+                  weaponHash: "203",
+                  weaponName: "蠕虫低语",
+                  catalystName: "蠕虫低语催化",
+                  catalystDescription: "用蠕虫低语击败目标以完成催化。",
+                  effectDescription: "提高蠕虫低语的装填与精准输出表现。",
+                  completionDescription: "使用蠕虫低语击败目标",
+                  iconPath: "/common/destiny2_content/icons/whisper.jpg",
+                  itemTypeDisplayName: "狙击步枪",
+                  slot: "power",
+                  slotLabel: "未知武器",
+                  obtained: true,
+                  visible: true,
+                  completed: false,
+                  redeemed: false,
+                  percent: 24,
+                  progress: 120,
+                  completionValue: 500,
+                  objectives: [
+                    { objectiveHash: "9003", description: "使用蠕虫低语击败目标", progress: 120, completionValue: 500, complete: false },
+                  ],
+                  infoObjectives: [{ objectiveHash: "9003", description: "使用蠕虫低语击败目标", completionValue: 500 }],
+                  statusLabel: "已获得 / 进行中",
+                  match: { score: 0, reason: "武器名精确匹配" },
+                },
+              ],
+              scan: { candidateRecords: 3, recordsReturned: 1, catalystInfoMatches: 1, note: "single catalyst status" },
+              updatedAt: "2026-06-03T00:00:00.000Z",
+            },
+          });
+        },
+        renderHtmlToPng: async (html) => {
+          assert.match(html, /DESTINY 2 CATALYST STATUS/);
+          assert.match(html, /Lucifer#8571/);
+          assert.match(html, /蠕虫低语/);
+          assert.match(html, /狙击步枪/);
+          assert.doesNotMatch(html, /未知武器/);
+          assert.match(html, /已获得 \/ 进行中/);
+          assert.match(html, /120 \/ 500/);
+          assert.match(html, /催化效果/);
+          return Buffer.from("png-bytes");
+        },
+      },
+    );
+
+    assert.deepEqual(calls, [
+      "http://d2.local/api/d2/bindings/qq/607972716",
+      "http://d2.local/api/d2/namecard/3/4611686018428939884",
+      "http://d2.local/api/d2/catalysts/qq/607972716/item?q=%E8%99%AB%E7%8B%99",
+    ]);
+    assert.equal(result.content[0].type, "image");
+    assert.equal(result.details.card, "catalyst_status");
   });
 
   it("supports direct activity PGCR rendering", async () => {
@@ -2033,6 +2335,163 @@ describe("d2stats core", () => {
     assert.match(result.content[0].text, /已应用配装防具/);
     assert.match(result.content[0].text, /属性模组/);
     assert.match(result.content[0].text, /碎片/);
+  });
+
+  it("renders loadout management lists from QQ OAuth data", async () => {
+    const calls = [];
+    const result = await manageLoadouts(
+      { target: "607972716", operation: "list" },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async (url) => {
+          calls.push(String(url));
+          if (String(url).includes("/bindings/qq/")) {
+            return jsonResponse({
+              success: true,
+              data: { qq: "607972716", membershipType: 3, membershipId: "4611686018428939884", bungieName: "Lucifer#8571" },
+            });
+          }
+          if (String(url).includes("/namecard/")) {
+            return jsonResponse({
+              success: true,
+              data: {
+                membershipType: 3,
+                membershipId: "4611686018428939884",
+                profile: {
+                  bungieName: "Lucifer#8571",
+                  characters: [{ characterId: "char-1", className: "术士", light: 13, dateLastPlayed: "2026-06-03T00:00:00.000Z" }],
+                },
+              },
+            });
+          }
+          assert.equal(String(url), "http://d2.local/api/d2/loadouts/qq/607972716");
+          return jsonResponse({
+            success: true,
+            data: {
+              qq: "607972716",
+              membershipType: 3,
+              membershipId: "4611686018428939884",
+              characters: [{ characterId: "char-1", className: "术士", light: 13, dateLastPlayed: "2026-06-03T00:00:00.000Z" }],
+              loadouts: [{ index: 1, characterId: "char-1", name: "日落", itemCount: 10 }],
+              savedLoadouts: [{ id: 7, name: "日落套", className: "术士", characterId: "char-1", source: "current_equipped", itemCount: 2, items: [{ name: "纪念", iconPath: "/icon.jpg" }], updatedAt: "2026-06-03T00:00:00.000Z" }],
+              updatedAt: "2026-06-03T00:00:00.000Z",
+            },
+          });
+        },
+        renderHtmlToPng: async (html) => {
+          assert.match(html, /DESTINY 2 LOADOUTS/);
+          assert.match(html, /游戏内 Loadout 槽位/);
+          assert.match(html, /本地保存配装/);
+          assert.match(html, /日落套/);
+          return Buffer.from("png-bytes");
+        },
+      },
+    );
+
+    assert.deepEqual(calls, [
+      "http://d2.local/api/d2/bindings/qq/607972716",
+      "http://d2.local/api/d2/namecard/3/4611686018428939884",
+      "http://d2.local/api/d2/loadouts/qq/607972716",
+    ]);
+    assert.equal(result.content[0].type, "image");
+    assert.equal(result.details.card, "loadout_manage");
+  });
+
+  it("returns a share page for oversized loadout management lists", async () => {
+    const result = await manageLoadouts(
+      { target: "607972716", operation: "list" },
+      { baseUrl: "http://d2.local", shareUploadToken: "token", shareThresholdBytes: 1 },
+      {
+        fetchImpl: async (url, init = {}) => {
+          const value = String(url);
+          if (value.includes("/bindings/qq/")) {
+            return jsonResponse({
+              success: true,
+              data: { qq: "607972716", membershipType: 3, membershipId: "4611686018428939884", bungieName: "Lucifer#8571" },
+            });
+          }
+          if (value.includes("/namecard/")) {
+            return jsonResponse({ success: true, data: { membershipType: 3, membershipId: "4611686018428939884", profile: { bungieName: "Lucifer#8571" } } });
+          }
+          if (value.includes("/loadouts/qq/")) {
+            return jsonResponse({
+              success: true,
+              data: {
+                qq: "607972716",
+                membershipType: 3,
+                membershipId: "4611686018428939884",
+                characters: [{ characterId: "char-1", className: "术士" }],
+                loadouts: [{ index: 0, characterId: "char-1", name: "日落", itemCount: 10 }],
+                savedLoadouts: [],
+              },
+            });
+          }
+          assert.equal(value, "http://d2.local/api/d2/share-pages");
+          assert.equal(init.method, "POST");
+          const body = JSON.parse(init.body);
+          assert.equal(body.title, "Destiny 2 配装列表");
+          assert.equal(body.htmlPages.length, 1);
+          return jsonResponse({ success: true, data: { url: "https://www.luciferfore.com/d2/share/loadouts", pageCount: 1 } });
+        },
+        renderHtmlToPng: async () => Buffer.alloc(2 * 1024 * 1024),
+      },
+    );
+
+    assert.equal(result.content[0].type, "text");
+    assert.equal(result.details.kind, "share_page");
+    assert.match(result.content[0].text, /https:\/\/www\.luciferfore\.com\/d2\/share\/loadouts/);
+  });
+
+  it("requires confirmation before saving local loadouts", async () => {
+    const calls = [];
+    const result = await manageLoadouts(
+      { target: "607972716", operation: "save_local", name: "日落套" },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async (url) => {
+          calls.push(String(url));
+          if (String(url).includes("/bindings/qq/")) {
+            return jsonResponse({ success: true, data: { qq: "607972716", membershipType: 3, membershipId: "4611686018428939884" } });
+          }
+          return jsonResponse({ success: true, data: { membershipType: 3, membershipId: "4611686018428939884", profile: {} } });
+        },
+      },
+    );
+
+    assert.equal(result.details.status, "confirmation_required");
+    assert.match(result.content[0].text, /保存当前配装/);
+    assert.deepEqual(calls, [
+      "http://d2.local/api/d2/bindings/qq/607972716",
+      "http://d2.local/api/d2/namecard/3/4611686018428939884",
+    ]);
+  });
+
+  it("saves confirmed local loadouts", async () => {
+    const posted = [];
+    const result = await manageLoadouts(
+      { target: "607972716", operation: "save_local", name: "日落套", confirm: true },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async (url, init = {}) => {
+          if (String(url).includes("/bindings/qq/")) {
+            return jsonResponse({ success: true, data: { qq: "607972716", membershipType: 3, membershipId: "4611686018428939884" } });
+          }
+          if (String(url).includes("/namecard/")) {
+            return jsonResponse({ success: true, data: { membershipType: 3, membershipId: "4611686018428939884", profile: {} } });
+          }
+          assert.equal(String(url), "http://d2.local/api/d2/saved-loadouts/qq/607972716");
+          posted.push(JSON.parse(init.body));
+          return jsonResponse({
+            success: true,
+            data: { id: 7, name: "日落套", itemCount: 10, updatedAt: "2026-06-03T00:00:00.000Z" },
+          });
+        },
+      },
+    );
+
+    assert.deepEqual(posted, [{ name: "日落套", overwrite: false, confirm: true }]);
+    assert.equal(result.details.status, "ok");
+    assert.match(result.content[0].text, /已保存本地配装：日落套/);
   });
 
   it("starts OAuth binding when no Bungie target is provided", async () => {

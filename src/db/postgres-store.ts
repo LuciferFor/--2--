@@ -13,6 +13,8 @@ import type {
   QqOAuthTokenRecord,
   QqOAuthTokenRow,
   QueryLogRow,
+  SavedLoadoutRecord,
+  SavedLoadoutRow,
   Store
 } from "./store.js";
 
@@ -291,6 +293,123 @@ export class PostgresStore implements Store {
       [qq]
     );
     return (result.rowCount ?? 0) > 0;
+  }
+
+  async upsertSavedLoadout(record: SavedLoadoutRecord, overwrite: boolean): Promise<SavedLoadoutRow> {
+    if (!overwrite) {
+      const result = await this.pool.query(
+        `
+          INSERT INTO saved_loadouts (
+            qq, name, class_name, character_id, source, items, stat_mods, fragments, notes
+          )
+          VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9)
+          RETURNING id, qq, name, class_name, character_id, source, items, stat_mods, fragments,
+                    notes, last_applied_at, created_at, updated_at
+        `,
+        [
+          record.qq,
+          record.name,
+          record.className ?? null,
+          record.characterId ?? null,
+          record.source,
+          JSON.stringify(record.items),
+          JSON.stringify(record.statMods ?? []),
+          JSON.stringify(record.fragments ?? []),
+          record.notes ?? null
+        ]
+      );
+      return mapSavedLoadoutRow(result.rows[0]);
+    }
+
+    const result = await this.pool.query(
+      `
+        INSERT INTO saved_loadouts (
+          qq, name, class_name, character_id, source, items, stat_mods, fragments, notes
+        )
+        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9)
+        ON CONFLICT (qq, name)
+        DO UPDATE SET
+          class_name = EXCLUDED.class_name,
+          character_id = EXCLUDED.character_id,
+          source = EXCLUDED.source,
+          items = EXCLUDED.items,
+          stat_mods = EXCLUDED.stat_mods,
+          fragments = EXCLUDED.fragments,
+          notes = EXCLUDED.notes,
+          updated_at = NOW()
+        RETURNING id, qq, name, class_name, character_id, source, items, stat_mods, fragments,
+                  notes, last_applied_at, created_at, updated_at
+      `,
+      [
+        record.qq,
+        record.name,
+        record.className ?? null,
+        record.characterId ?? null,
+        record.source,
+        JSON.stringify(record.items),
+        JSON.stringify(record.statMods ?? []),
+        JSON.stringify(record.fragments ?? []),
+        record.notes ?? null
+      ]
+    );
+    return mapSavedLoadoutRow(result.rows[0]);
+  }
+
+  async listSavedLoadouts(qq: string): Promise<SavedLoadoutRow[]> {
+    const result = await this.pool.query(
+      `
+        SELECT id, qq, name, class_name, character_id, source, items, stat_mods, fragments,
+               notes, last_applied_at, created_at, updated_at
+        FROM saved_loadouts
+        WHERE qq = $1
+        ORDER BY updated_at DESC, id DESC
+      `,
+      [qq]
+    );
+    return result.rows.map(mapSavedLoadoutRow);
+  }
+
+  async getSavedLoadout(qq: string, idOrName: string): Promise<SavedLoadoutRow | null> {
+    const id = Number(idOrName);
+    const result = await this.pool.query(
+      `
+        SELECT id, qq, name, class_name, character_id, source, items, stat_mods, fragments,
+               notes, last_applied_at, created_at, updated_at
+        FROM saved_loadouts
+        WHERE qq = $1
+          AND ($2::bigint IS NOT NULL AND id = $2::bigint OR name = $3)
+        ORDER BY id DESC
+        LIMIT 1
+      `,
+      [qq, Number.isInteger(id) ? id : null, idOrName]
+    );
+    return result.rows[0] ? mapSavedLoadoutRow(result.rows[0]) : null;
+  }
+
+  async deleteSavedLoadout(qq: string, idOrName: string): Promise<boolean> {
+    const id = Number(idOrName);
+    const result = await this.pool.query(
+      `
+        DELETE FROM saved_loadouts
+        WHERE qq = $1
+          AND ($2::bigint IS NOT NULL AND id = $2::bigint OR name = $3)
+      `,
+      [qq, Number.isInteger(id) ? id : null, idOrName]
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async touchSavedLoadoutApplied(qq: string, id: number): Promise<void> {
+    await this.pool.query(
+      `
+        UPDATE saved_loadouts
+        SET last_applied_at = NOW(),
+            updated_at = NOW()
+        WHERE qq = $1
+          AND id = $2
+      `,
+      [qq, id]
+    );
   }
 
   async listQueryLogs(
@@ -612,5 +731,23 @@ function mapAdminAuditLogRow(row: Record<string, any>): AdminAuditLogRow {
     ipHash: row.ip_hash ?? undefined,
     details: row.details ?? {},
     createdAt: row.created_at.toISOString()
+  };
+}
+
+function mapSavedLoadoutRow(row: Record<string, any>): SavedLoadoutRow {
+  return {
+    id: Number(row.id),
+    qq: row.qq,
+    name: row.name,
+    className: row.class_name ?? undefined,
+    characterId: row.character_id ?? undefined,
+    source: row.source,
+    items: Array.isArray(row.items) ? row.items : [],
+    statMods: Array.isArray(row.stat_mods) ? row.stat_mods : [],
+    fragments: Array.isArray(row.fragments) ? row.fragments : [],
+    notes: row.notes ?? undefined,
+    lastAppliedAt: row.last_applied_at?.toISOString(),
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString()
   };
 }

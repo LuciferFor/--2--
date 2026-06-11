@@ -46,6 +46,7 @@ export const COMMON_MANIFEST_ENTITY_TYPES = [
   "DestinyInventoryItemDefinition",
   "DestinyInventoryBucketDefinition",
   "DestinyStatDefinition",
+  "DestinyObjectiveDefinition",
   "DestinyPlaceDefinition",
   "DestinyPresentationNodeDefinition",
   "DestinyRecordDefinition"

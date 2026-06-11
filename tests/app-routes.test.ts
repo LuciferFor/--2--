@@ -494,6 +494,155 @@ const fakeDestinyService = {
       updatedAt: "2026-06-03T00:00:00.000Z"
     };
   },
+  async getCatalystInfo(query: string) {
+    return {
+      query,
+      total: 1,
+      matches: [
+        {
+          recordHash: "700",
+          weaponHash: "201",
+          weaponName: "挽歌",
+          catalystName: "挽歌催化",
+          catalystDescription: "使用此武器击败目标以完成催化。",
+          effectDescription: "增强挽歌的治疗与剑气效果。",
+          completionDescription: "使用挽歌击败目标",
+          iconPath: "/common/destiny2_content/icons/lament.jpg",
+          itemTypeDisplayName: "刀剑",
+          slot: "power",
+          slotLabel: "威能武器",
+          objectives: [{ objectiveHash: "9001", description: "使用挽歌击败目标", completionValue: 400 }],
+          match: { score: 0, reason: "武器名精确匹配" }
+        }
+      ],
+      scan: {
+        recordDefinitions: 1,
+        candidateRecords: 1,
+        catalystPresentationRecords: 1,
+        inventoryDefinitions: 1,
+        objectiveDefinitions: 1,
+        note: "test"
+      },
+      updatedAt: "2026-06-03T00:00:00.000Z"
+    };
+  },
+  async getItemInfo(query: string) {
+    return {
+      query,
+      total: 1,
+      matches: [
+        {
+          itemHash: "601",
+          name: "极高反射",
+          description: "一把来自木卫二的轻型手枪。",
+          iconPath: "/common/destiny2_content/icons/high-albedo.jpg",
+          watermarkIconPath: "/common/destiny2_content/icons/watermark.png",
+          itemTypeDisplayName: "手枪",
+          tierTypeName: "传说",
+          bucketName: "动能武器",
+          slotLabel: "动能",
+          damageType: "动能",
+          ammoType: "主弹药",
+          source: "来源：木卫二活动",
+          craftable: true,
+          stats: [
+            { hash: "4284893193", name: "每分钟发射数", value: 491 },
+            { hash: "3871231066", name: "弹匣", value: 45 }
+          ],
+          perks: [
+            { itemHash: "9104", name: "适配框架", description: "均衡可靠，适合多种战斗场景。" },
+            { itemHash: "602", name: "轻质框架", description: "装备此武器时移动速度更快。" }
+          ],
+          match: { score: 0, reason: "名称精确匹配" }
+        }
+      ],
+      scan: {
+        inventoryDefinitions: 1,
+        statDefinitions: 2,
+        craftableItems: 1,
+        note: "test"
+      },
+      updatedAt: "2026-06-03T00:00:00.000Z"
+    };
+  },
+  async getPerkWeapons(options: { perks: string[]; weaponType?: string; limit?: number }) {
+    return {
+      perks: options.perks,
+      filters: {
+        weaponType: options.weaponType,
+        limit: options.limit ?? 50
+      },
+      total: 1,
+      matches: [
+        {
+          itemHash: "303",
+          name: "不散恐惧",
+          iconPath: "/common/destiny2_content/icons/smg.jpg",
+          itemTypeDisplayName: "微型冲锋枪",
+          tierTypeName: "传说",
+          bucketName: "动能武器",
+          slotLabel: "动能",
+          damageType: "冰影",
+          ammoType: "主弹药",
+          rpm: 900,
+          source: "来源：地牢",
+          craftable: false,
+          matchedPerks: [
+            { itemHash: "88001", name: "爆破专家", socketIndex: 3, socketLabel: "插槽 4", source: "randomizedPlugSetHash" },
+            { itemHash: "88002", name: "斩首武器", socketIndex: 4, socketLabel: "插槽 5", source: "randomizedPlugSetHash" }
+          ],
+          allRollPerks: [
+            { itemHash: "88001", name: "爆破专家", socketIndex: 3, socketLabel: "插槽 4", source: "randomizedPlugSetHash" },
+            { itemHash: "88002", name: "斩首武器", socketIndex: 4, socketLabel: "插槽 5", source: "randomizedPlugSetHash" }
+          ]
+        }
+      ],
+      scan: {
+        inventoryDefinitions: 1,
+        plugSetDefinitions: 1,
+        craftableItems: 0,
+        note: "test"
+      },
+      updatedAt: "2026-06-03T00:00:00.000Z"
+    };
+  },
+  async getCatalystStatus(_membershipType: number, _membershipId: string, _accessToken: string, query: string) {
+    return {
+      membershipType: 3,
+      membershipId: "4611686018",
+      query,
+      total: 1,
+      totals: { obtained: 1, visible: 1, completed: 0 },
+      matches: [
+        {
+          recordHash: "703",
+          weaponHash: "203",
+          weaponName: "蠕虫低语",
+          catalystName: "蠕虫低语催化",
+          catalystDescription: "使用此武器击败目标以完成催化。",
+          effectDescription: "提高蠕虫低语的装填与精准输出表现。",
+          completionDescription: "使用蠕虫低语击败目标",
+          iconPath: "/common/destiny2_content/icons/whisper.jpg",
+          itemTypeDisplayName: "狙击步枪",
+          slot: "power",
+          slotLabel: "威能武器",
+          obtained: true,
+          visible: true,
+          completed: false,
+          redeemed: false,
+          percent: 24,
+          progress: 120,
+          completionValue: 500,
+          objectives: [{ objectiveHash: "9003", description: "使用蠕虫低语击败目标", progress: 120, completionValue: 500, complete: false }],
+          infoObjectives: [{ objectiveHash: "9003", description: "使用蠕虫低语击败目标", completionValue: 500 }],
+          statusLabel: "已获得 / 进行中",
+          match: { score: 0, reason: "武器名精确匹配" }
+        }
+      ],
+      scan: { candidateRecords: 3, recordsReturned: 1, catalystInfoMatches: 1, note: "test" },
+      updatedAt: "2026-06-03T00:00:00.000Z"
+    };
+  },
   async getPrivateInventory() {
     return {
       qq: "607972716",
@@ -1147,6 +1296,143 @@ describe("Fastify routes", () => {
         totals: { catalysts: 1 },
         groups: [{ key: "power", items: [{ name: "纪念", percent: 50 }] }]
       }
+    });
+    await app.close();
+  });
+
+  it("returns single weapon catalyst status for the QQ OAuth bound membership", async () => {
+    const store = new NullStore();
+    await store.createQqBinding({
+      qq: "607972716",
+      membershipType: 3,
+      membershipId: "4611686018",
+      bungieName: "Guardian#0007",
+      displayName: "Guardian",
+      displayNameCode: 7
+    });
+    await store.upsertQqOAuthToken({
+      qq: "607972716",
+      bungieMembershipId: "4352344",
+      membershipType: 3,
+      membershipId: "4611686018",
+      accessTokenEncrypted: "encrypted-access",
+      accessExpiresAt: new Date(Date.now() + 3600_000).toISOString()
+    });
+    const qqOAuthService = {
+      getValidAccessTokenForQq: vi.fn(async () => "access-token")
+    };
+    const app = await buildApp({
+      config: makeTestConfig(),
+      cache: new MemoryCacheStore(),
+      store,
+      destinyService: fakeDestinyService as never,
+      cardService: fakeCardService as never,
+      qqOAuthService: qqOAuthService as never
+    });
+
+    const response = await app.inject({ method: "GET", url: "/api/d2/catalysts/qq/607972716/item?q=%E8%99%AB%E7%8B%99" });
+    expect(response.statusCode).toBe(200);
+    expect(qqOAuthService.getValidAccessTokenForQq).toHaveBeenCalledWith("607972716");
+    expect(response.json()).toMatchObject({
+      success: true,
+      data: {
+        query: "虫狙",
+        matches: [
+          {
+            weaponName: "蠕虫低语",
+            catalystName: "蠕虫低语催化",
+            obtained: true,
+            completed: false,
+            progress: 120,
+            completionValue: 500,
+            effectDescription: "提高蠕虫低语的装填与精准输出表现。"
+          }
+        ]
+      }
+    });
+    await app.close();
+  });
+
+  it("returns public catalyst effect information without QQ OAuth", async () => {
+    const app = await buildApp({
+      config: makeTestConfig(),
+      cache: new MemoryCacheStore(),
+      store: new NullStore(),
+      destinyService: fakeDestinyService as never,
+      cardService: fakeCardService as never
+    });
+
+    const response = await app.inject({ method: "GET", url: "/api/d2/catalyst-info?q=%E6%8C%BD%E6%AD%8C" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      success: true,
+      data: {
+        query: "挽歌",
+        matches: [{ weaponName: "挽歌", catalystName: "挽歌催化", effectDescription: "增强挽歌的治疗与剑气效果。" }]
+      }
+    });
+    await app.close();
+  });
+
+  it("returns public Manifest item information without QQ OAuth", async () => {
+    const app = await buildApp({
+      config: makeTestConfig(),
+      cache: new MemoryCacheStore(),
+      store: new NullStore(),
+      destinyService: fakeDestinyService as never,
+      cardService: fakeCardService as never
+    });
+
+    const response = await app.inject({ method: "GET", url: "/api/d2/item-info?q=%E6%9E%81%E9%AB%98%E5%8F%8D%E5%B0%84" });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.success).toBe(true);
+    expect(body.data).toMatchObject({
+      query: "极高反射",
+      matches: [
+        {
+          name: "极高反射",
+          itemTypeDisplayName: "手枪",
+          slotLabel: "动能",
+          damageType: "动能"
+        }
+      ]
+    });
+    expect(body.data.matches[0].stats).toEqual(expect.arrayContaining([expect.objectContaining({ name: "每分钟发射数", value: 491 })]));
+    await app.close();
+  });
+
+  it("returns public Perk weapon roll-pool matches without QQ OAuth", async () => {
+    const app = await buildApp({
+      config: makeTestConfig(),
+      cache: new MemoryCacheStore(),
+      store: new NullStore(),
+      destinyService: fakeDestinyService as never,
+      cardService: fakeCardService as never
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/d2/perk-weapons?perks=%E7%88%86%E7%A0%B4%E4%B8%93%E5%AE%B6,%E6%96%A9%E9%A6%96%E6%AD%A6%E5%99%A8&weaponType=%E5%86%B2%E9%94%8B%E6%9E%AA&limit=50"
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.success).toBe(true);
+    expect(body.data).toMatchObject({
+      perks: ["爆破专家", "斩首武器"],
+      filters: { weaponType: "冲锋枪", limit: 50 },
+      total: 1,
+      matches: [
+        {
+          name: "不散恐惧",
+          itemTypeDisplayName: "微型冲锋枪",
+          rpm: 900,
+          matchedPerks: [
+            { name: "爆破专家" },
+            { name: "斩首武器" }
+          ]
+        }
+      ]
     });
     await app.close();
   });

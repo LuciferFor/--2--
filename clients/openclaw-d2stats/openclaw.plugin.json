@@ -1,19 +1,21 @@
 {
   "id": "d2stats",
   "name": "Destiny 2 Stats",
-  "description": "Query Destiny 2 public JSON data, render HTML cards inside OpenClaw, and return PNG images.",
+  "description": "Query Destiny 2 public JSON data, Manifest item/perk data, render HTML cards inside OpenClaw, and return PNG images.",
   "version": "0.1.0",
   "activation": {
     "onStartup": true
   },
   "contracts": {
     "tools": [
+      "destiny2_command",
       "destiny2_card_query",
       "destiny2_bind_qq",
       "destiny2_inventory_query",
       "destiny2_item_action",
       "destiny2_loadout_optimize",
-      "destiny2_loadout_apply"
+      "destiny2_loadout_apply",
+      "destiny2_loadout_manage"
     ]
   },
   "configSchema": {
@@ -46,6 +48,10 @@
           "weapons",
           "crafting",
           "catalysts",
+          "catalyst_status",
+          "catalyst_info",
+          "item_info",
+          "perk_weapons",
           "grandmasters",
           "raid_overview",
           "dungeon_overview",

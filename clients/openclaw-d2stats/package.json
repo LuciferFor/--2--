@@ -7,7 +7,13 @@
   "exports": {
     ".": "./index.mjs",
     "./core": "./lib/core.mjs",
-    "./runtime": "./lib/runtime.mjs"
+    "./runtime": "./lib/runtime.mjs",
+    "./commands": "./lib/commands.cjs",
+    "./command-gateway": "./lib/command-gateway.mjs"
+  },
+  "bin": {
+    "d2stats": "./bin/d2stats.mjs",
+    "d2stats-command": "./bin/d2stats-command-server.mjs"
   },
   "openclaw": {
     "extensions": [
@@ -19,9 +25,13 @@
     }
   },
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "command:serve": "node ./bin/d2stats-command-server.mjs"
   },
   "engines": {
     "node": ">=22.0.0"
+  },
+  "dependencies": {
+    "playwright": "^1.60.0"
   }
 }

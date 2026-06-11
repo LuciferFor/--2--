@@ -1,7 +1,10 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+const require = createRequire(import.meta.url);
 
 const MODES = new Set(["all", "raid", "dungeon", "trials", "pvp", "gambit"]);
 const CARDS = new Set([
@@ -14,6 +17,10 @@ const CARDS = new Set([
   "weapons",
   "crafting",
   "catalysts",
+  "catalyst_status",
+  "catalyst_info",
+  "item_info",
+  "perk_weapons",
   "grandmasters",
   "raid_overview",
   "dungeon_overview",
@@ -163,6 +170,42 @@ export function buildPublicDataUrl(kind, target, params = {}, config = resolveCo
     return `${config.baseUrl}/api/d2/catalysts/qq/${encodeURIComponent(qq)}`;
   }
 
+  if (kind === "catalyst_status") {
+    const qq = String(target?.qq || params.qq || "").trim();
+    if (!/^[0-9]{5,15}$/u.test(qq)) {
+      throw new D2StatsInputError("单武器催化状态需要 QQ OAuth 授权，请用已绑定 QQ 查询。");
+    }
+    const q = catalystInfoQueryFromParams(params);
+    query.set("q", q);
+    return `${config.baseUrl}/api/d2/catalysts/qq/${encodeURIComponent(qq)}/item?${query.toString()}`;
+  }
+
+  if (kind === "catalyst_info") {
+    const q = catalystInfoQueryFromParams(params);
+    query.set("q", q);
+    return `${config.baseUrl}/api/d2/catalyst-info?${query.toString()}`;
+  }
+
+  if (kind === "item_info") {
+    const q = itemInfoQueryFromParams(params);
+    query.set("q", q);
+    if (params.limit !== undefined) query.set("limit", String(clampInteger(params.limit, 6, 1, 12)));
+    return `${config.baseUrl}/api/d2/item-info?${query.toString()}`;
+  }
+
+  if (kind === "perk_weapons") {
+    const perkParams = perkWeaponsQueryFromParams(params);
+    query.set("perks", perkParams.perks.join(","));
+    if (perkParams.weaponType) query.set("weaponType", perkParams.weaponType);
+    if (perkParams.slot) query.set("slot", perkParams.slot);
+    if (perkParams.damageType) query.set("damageType", perkParams.damageType);
+    if (perkParams.rpm) query.set("rpm", String(perkParams.rpm));
+    if (perkParams.craftable !== undefined) query.set("craftable", String(perkParams.craftable));
+    if (perkParams.query) query.set("query", perkParams.query);
+    query.set("limit", String(clampInteger(perkParams.limit, 50, 1, 200)));
+    return `${config.baseUrl}/api/d2/perk-weapons?${query.toString()}`;
+  }
+
   if (kind === "activities") {
     query.set("mode", normalizeMode(params.mode, config.defaultMode));
     query.set("count", String(clampInteger(params.count, 1, 1, 50)));
@@ -264,9 +307,27 @@ function buildInventoryActionUrl(qq, action, config = resolveConfig()) {
   throw new D2StatsInputError("不支持的装备操作。");
 }
 
+function buildLoadoutManageUrl(qq, operation, params = {}, config = resolveConfig()) {
+  const base = `${config.baseUrl}/api/d2`;
+  const encodedQq = encodeURIComponent(qq);
+  const idOrName = encodeURIComponent(String(params.savedLoadoutId || params.idOrName || params.name || "").trim());
+  if (operation === "list") return `${base}/loadouts/qq/${encodedQq}`;
+  if (operation === "show") {
+    return idOrName ? `${base}/saved-loadouts/qq/${encodedQq}/${idOrName}` : `${base}/loadouts/qq/${encodedQq}`;
+  }
+  if (operation === "equip_bungie") return `${base}/loadouts/qq/${encodedQq}/equip`;
+  if (operation === "snapshot_bungie") return `${base}/loadouts/qq/${encodedQq}/snapshot`;
+  if (operation === "rename_bungie") return `${base}/loadouts/qq/${encodedQq}/update-identifiers`;
+  if (operation === "clear_bungie") return `${base}/loadouts/qq/${encodedQq}/clear`;
+  if (operation === "save_local") return `${base}/saved-loadouts/qq/${encodedQq}`;
+  if (operation === "apply_local") return `${base}/saved-loadouts/qq/${encodedQq}/${idOrName}/apply`;
+  if (operation === "delete_local") return `${base}/saved-loadouts/qq/${encodedQq}/${idOrName}`;
+  throw new D2StatsInputError("不支持的配装操作。");
+}
+
 export async function queryCard(params = {}, rawConfig = {}, options = {}) {
   const config = resolveConfig(rawConfig);
-  const normalizedParams = normalizeCardParams(params);
+  const normalizedParams = normalizePublicCommandCardParams(normalizeCardParams(params));
   if (!config.enabled) {
     return textResult("命运2查询工具当前未启用。", { status: "disabled" });
   }
@@ -361,6 +422,161 @@ function normalizeCardParams(params = {}) {
     }
   }
   return normalized;
+}
+
+function normalizePublicCommandCardParams(params = {}) {
+  if (params.card || !params.command) {
+    return params;
+  }
+  try {
+    const commands = require("./commands.cjs");
+    const invocation = commands.buildCommandInvocationFromText?.({ user_id: qqInputFromParams(params) }, String(params.command || ""));
+    if (!invocation || !["catalyst_info", "item_info", "perk_weapons"].includes(invocation.card)) {
+      return params;
+    }
+    return {
+      ...params,
+      ...(invocation.params || {}),
+      card: invocation.card,
+      target: invocation.target || params.target || "",
+    };
+  } catch {
+    return params;
+  }
+}
+
+function catalystInfoQueryFromParams(params = {}) {
+  const raw = String(params.q || params.query || params.weaponName || params.weapon || params.command || "").trim();
+  const cleaned = cleanCatalystInfoQuery(raw);
+  if (!cleaned) {
+    throw new D2StatsInputError("催化效果查询需要武器名，例如：查挽歌的催化效果。");
+  }
+  return cleaned;
+}
+
+function itemInfoQueryFromParams(params = {}) {
+  const raw = String(params.q || params.query || params.item || params.weaponName || params.weapon || params.command || "").trim();
+  const cleaned = cleanItemInfoQuery(raw);
+  if (!cleaned) {
+    throw new D2StatsInputError("武器资料查询需要物品名，例如：查个武器，极高反射。");
+  }
+  return cleaned;
+}
+
+function perkWeaponsQueryFromParams(params = {}) {
+  const explicitPerks = params.perks ?? params.perk ?? params.q ?? params.query;
+  const inferred = explicitPerks === undefined ? inferPerkWeaponsFromCommand(params.command) : {};
+  const rawPerks = explicitPerks ?? inferred.perks ?? params.command ?? "";
+  const perks = normalizePerkWeaponsPerks(rawPerks);
+  if (!perks.length) {
+    throw new D2StatsInputError("Perk 反查需要至少一个 Perk，例如：/perk查询 爆破专家,斩首武器。");
+  }
+  return {
+    perks,
+    weaponType: cleanPerkWeaponsFilter(params.weaponType || params.weapon_type || params.type || inferred.weaponType),
+    slot: cleanPerkWeaponsFilter(params.slot),
+    damageType: cleanPerkWeaponsFilter(params.damageType || params.damage_type || params.damage),
+    rpm: clampInteger(params.rpm, 0, 0, 2000) || undefined,
+    craftable: booleanFromParam(params.craftable),
+    query: cleanPerkWeaponsFilter(params.filter || params.itemQuery),
+    limit: clampInteger(params.limit, 50, 1, 200),
+  };
+}
+
+function inferPerkWeaponsFromCommand(command) {
+  const text = String(command || "");
+  if (!text || /我的|仓库|背包|身上|当前装备|已装备/u.test(text)) {
+    return {};
+  }
+  const knownPerks = ["爆破专家", "斩首武器", "辉耀炽热", "萤火虫", "蜻蜓", "狂乱", "重建", "重组", "维持生计", "快速命中", "滑射", "首发射击", "精准连击", "不法之徒", "杀戮弹匣", "多杀弹匣", "肾上腺素成瘾", "泉源", "渗透", "诱导推销", "嫉妒刺客", "切勿靠近", "禅意时刻", "测距仪", "风暴之眼", "移动目标", "自动装填枪套", "丰盈满溢", "金中藏弹", "冰冷弹匣", "伏特子弹", "失衡弹药", "动能震颤"];
+  const weaponTypes = [
+    ["冲锋枪", ["冲锋枪", "微冲", "微型冲锋枪", "smg"]],
+    ["手炮", ["手炮", "hc", "hand cannon", "handcannon"]],
+    ["霰弹枪", ["霰弹枪", "喷子", "shotgun"]],
+    ["自动步枪", ["自动步枪", "自动", "auto rifle", "autorifle"]],
+    ["脉冲步枪", ["脉冲步枪", "脉冲", "pulse rifle", "pulse"]],
+    ["斥候步枪", ["斥候步枪", "斥候", "scout rifle", "scout"]],
+    ["狙击步枪", ["狙击步枪", "狙击", "sniper rifle", "sniper"]],
+    ["融合步枪", ["融合步枪", "融合", "fusion rifle", "fusion"]],
+    ["线性融合步枪", ["线性融合步枪", "线融", "linear fusion", "linear"]],
+    ["榴弹发射器", ["榴弹发射器", "榴弹", "grenade launcher", "gl"]],
+    ["火箭发射器", ["火箭发射器", "火箭", "筒子", "rocket launcher", "rocket"]],
+    ["机枪", ["机枪", "machine gun", "mg"]],
+    ["剑", ["剑", "刀剑", "sword"]],
+    ["弓", ["弓", "bow"]],
+    ["手枪", ["手枪", "sidearm"]],
+  ];
+  const lower = text.toLowerCase();
+  const perks = knownPerks.filter((perk) => text.includes(perk));
+  const weaponType = weaponTypes.find(([, aliases]) => aliases.some((alias) => lower.includes(String(alias).toLowerCase())))?.[0];
+  return {
+    ...(perks.length ? { perks } : {}),
+    ...(weaponType ? { weaponType } : {}),
+  };
+}
+
+function normalizePerkWeaponsPerks(value) {
+  const raw = Array.isArray(value) ? value : String(value || "").split(/[,，、+＋&＆/|]|(?:\s+(?:和|与|以及)\s*)/gu);
+  const seen = new Set();
+  const result = [];
+  for (const item of raw) {
+    const cleaned = cleanPerkWeaponsFilter(item);
+    if (!cleaned) continue;
+    const key = cleaned.replace(/\s+/gu, "").toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(cleaned);
+  }
+  return result;
+}
+
+function cleanPerkWeaponsFilter(value) {
+  return String(value || "")
+    .replace(/^\/+/u, "")
+    .replace(/(@\S+\s*)+/gu, " ")
+    .replace(/^[\s:：,，、+＋&＆/|]+|[\s:：,，、+＋&＆/|]+$/gu, "")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function booleanFromParam(value) {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value === "boolean") return value;
+  const text = String(value).trim().toLowerCase();
+  if (["true", "1", "yes", "on", "可锻造", "是"].includes(text)) return true;
+  if (["false", "0", "no", "off", "不可锻造", "否"].includes(text)) return false;
+  return undefined;
+}
+
+function cleanCatalystInfoQuery(value) {
+  return String(value || "")
+    .replace(/^\/+/u, "")
+    .replace(/(@\S+\s*)+/gu, " ")
+    .replace(/催化剂|催化效果|催化进度|催化|效果|查询一下|查询下|查询|查一下|查下|查看|帮我查|帮忙查|看一下|看下|看看|查|我需要|需要|我的|我|有没有|有没|是否|是什么|什么|的|命运2|destiny\s*2|d2/giu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function cleanItemInfoQuery(value) {
+  return String(value || "")
+    .replace(/^\/+/u, "")
+    .replace(/(@\S+\s*)+/gu, " ")
+    .replace(/命运2|destiny\s*2|destiny2|d2stats|d2|查个武器|武器查询|查武器|武器资料|物品查询|查询一下|查询下|查询|查一下|查一查|查下|查看|帮我查|帮忙查|看一下|看下|看看|查|我需要|需要|这个|一下|一个|的|perk|perks|来源|出处|怎么获取|哪里出|怎么得|如何获得|是什么武器|是什么|什么|好不好用|好用吗|评价|资料/giu, " ")
+    .replace(/[，,：:、。？?！!；;]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function inferCatalystCardFromCommand(command) {
+  const value = String(command || "");
+  const q = cleanCatalystInfoQuery(value);
+  if (/^\/?\s*催化\s*$/u.test(value) || (!q && /我的|账号|帳號|进度|進度|完成|状态|狀態|全量|全部|所有|列表|qq|oauth/iu.test(value))) {
+    return "catalysts";
+  }
+  if (q && /效果|是什么|什麼|说明|介紹|介绍/iu.test(value) && !/我的|账号|帳號|进度|進度|完成|获得|獲得|有没有|有没|状态|狀態/iu.test(value)) {
+    return "catalyst_info";
+  }
+  return q ? "catalyst_status" : "catalysts";
 }
 
 function targetInputFromParams(params = {}) {
@@ -742,6 +958,127 @@ export async function applyLoadoutOptimizer(params = {}, rawConfig = {}, options
       });
     }
     return textResult(`应用配装失败：${error?.message || "未知错误"}`, {
+      status: "failed",
+      error: String(error?.stack || error),
+    });
+  }
+}
+
+export async function manageLoadouts(params = {}, rawConfig = {}, options = {}) {
+  const config = resolveConfig(rawConfig);
+  if (!config.enabled) {
+    return textResult("命运2查询工具当前未启用。", { status: "disabled" });
+  }
+  let target;
+  try {
+    target = parseTarget(targetInputFromParams(params), config);
+  } catch (error) {
+    if (error instanceof D2StatsInputError) {
+      return textResult(error.message, { status: "invalid_input" });
+    }
+    throw error;
+  }
+  if (target.kind !== "qq") {
+    return textResult("配装读取、保存和装备只能使用本人 QQ OAuth 授权。", { status: "qq_required" });
+  }
+  const operation = normalizeLoadoutManageOperation(params.operation || params.action || params.command);
+  try {
+    const resolved = await withCardIdentity(await resolveTargetMembership(target.qq, config, options), config, options);
+    if (operation === "list" || operation === "show") {
+      const sourceUrl = buildLoadoutManageUrl(target.qq, operation, params, config);
+      const data = await fetchEnvelope(sourceUrl, config, options);
+      const loadouts = operation === "show" && !Array.isArray(data?.loadouts)
+        ? {
+            qq: target.qq,
+            membershipType: resolved.membershipType,
+            membershipId: resolved.membershipId,
+            characters: [],
+            loadouts: [],
+            savedLoadouts: [data],
+            updatedAt: data.updatedAt
+          }
+        : data;
+      const html = renderLoadoutManageHtml(resolved.player, loadouts);
+      const png = await renderHtmlToPng(html, {
+        width: CARD_WIDTH,
+        height: estimateLoadoutManageHeight(loadouts),
+        signal: options.signal,
+        renderer: options.renderHtmlToPng,
+      });
+      const shareResult = await maybeShareImages({
+        config,
+        options,
+        card: "loadout_manage",
+        sourceUrl,
+        title: "Destiny 2 配装列表",
+        description: "配装列表较大，已生成网页方便查看。",
+        images: [
+          {
+            base64: png.toString("base64"),
+            mimeType: "image/png",
+            bytes: png.length,
+            html,
+            caption: "配装列表",
+          },
+        ],
+      });
+      if (shareResult) {
+        return shareResult;
+      }
+      return imageResult({
+        label: "Destiny 2 loadouts",
+        path: sourceUrl,
+        base64: png.toString("base64"),
+        mimeType: "image/png",
+        details: {
+          status: "ok",
+          card: "loadout_manage",
+          operation,
+          bytes: png.length,
+          sourceUrl,
+          renderedBy: "openclaw-html",
+        },
+      });
+    }
+
+    const body = buildLoadoutManageBody(operation, params);
+    if (params.confirm !== true) {
+      return textResult(loadoutManageConfirmationMessage(operation, body), {
+        status: "confirmation_required",
+        qq: target.qq,
+        operation,
+        body,
+      });
+    }
+    const url = buildLoadoutManageUrl(target.qq, operation, params, config);
+    const data = operation === "delete_local"
+      ? await deleteEnvelope(url, { confirm: true }, config, options)
+      : await postEnvelope(url, { ...body, confirm: true }, config, options);
+    return textResult(loadoutManageSuccessMessage(operation, data), {
+      status: "ok",
+      operation,
+      result: data,
+      url,
+    });
+  } catch (error) {
+    if (error instanceof D2StatsBackendError && (error.status === 401 || error.status === 403 || error.status === 404)) {
+      return startQqOauthBinding(target.qq, config, options);
+    }
+    if (error instanceof D2StatsInputError) {
+      if (isQqOauthBindingMessage(error.message)) {
+        return textResult(error.message, { status: "ok", kind: "oauth_bind_link", qq: target.qq });
+      }
+      return textResult(error.message, { status: "invalid_input" });
+    }
+    if (error instanceof D2StatsBackendError) {
+      return textResult(formatBackendError(error.payload, error.status), {
+        status: "failed",
+        httpStatus: error.status,
+        url: error.url,
+        error: error.payload,
+      });
+    }
+    return textResult(`配装操作失败：${error?.message || "未知错误"}`, {
       status: "failed",
       error: String(error?.stack || error),
     });
@@ -1199,6 +1536,63 @@ async function renderCardFromPublicJson(card, params, config, options) {
     };
   }
 
+  if (card === "catalyst_info") {
+    const sourceUrl = buildPublicDataUrl("catalyst_info", undefined, params, config);
+    const catalystInfo = await fetchEnvelope(sourceUrl, config, options);
+    return {
+      width: HEATMAP_CARD_WIDTH,
+      height: estimateCatalystInfoHeight(catalystInfo),
+      sourceUrl,
+      html: renderCatalystInfoHtml(catalystInfo),
+    };
+  }
+
+  if (card === "item_info") {
+    const sourceUrl = buildPublicDataUrl("item_info", undefined, params, config);
+    const itemInfo = await fetchEnvelope(sourceUrl, config, options);
+    return {
+      width: HEATMAP_CARD_WIDTH,
+      height: estimateItemInfoHeight(itemInfo),
+      sourceUrl,
+      html: renderItemInfoHtml(itemInfo),
+    };
+  }
+
+  if (card === "perk_weapons") {
+    const sourceUrl = buildPublicDataUrl("perk_weapons", undefined, params, config);
+    const perkWeapons = await fetchEnvelope(sourceUrl, config, options);
+    return {
+      width: HEATMAP_CARD_WIDTH,
+      height: estimatePerkWeaponsHeight(perkWeapons),
+      sourceUrl,
+      html: renderPerkWeaponsHtml(perkWeapons),
+    };
+  }
+
+  if (card === "catalyst_status") {
+    const target = parseTarget(params.target, config);
+    if (target.kind !== "qq") {
+      throw new D2StatsInputError("单武器催化状态需要 QQ OAuth 授权，请用已绑定 QQ 查询。");
+    }
+    const resolved = await withCardIdentity(await resolveTargetMembership(params.target, config, options), config, options);
+    const sourceUrl = buildPublicDataUrl("catalyst_status", target, params, config);
+    let catalystStatus;
+    try {
+      catalystStatus = await fetchEnvelope(sourceUrl, config, options);
+    } catch (error) {
+      if (error instanceof D2StatsBackendError && (error.status === 401 || error.status === 403 || error.status === 404)) {
+        throw new D2StatsInputError(await startQqOauthBindingMessage(target.qq, config, options));
+      }
+      throw error;
+    }
+    return {
+      width: HEATMAP_CARD_WIDTH,
+      height: estimateCatalystStatusHeight(catalystStatus),
+      sourceUrl,
+      html: renderCatalystStatusHtml(resolved.player, catalystStatus),
+    };
+  }
+
   if (card === "catalysts") {
     const target = parseTarget(params.target, config);
     if (target.kind !== "qq") {
@@ -1458,6 +1852,22 @@ async function postEnvelope(url, body, config, options = {}) {
   return payload?.data ?? payload;
 }
 
+async function deleteEnvelope(url, body, config, options = {}) {
+  const response = await fetchWithTimeout(url, {
+    method: "DELETE",
+    timeoutMs: config.timeoutMs,
+    signal: options.signal,
+    fetchImpl: options.fetchImpl,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = await safeJson(response);
+  if (!response.ok || payload?.success === false) {
+    throw new D2StatsBackendError(payload, response.status, url);
+  }
+  return payload?.data ?? payload;
+}
+
 async function startQqOauthBinding(qq, config, options = {}) {
   try {
     const message = await startQqOauthBindingMessage(qq, config, options);
@@ -1575,7 +1985,24 @@ async function loadChromium() {
   } catch {
     const { createRequire } = await import("node:module");
     const require = createRequire(import.meta.url);
-    return require("/app/node_modules/playwright").chromium;
+    const candidates = [
+      "playwright",
+      `${process.cwd()}/node_modules/playwright`,
+      "/home/lucifer/.openclaw/plugins/d2stats/node_modules/playwright",
+      "/home/node/.openclaw/plugins/d2stats/node_modules/playwright",
+      "/home/lucifer/.openclaw/workspace/node_modules/playwright",
+      "/home/node/.openclaw/workspace/node_modules/playwright",
+      "/app/node_modules/playwright",
+    ];
+    const errors = [];
+    for (const candidate of candidates) {
+      try {
+        return require(candidate).chromium;
+      } catch (error) {
+        errors.push(`${candidate}: ${error?.message || error}`);
+      }
+    }
+    throw new Error(`Cannot load playwright chromium. Tried: ${errors.join("; ")}`);
   }
 }
 
@@ -2252,6 +2679,127 @@ function renderLoadoutOptimizerHtml(player, optimizer) {
       ${membershipBlock(optimizer?.membershipType, optimizer?.membershipId)}
     `,
   });
+}
+
+function renderLoadoutManageHtml(player, loadouts) {
+  const bungieLoadouts = Array.isArray(loadouts?.loadouts) ? loadouts.loadouts : [];
+  const savedLoadouts = Array.isArray(loadouts?.savedLoadouts)
+    ? loadouts.savedLoadouts
+    : Array.isArray(loadouts?.items)
+      ? loadouts.items
+      : [];
+  const characters = Array.isArray(loadouts?.characters) ? loadouts.characters : [];
+  const grouped = characters.length
+    ? characters.map((character) => ({
+        character,
+        loadouts: bungieLoadouts.filter((loadout) => String(loadout?.characterId || "") === String(character.characterId || "")),
+        saved: savedLoadouts.filter((loadout) => !loadout?.characterId || String(loadout.characterId) === String(character.characterId || "")),
+      }))
+    : [{ character: { className: "角色", characterId: "" }, loadouts: bungieLoadouts, saved: savedLoadouts }];
+  return cardPage({
+    width: CARD_WIDTH,
+    player,
+    title: formatPlayerName(player),
+    eyebrow: "DESTINY 2 LOADOUTS",
+    subtitle: `读取配装 · ${dateOnly(loadouts?.updatedAt || new Date().toISOString())}`,
+    body: `
+      <section class="metrics metrics-4">
+        ${metric("角色", int(characters.length))}
+        ${metric("游戏内槽位", int(bungieLoadouts.length))}
+        ${metric("本地保存", int(savedLoadouts.length))}
+        ${metric("可应用", int(savedLoadouts.filter((entry) => Number(entry?.itemCount || 0) > 0).length))}
+      </section>
+      <section class="loadout-sections">
+        ${grouped.map(loadoutCharacterSectionHtml).join("")}
+        ${!bungieLoadouts.length && !savedLoadouts.length ? emptyState("还没有读取到游戏内 Loadout 或本地保存配装。") : ""}
+      </section>
+      <footer class="card-footer">游戏内槽位由 Bungie Loadout API 读取；本地保存配装只会自动换物品，模组、碎片、皮肤和染色请手动调整。</footer>
+      ${membershipBlock(loadouts?.membershipType || player?.membershipType, loadouts?.membershipId || player?.membershipId)}
+    `,
+  });
+}
+
+function loadoutCharacterSectionHtml(group) {
+  const character = group.character || {};
+  return `
+    <section class="loadout-character-section">
+      <div class="loadout-character-head">
+        <strong>${escapeHtml(displayClassName(character))}</strong>
+        <span>${character?.light ? `光等 ${int(character.light)}` : ""}${character?.dateLastPlayed ? ` · 最后在线 ${dateOnly(character.dateLastPlayed)}` : ""}</span>
+        ${character?.characterId ? `<b>${escapeHtml(character.characterId)}</b>` : ""}
+      </div>
+      <div class="loadout-dual-grid">
+        <div class="loadout-panel">
+          <h2>游戏内 Loadout 槽位</h2>
+          <div class="loadout-slot-grid">
+            ${(group.loadouts || []).map(bungieLoadoutCardHtml).join("") || emptyState("这个角色没有可显示的游戏内 Loadout。")}
+          </div>
+        </div>
+        <div class="loadout-panel">
+          <h2>本地保存配装</h2>
+          <div class="saved-loadout-grid">
+            ${(group.saved || []).map(savedLoadoutCardHtml).join("") || emptyState("这个角色还没有本地保存配装。")}
+          </div>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function bungieLoadoutCardHtml(loadout) {
+  return `
+    <article class="loadout-slot-card">
+      <div>
+        <strong>#${int(Number(loadout?.index || 0) + 1)} ${escapeHtml(loadout?.name || "未命名 Loadout")}</strong>
+        <span>${int(loadout?.itemCount)} 件物品</span>
+      </div>
+      <b>index ${int(loadout?.index)}</b>
+      <small>${[
+        loadout?.nameHash ? `nameHash ${loadout.nameHash}` : "",
+        loadout?.iconHash ? `iconHash ${loadout.iconHash}` : "",
+        loadout?.colorHash ? `colorHash ${loadout.colorHash}` : "",
+      ].filter(Boolean).join(" · ") || "可装备 / 保存 / 清空"}</small>
+    </article>
+  `;
+}
+
+function savedLoadoutCardHtml(loadout) {
+  const items = Array.isArray(loadout?.items) ? loadout.items : [];
+  const preview = items.slice(0, 10);
+  return `
+    <article class="saved-loadout-card">
+      <div class="saved-loadout-title">
+        <div>
+          <strong>${escapeHtml(loadout?.name || "未命名配装")}</strong>
+          <span>${escapeHtml([loadout?.className, sourceLabel(loadout?.source), `${int(loadout?.itemCount ?? items.length)} 件`].filter(Boolean).join(" · "))}</span>
+        </div>
+        <b>#${int(loadout?.id)}</b>
+      </div>
+      <div class="saved-loadout-items">
+        ${preview.map(loadoutItemIconHtml).join("")}
+        ${items.length > preview.length ? `<i>+${int(items.length - preview.length)}</i>` : ""}
+      </div>
+      ${loadout?.notes ? `<p>${escapeHtml(loadout.notes)}</p>` : ""}
+      <small>${[
+        loadout?.characterId ? `characterId ${loadout.characterId}` : "",
+        loadout?.lastAppliedAt ? `上次应用 ${dateOnly(loadout.lastAppliedAt)}` : "",
+        loadout?.updatedAt ? `更新 ${dateOnly(loadout.updatedAt)}` : "",
+      ].filter(Boolean).join(" · ")}</small>
+    </article>
+  `;
+}
+
+function loadoutItemIconHtml(item) {
+  const iconUrl = item?.iconPath ? bungieAssetUrl(item.iconPath) : "";
+  return `<span class="loadout-item-icon ${iconUrl ? "" : "empty"}" title="${escapeHtml(item?.name || "")}">${iconUrl ? `<img src="${escapeHtml(iconUrl)}" />` : "?"}</span>`;
+}
+
+function sourceLabel(source) {
+  const text = String(source || "").trim();
+  if (text === "current_equipped") return "当前装备";
+  if (text === "optimizer") return "配装器";
+  if (text === "bungie_slot") return "游戏内槽位";
+  return text || "本地";
 }
 
 function renderOptimizerBuild(build, optimizer) {
@@ -2936,6 +3484,316 @@ function craftingIconHtml(item) {
   `;
 }
 
+function renderCatalystInfoHtml(catalystInfo) {
+  const matches = Array.isArray(catalystInfo?.matches) ? catalystInfo.matches : [];
+  const title =
+    matches.length === 1 ? matches[0]?.weaponName || catalystInfo?.query || "催化效果" : `${catalystInfo?.query || "催化"} 催化效果`;
+  return cardPage({
+    width: HEATMAP_CARD_WIDTH,
+    title,
+    eyebrow: "DESTINY 2 CATALYST INFO",
+    subtitle: `公开 Manifest · ${dateOnly(catalystInfo?.updatedAt)}`,
+    body: `
+      <section class="metrics metrics-3">
+        ${metric("匹配", int(catalystInfo?.total ?? matches.length))}
+        ${metric("Record", int(catalystInfo?.scan?.candidateRecords))}
+        ${metric("来源", "Manifest")}
+      </section>
+      <section class="catalyst-info-list">
+        ${matches.map((item) => renderCatalystInfoItem(item)).join("") || emptyState(`未在 Manifest 找到 ${catalystInfo?.query || ""} 的催化。`)}
+      </section>
+      <footer class="card-footer">${escapeHtml(catalystInfo?.scan?.note || "催化效果来自公开 Manifest，不代表玩家个人完成进度。")}</footer>
+    `,
+  });
+}
+
+function renderCatalystInfoItem(item) {
+  const objectives = Array.isArray(item?.objectives) ? item.objectives : [];
+  const effect = item?.effectDescription || item?.catalystDescription || "Manifest 没有提供可显示的催化效果说明。";
+  const completion = item?.completionDescription || objectives.map((objective) => objective?.description).filter(Boolean).join("；");
+  return `
+    <article class="catalyst-info-item">
+      ${catalystIconHtml({ iconPath: item?.iconPath })}
+      <div class="catalyst-info-main">
+        <div class="catalyst-title-row">
+          <strong>${escapeHtml(item?.weaponName || "Unknown")}</strong>
+          ${badge(item?.slotLabel || "催化", "info")}
+        </div>
+        <span>${escapeHtml([item?.catalystName, item?.itemTypeDisplayName].filter(Boolean).join(" · ") || "催化记录")}</span>
+        <div class="catalyst-info-block">
+          <b>催化效果</b>
+          <p>${escapeHtml(effect)}</p>
+        </div>
+        <div class="catalyst-info-block">
+          <b>完成目标</b>
+          <p>${escapeHtml(completion || "Manifest 未提供明确目标。")}</p>
+          ${objectives.length ? `<div class="objective-chips">${objectives.map(catalystObjectiveChip).join("")}</div>` : ""}
+        </div>
+        <em>${escapeHtml(item?.match?.reason || "Manifest 匹配")} · Record ${escapeHtml(item?.recordHash || "-")}</em>
+      </div>
+    </article>
+  `;
+}
+
+function renderItemInfoHtml(itemInfo) {
+  const matches = Array.isArray(itemInfo?.matches) ? itemInfo.matches : [];
+  const title = matches.length === 1 ? matches[0]?.name || itemInfo?.query || "武器资料" : `${itemInfo?.query || "武器"} 资料`;
+  return cardPage({
+    width: HEATMAP_CARD_WIDTH,
+    title,
+    eyebrow: "DESTINY 2 ITEM INFO",
+    subtitle: `公开 Manifest · ${dateOnly(itemInfo?.updatedAt)}`,
+    body: `
+      <section class="metrics metrics-4">
+        ${metric("匹配", int(itemInfo?.total ?? matches.length))}
+        ${metric("物品定义", int(itemInfo?.scan?.inventoryDefinitions))}
+        ${metric("可锻造", int(itemInfo?.scan?.craftableItems))}
+        ${metric("来源", "Manifest")}
+      </section>
+      <section class="catalyst-info-list">
+        ${matches.map((item) => renderItemInfoItem(item)).join("") || emptyState(`未在 Manifest 找到 ${itemInfo?.query || ""}。`)}
+      </section>
+      <footer class="card-footer">${escapeHtml(itemInfo?.scan?.note || "武器/物品详情来自 Bungie Manifest 本地缓存。")}</footer>
+    `,
+  });
+}
+
+function renderItemInfoItem(item) {
+  const stats = Array.isArray(item?.stats) ? item.stats : [];
+  const perks = Array.isArray(item?.perks) ? item.perks : [];
+  const source = item?.source || "Manifest 未提供明确来源。";
+  const catalyst = item?.catalyst;
+  const meta = [item?.tierTypeName, item?.itemTypeDisplayName, item?.slotLabel, item?.damageType, item?.ammoType].filter(Boolean);
+  return `
+    <article class="catalyst-info-item">
+      ${itemInfoIconHtml(item)}
+      <div class="catalyst-info-main">
+        <div class="catalyst-title-row">
+          <strong>${escapeHtml(item?.name || "Unknown")}</strong>
+          ${item?.craftable ? badge("可锻造", "ok") : ""}
+          ${catalyst ? badge("有催化", "info") : ""}
+        </div>
+        <span>${escapeHtml(meta.join(" · ") || "物品定义")}</span>
+        ${item?.description ? `<em>${escapeHtml(shortText(item.description, 120))}</em>` : ""}
+        <div class="catalyst-info-block">
+          <b>关键属性</b>
+          ${stats.length ? `<div class="objective-chips">${stats.map((stat) => `<span>${escapeHtml(stat?.name || stat?.hash || "属性")} · ${int(stat?.value)}</span>`).join("")}</div>` : `<p>Manifest 未提供可显示属性。</p>`}
+        </div>
+        <div class="catalyst-info-block">
+          <b>框架 / Perk</b>
+          ${perks.length ? `<div class="objective-chips">${perks.map(itemInfoPerkChip).join("")}</div>` : `<p>Manifest 未提供可显示 Perk。</p>`}
+        </div>
+        <div class="catalyst-info-block">
+          <b>来源</b>
+          <p>${escapeHtml(source)}</p>
+        </div>
+        ${
+          catalyst
+            ? `<div class="catalyst-info-block">
+                <b>催化提示</b>
+                <p>${escapeHtml([catalyst.catalystName, catalyst.effectDescription, catalyst.completionDescription].filter(Boolean).join(" · "))}</p>
+              </div>`
+            : ""
+        }
+        <em>${escapeHtml(item?.match?.reason || "Manifest 匹配")} · Item ${escapeHtml(item?.itemHash || "-")}</em>
+      </div>
+    </article>
+  `;
+}
+
+function renderPerkWeaponsHtml(perkWeapons) {
+  const matches = Array.isArray(perkWeapons?.matches) ? perkWeapons.matches : [];
+  const perks = Array.isArray(perkWeapons?.perks) ? perkWeapons.perks : [];
+  const filters = perkWeapons?.filters || {};
+  const filterLabels = [
+    filters.weaponType,
+    filters.slot,
+    filters.damageType,
+    filters.rpm ? `${filters.rpm} RPM` : "",
+    filters.craftable === true ? "可锻造" : filters.craftable === false ? "不可锻造" : "",
+    filters.query,
+  ].filter(Boolean);
+  const grouped = groupBy(matches, (item) => item?.itemTypeDisplayName || "其他武器");
+  return cardPage({
+    width: HEATMAP_CARD_WIDTH,
+    title: perks.length ? perks.join(" + ") : "Perk 反查",
+    eyebrow: "DESTINY 2 PERK WEAPONS",
+    subtitle: `${filterLabels.length ? filterLabels.join(" · ") : "全部可滚武器"} · ${dateOnly(perkWeapons?.updatedAt)}`,
+    body: `
+      <section class="metrics metrics-4">
+        ${metric("匹配武器", int(perkWeapons?.total ?? matches.length))}
+        ${metric("查询 Perk", int(perks.length))}
+        ${metric("Plug Sets", int(perkWeapons?.scan?.plugSetDefinitions))}
+        ${metric("可锻造索引", int(perkWeapons?.scan?.craftableItems))}
+      </section>
+      <section class="notice-panel">
+        <strong>查询条件</strong>
+        <span>${escapeHtml([`Perk: ${perks.join(" + ")}`, filterLabels.length ? `过滤: ${filterLabels.join(" / ")}` : "过滤: 无"].join(" · "))}</span>
+      </section>
+      <section class="perk-weapon-list">
+        ${
+          grouped.length
+            ? grouped.map(([groupName, items]) => renderPerkWeaponGroup(groupName, items)).join("")
+            : emptyState(`没有找到同时包含 ${perks.join(" + ")} 的武器。`)
+        }
+      </section>
+      <footer class="card-footer">${escapeHtml(perkWeapons?.scan?.note || "Perk 反查来自 Bungie Manifest 的 socket / plug set。")}</footer>
+    `,
+  });
+}
+
+function renderPerkWeaponGroup(groupName, items) {
+  return `
+    <div class="perk-weapon-group">
+      <h2>${escapeHtml(groupName)} <span>${int(items.length)}</span></h2>
+      <div class="perk-weapon-grid">
+        ${items.map((item) => renderPerkWeaponItem(item)).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderPerkWeaponItem(item) {
+  const meta = [
+    item?.slotLabel,
+    item?.damageType,
+    item?.ammoType,
+    item?.rpm ? `${item.rpm} RPM` : "",
+  ].filter(Boolean);
+  const matched = Array.isArray(item?.matchedPerks) ? item.matchedPerks : [];
+  const allRoll = Array.isArray(item?.allRollPerks) ? item.allRollPerks : [];
+  const preview = allRoll
+    .filter((perk) => !matched.some((match) => String(match.itemHash) === String(perk.itemHash)))
+    .slice(0, 10);
+  return `
+    <article class="perk-weapon-card">
+      ${itemInfoIconHtml(item)}
+      <div class="perk-weapon-main">
+        <div class="perk-weapon-title">
+          <strong>${escapeHtml(item?.name || "Unknown")}</strong>
+          ${item?.craftable ? badge("可锻造", "ok") : ""}
+        </div>
+        <span class="perk-weapon-meta">${escapeHtml([item?.tierTypeName, item?.itemTypeDisplayName, ...meta].filter(Boolean).join(" · ") || "武器")}</span>
+        ${item?.source ? `<em>${escapeHtml(item.source)}</em>` : ""}
+        <div class="perk-match-row">
+          ${matched.map((perk) => perkWeaponChip(perk, "ok")).join("")}
+        </div>
+        ${preview.length ? `<div class="perk-preview-row">${preview.map((perk) => perkWeaponChip(perk)).join("")}</div>` : ""}
+      </div>
+    </article>
+  `;
+}
+
+function perkWeaponChip(perk, tone = "muted") {
+  const socket = Number.isFinite(Number(perk?.socketIndex)) ? ` · 插槽 ${Number(perk.socketIndex) + 1}` : "";
+  return `<span class="perk-chip ${tone}" title="${escapeHtml(perk?.description || "")}">${escapeHtml(shortText(perk?.name || "Perk", 22))}${escapeHtml(socket)}</span>`;
+}
+
+function itemInfoPerkChip(perk) {
+  return `<span title="${escapeHtml(perk?.description || "")}">${escapeHtml(shortText(perk?.name || "Perk", 30))}</span>`;
+}
+
+function itemInfoIconHtml(item) {
+  const iconUrl = item?.iconPath ? bungieAssetUrl(item.iconPath) : "";
+  const watermarkUrl = item?.watermarkIconPath ? bungieAssetUrl(item.watermarkIconPath) : "";
+  return `
+    <div class="catalyst-icon ${iconUrl ? "" : "empty"}">
+      ${iconUrl ? `<img src="${escapeHtml(iconUrl)}" />` : ""}
+      ${watermarkUrl ? `<img class="item-watermark" src="${escapeHtml(watermarkUrl)}" />` : ""}
+    </div>
+  `;
+}
+
+function catalystObjectiveChip(objective) {
+  const value = Number(objective?.completionValue || 0) > 0 ? ` / ${int(objective?.completionValue)}` : "";
+  return `<span>${escapeHtml(shortText(objective?.description || objective?.objectiveHash || "目标", 32))}${escapeHtml(value)}</span>`;
+}
+
+function renderCatalystStatusHtml(player, catalystStatus) {
+  const matches = Array.isArray(catalystStatus?.matches) ? catalystStatus.matches : [];
+  const first = matches[0];
+  const title = matches.length === 1 ? `${first?.weaponName || catalystStatus?.query || "催化"}催化` : `${catalystStatus?.query || "催化"} 催化状态`;
+  return cardPage({
+    width: HEATMAP_CARD_WIDTH,
+    player,
+    title,
+    eyebrow: "DESTINY 2 CATALYST STATUS",
+    subtitle: `${formatPlayerName(player)} · 个人进度 + 催化效果 · ${dateOnly(catalystStatus?.updatedAt)}`,
+    body: `
+      <section class="metrics metrics-4">
+        ${metric("匹配", int(catalystStatus?.total ?? matches.length))}
+        ${metric("已获得", int(catalystStatus?.totals?.obtained))}
+        ${metric("已完成", int(catalystStatus?.totals?.completed))}
+        ${metric("可见", int(catalystStatus?.totals?.visible))}
+      </section>
+      <section class="catalyst-status-list">
+        ${matches.map(renderCatalystStatusItem).join("") || emptyState(`未找到 ${catalystStatus?.query || ""} 的催化状态。`)}
+      </section>
+      <footer class="card-footer">${escapeHtml(catalystStatus?.scan?.note || "个人催化状态需要 QQ OAuth 授权。")}</footer>
+      ${membershipBlock(catalystStatus?.membershipType || player?.membershipType, catalystStatus?.membershipId || player?.membershipId)}
+    `,
+  });
+}
+
+function renderCatalystStatusItem(item) {
+  const completed = Boolean(item?.completed);
+  const obtained = Boolean(item?.obtained);
+  const visible = Boolean(item?.visible);
+  const percentValue = Math.max(0, Math.min(100, Number(item?.percent || 0)));
+  const progressText =
+    Number(item?.completionValue || 0) > 0
+      ? `${int(item?.progress)} / ${int(item?.completionValue)}`
+      : completed
+        ? "已完成"
+        : obtained
+          ? "已获得"
+          : "未获得";
+  const objectives = Array.isArray(item?.objectives) ? item.objectives : [];
+  const infoObjectives = Array.isArray(item?.infoObjectives) ? item.infoObjectives : [];
+  const meta = [item?.catalystName, item?.itemTypeDisplayName, item?.slotLabel].filter(
+    (value) => value && !/未知武器|unknown weapon/i.test(String(value)),
+  );
+  return `
+    <article class="catalyst-status-item ${completed ? "complete" : obtained ? "obtained" : "missing"}">
+      <div class="catalyst-status-head">
+        ${catalystIconHtml({ iconPath: item?.iconPath })}
+        <div>
+          <div class="catalyst-title-row">
+            <strong>${escapeHtml(item?.weaponName || "Unknown")}</strong>
+            ${badge(item?.statusLabel || (completed ? "已完成" : obtained ? "已获得" : "未获得"), completed ? "ok" : obtained ? "info" : "")}
+            ${visible ? "" : badge("不可见", "")}
+          </div>
+          <span>${escapeHtml(meta.join(" · "))}</span>
+          <em>${escapeHtml(item?.match?.reason || "匹配")} · Record ${escapeHtml(item?.recordHash || "-")}</em>
+        </div>
+      </div>
+      <div class="catalyst-status-grid">
+        <div class="catalyst-info-block">
+          <b>获得 / 完成状态</b>
+          <p>${escapeHtml(item?.statusLabel || "未知")} · ${escapeHtml(progressText)} · ${fixed(percentValue, 1)}%</p>
+          <div class="catalyst-progress wide"><div><b style="width:${percentValue}%"></b></div><em>${escapeHtml(progressText)}</em></div>
+        </div>
+        <div class="catalyst-info-block">
+          <b>催化效果</b>
+          <p>${escapeHtml(item?.effectDescription || item?.catalystDescription || "Manifest 没有提供可显示的催化效果说明。")}</p>
+        </div>
+        <div class="catalyst-info-block">
+          <b>完成目标</b>
+          <p>${escapeHtml(item?.completionDescription || objectives.map((objective) => objective.description).filter(Boolean).join("；") || "Manifest 未提供明确目标。")}</p>
+          ${objectives.length ? `<div class="objective-chips">${objectives.map(catalystStatusObjectiveChip).join("")}</div>` : ""}
+          ${!objectives.length && infoObjectives.length ? `<div class="objective-chips">${infoObjectives.map(catalystObjectiveChip).join("")}</div>` : ""}
+        </div>
+      </div>
+    </article>
+  `;
+}
+
+function catalystStatusObjectiveChip(objective) {
+  const value = Number(objective?.completionValue || 0) > 0 ? `${int(objective?.progress)} / ${int(objective?.completionValue)}` : "";
+  const complete = Boolean(objective?.complete);
+  return `<span class="${complete ? "ok" : ""}">${escapeHtml(shortText(objective?.description || objective?.objectiveHash || "目标", 32))}${value ? ` · ${escapeHtml(value)}` : ""}</span>`;
+}
+
 function renderCatalystsHtml(player, catalysts) {
   const groups = Array.isArray(catalysts?.groups) ? catalysts.groups : [];
   return cardPage({
@@ -3269,10 +4127,11 @@ function renderGrandmasterRecentRow(item, imageDataUrl) {
 function renderGrandmasterPlayer(player) {
   const weapons = Array.isArray(player?.weapons) ? player.weapons.slice(0, 3) : [];
   const emblem = player?.emblemPath ? bungieAssetUrl(player.emblemPath) : "";
+  const initial = playerInitial({ displayName: player?.displayName || "Guardian" });
   return `
     <div class="gm-player">
       <div class="gm-player-head">
-        <span class="gm-emblem ${emblem ? "" : "empty"}">${emblem ? `<img src="${escapeHtml(emblem)}" />` : ""}</span>
+        <span class="gm-emblem ${emblem ? "" : "empty"}">${emblem ? `<img src="${escapeHtml(emblem)}" />` : escapeHtml(initial)}</span>
         <strong>${escapeHtml(player?.displayName || "Unknown")}</strong>
       </div>
       <div class="gm-player-stats">击败 ${int(player?.kills)}　死亡 ${int(player?.deaths)}　助攻 ${int(player?.assists)}　KD ${fixed(player?.kd)}</div>
@@ -3423,6 +4282,27 @@ function estimateCraftingHeight(craftables) {
   return Math.max(720, 330 + groupHeights);
 }
 
+function estimateCatalystInfoHeight(catalystInfo) {
+  const matches = Array.isArray(catalystInfo?.matches) ? catalystInfo.matches.length : 0;
+  return Math.max(640, 330 + Math.max(1, matches) * 238);
+}
+
+function estimateItemInfoHeight(itemInfo) {
+  const matches = Array.isArray(itemInfo?.matches) ? itemInfo.matches.length : 0;
+  return Math.max(640, 340 + Math.max(1, matches) * 275);
+}
+
+function estimatePerkWeaponsHeight(perkWeapons) {
+  const matches = Array.isArray(perkWeapons?.matches) ? perkWeapons.matches : [];
+  const groups = new Set(matches.map((item) => item?.itemTypeDisplayName || "其他武器")).size || 1;
+  return Math.max(720, 440 + groups * 62 + Math.ceil(Math.max(1, matches.length) / 2) * 172);
+}
+
+function estimateCatalystStatusHeight(catalystStatus) {
+  const matches = Array.isArray(catalystStatus?.matches) ? catalystStatus.matches.length : 0;
+  return Math.max(760, 360 + Math.max(1, matches) * 330);
+}
+
 function estimateCatalystsHeight(catalysts) {
   const groups = Array.isArray(catalysts?.groups) ? catalysts.groups : [];
   const groupHeights = groups.reduce((height, group) => {
@@ -3485,6 +4365,26 @@ function estimateLoadoutOptimizerHeight(optimizer) {
     return height + 174 + armorRows * 118 + adviceRows * 48 + noteRows;
   }, 0);
   return Math.max(820, 430 + buildHeight);
+}
+
+function estimateLoadoutManageHeight(loadouts) {
+  const characters = Array.isArray(loadouts?.characters) ? loadouts.characters : [];
+  const bungieLoadouts = Array.isArray(loadouts?.loadouts) ? loadouts.loadouts : [];
+  const savedLoadouts = Array.isArray(loadouts?.savedLoadouts)
+    ? loadouts.savedLoadouts
+    : Array.isArray(loadouts?.items)
+      ? loadouts.items
+      : [];
+  const sectionCount = Math.max(1, characters.length || (bungieLoadouts.length || savedLoadouts.length ? 1 : 0));
+  const perSection = characters.length
+    ? characters.map((character) => {
+        const characterId = String(character?.characterId || "");
+        const slotCount = bungieLoadouts.filter((loadout) => String(loadout?.characterId || "") === characterId).length;
+        const savedCount = savedLoadouts.filter((loadout) => !loadout?.characterId || String(loadout.characterId || "") === characterId).length;
+        return 124 + Math.max(Math.ceil(Math.max(1, slotCount) / 2) * 112, Math.ceil(Math.max(1, savedCount) / 2) * 146);
+      })
+    : [124 + Math.max(Math.ceil(Math.max(1, bungieLoadouts.length) / 2) * 112, Math.ceil(Math.max(1, savedLoadouts.length) / 2) * 146)];
+  return Math.max(780, 360 + sectionCount * 18 + perSection.reduce((sum, height) => sum + height, 0));
 }
 
 function inventoryGridEstimatedHeight(items, columns = 3) {
@@ -3565,6 +4465,17 @@ function pad2(value) {
 
 function emptyState(message) {
   return `<div class="empty-state">${escapeHtml(message)}</div>`;
+}
+
+function groupBy(items, keyFn) {
+  const map = new Map();
+  for (const item of Array.isArray(items) ? items : []) {
+    const key = keyFn(item) || "其他";
+    const list = map.get(key) || [];
+    list.push(item);
+    map.set(key, list);
+  }
+  return [...map.entries()];
 }
 
 function cardPage({ eyebrow, title, subtitle, body, player, width = CARD_WIDTH }) {
@@ -4307,6 +5218,162 @@ function cardPage({ eyebrow, title, subtitle, body, player, width = CARD_WIDTH }
       font-weight: 900;
     }
     .inventory-item.green .inventory-item-main b { color: #21d07a; }
+    .loadout-sections {
+      display: grid;
+      gap: 18px;
+    }
+    .loadout-character-section {
+      display: grid;
+      gap: 14px;
+      padding: 18px;
+      border-radius: 8px;
+      background: rgba(12, 12, 12, 0.58);
+      border: 1px solid rgba(255, 255, 255, 0.055);
+    }
+    .loadout-character-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 6px 12px;
+      align-items: end;
+      padding-bottom: 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .loadout-character-head strong {
+      color: #ffffff;
+      font-size: 28px;
+      font-weight: 950;
+    }
+    .loadout-character-head span {
+      color: #aeb8c4;
+      font-size: 14px;
+      font-weight: 850;
+    }
+    .loadout-character-head b {
+      grid-row: 1 / span 2;
+      grid-column: 2;
+      color: #8fa3bb;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .loadout-dual-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.25fr);
+      gap: 14px;
+    }
+    .loadout-panel {
+      min-width: 0;
+      padding: 14px;
+      border-radius: 8px;
+      background: rgba(7, 7, 7, 0.42);
+      border: 1px solid rgba(255, 255, 255, 0.045);
+    }
+    .loadout-panel h2 {
+      margin: 0 0 12px;
+      color: #dce7f3;
+      font-size: 17px;
+      font-weight: 950;
+    }
+    .loadout-slot-grid,
+    .saved-loadout-grid {
+      display: grid;
+      gap: 10px;
+    }
+    .loadout-slot-card,
+    .saved-loadout-card {
+      min-width: 0;
+      padding: 12px;
+      border-radius: 7px;
+      background: rgba(0, 0, 0, 0.42);
+      border: 1px solid rgba(255, 255, 255, 0.045);
+    }
+    .loadout-slot-card {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 6px 10px;
+    }
+    .loadout-slot-card strong,
+    .saved-loadout-title strong {
+      display: block;
+      color: #ffffff;
+      font-size: 16px;
+      line-height: 1.2;
+      font-weight: 950;
+      overflow-wrap: anywhere;
+    }
+    .loadout-slot-card span,
+    .saved-loadout-title span,
+    .saved-loadout-card small,
+    .loadout-slot-card small {
+      color: #aab4bf;
+      font-size: 12px;
+      font-weight: 800;
+      line-height: 1.25;
+      overflow-wrap: anywhere;
+    }
+    .loadout-slot-card b,
+    .saved-loadout-title b {
+      color: #21d07a;
+      font-size: 13px;
+      font-weight: 950;
+    }
+    .loadout-slot-card small {
+      grid-column: 1 / -1;
+    }
+    .saved-loadout-card {
+      display: grid;
+      gap: 10px;
+    }
+    .saved-loadout-title {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: start;
+    }
+    .saved-loadout-items {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .loadout-item-icon {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border-radius: 4px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: #8fa3bb;
+      font-size: 13px;
+      font-weight: 950;
+    }
+    .loadout-item-icon img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .saved-loadout-items i {
+      min-width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      padding: 0 8px;
+      border-radius: 4px;
+      background: rgba(33, 208, 122, 0.14);
+      color: #21d07a;
+      font-size: 12px;
+      font-style: normal;
+      font-weight: 950;
+    }
+    .saved-loadout-card p {
+      margin: 0;
+      color: #d7dee8;
+      font-size: 12px;
+      line-height: 1.35;
+      font-weight: 750;
+      overflow-wrap: anywhere;
+    }
     .inventory-armor-stats {
       display: grid;
       gap: 6px;
@@ -4971,6 +6038,282 @@ function cardPage({ eyebrow, title, subtitle, body, player, width = CARD_WIDTH }
       grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 12px;
     }
+    .catalyst-info-list {
+      display: grid;
+      gap: 14px;
+    }
+    .catalyst-info-item {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: 76px minmax(0, 1fr);
+      gap: 16px;
+      padding: 16px;
+      border-radius: 8px;
+      background: rgba(6, 6, 6, 0.54);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .catalyst-info-item .catalyst-icon {
+      width: 76px;
+      height: 76px;
+    }
+    .catalyst-info-main {
+      min-width: 0;
+      display: grid;
+      gap: 10px;
+      align-content: start;
+    }
+    .catalyst-info-main > span,
+    .catalyst-info-main > em {
+      min-width: 0;
+      color: #aeb9c6;
+      font-size: 15px;
+      line-height: 1.25;
+      font-weight: 850;
+      font-style: normal;
+      overflow-wrap: anywhere;
+    }
+    .catalyst-info-main > em {
+      color: #77818c;
+      font-size: 12px;
+    }
+    .catalyst-info-block {
+      min-width: 0;
+      padding: 10px 12px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.045);
+    }
+    .catalyst-info-block b {
+      display: block;
+      margin-bottom: 5px;
+      color: #21d07a;
+      font-size: 13px;
+      line-height: 1.15;
+      font-weight: 950;
+    }
+    .catalyst-info-block p {
+      margin: 0;
+      color: #dce4ee;
+      font-size: 16px;
+      line-height: 1.45;
+      font-weight: 760;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    .objective-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .objective-chips span {
+      max-width: 100%;
+      padding: 5px 8px;
+      border-radius: 4px;
+      color: #dbe5ef;
+      background: rgba(33, 208, 122, 0.10);
+      border: 1px solid rgba(33, 208, 122, 0.18);
+      font-size: 12px;
+      line-height: 1.15;
+      font-weight: 900;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    .objective-chips span.ok {
+      color: #101916;
+      background: #21d07a;
+      border-color: rgba(33, 208, 122, 0.75);
+    }
+    .perk-weapon-list {
+      display: grid;
+      gap: 16px;
+    }
+    .perk-weapon-group {
+      min-width: 0;
+      padding: 16px;
+      border-radius: 8px;
+      background: rgba(8, 8, 8, 0.56);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .perk-weapon-group h2 {
+      margin: 0 0 12px;
+      color: #dbe5ef;
+      font-size: 21px;
+      line-height: 1.15;
+      font-weight: 950;
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .perk-weapon-group h2 span {
+      color: #21d07a;
+      font-size: 16px;
+      font-weight: 950;
+    }
+    .perk-weapon-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .perk-weapon-card {
+      display: grid;
+      grid-template-columns: 66px minmax(0, 1fr);
+      gap: 12px;
+      min-width: 0;
+      padding: 12px;
+      border-radius: 7px;
+      background: rgba(0, 0, 0, 0.42);
+      border-left: 4px solid #21d07a;
+    }
+    .perk-weapon-card .catalyst-icon {
+      width: 66px;
+      height: 66px;
+    }
+    .perk-weapon-main {
+      min-width: 0;
+      display: grid;
+      gap: 6px;
+      align-content: start;
+    }
+    .perk-weapon-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .perk-weapon-title strong {
+      min-width: 0;
+      color: #ffffff;
+      font-size: 20px;
+      line-height: 1.12;
+      font-weight: 950;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .perk-weapon-main > .perk-weapon-meta,
+    .perk-weapon-main > em {
+      min-width: 0;
+      color: #aeb9c6;
+      font-size: 12px;
+      line-height: 1.2;
+      font-weight: 850;
+      font-style: normal;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    .perk-weapon-main > em { color: #8c97a4; }
+    .perk-match-row,
+    .perk-preview-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+    .perk-preview-row { opacity: 0.82; }
+    .perk-chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 3px 6px;
+      border-radius: 4px;
+      color: #d7e1ed;
+      background: rgba(255, 255, 255, 0.06);
+      font-size: 11px;
+      line-height: 1.2;
+      font-weight: 900;
+      max-width: 100%;
+    }
+    .perk-chip.ok {
+      color: #081711;
+      background: #21d07a;
+    }
+    .catalyst-status-list {
+      display: grid;
+      gap: 16px;
+    }
+    .catalyst-status-item {
+      min-width: 0;
+      display: grid;
+      gap: 14px;
+      padding: 18px;
+      border-radius: 8px;
+      background: rgba(6, 6, 6, 0.62);
+      border: 1px solid rgba(255, 255, 255, 0.055);
+    }
+    .catalyst-status-item.complete {
+      border-color: rgba(33, 208, 122, 0.28);
+    }
+    .catalyst-status-item.obtained {
+      border-color: rgba(125, 174, 255, 0.28);
+    }
+    .catalyst-status-item.missing {
+      border-color: rgba(255, 107, 99, 0.22);
+    }
+    .catalyst-status-head {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: 78px minmax(0, 1fr);
+      gap: 16px;
+      align-items: center;
+    }
+    .catalyst-status-head .catalyst-icon {
+      width: 78px;
+      height: 78px;
+    }
+    .catalyst-status-head > div {
+      min-width: 0;
+      display: grid;
+      gap: 6px;
+    }
+    .catalyst-status-head .catalyst-title-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 7px;
+    }
+    .catalyst-status-head .catalyst-title-row strong {
+      white-space: normal;
+      overflow: visible;
+      text-overflow: clip;
+      font-size: 24px;
+      line-height: 1.08;
+    }
+    .catalyst-status-head span,
+    .catalyst-status-head em {
+      color: #aeb9c6;
+      font-size: 15px;
+      line-height: 1.25;
+      font-weight: 850;
+      font-style: normal;
+      overflow-wrap: anywhere;
+    }
+    .catalyst-status-head em {
+      color: #77818c;
+      font-size: 12px;
+    }
+    .catalyst-status-grid {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: 0.8fr 1.15fr 1.15fr;
+      gap: 12px;
+      align-items: stretch;
+    }
+    .catalyst-progress.wide {
+      margin-top: 10px;
+    }
+    .catalyst-progress.wide div {
+      height: 10px;
+    }
+    .catalyst-progress.wide em {
+      white-space: normal;
+      overflow: visible;
+      text-overflow: clip;
+    }
+    .catalyst-status-item.complete .catalyst-progress b {
+      background: #21d07a;
+    }
+    .catalyst-status-item.obtained .catalyst-progress b {
+      background: #7daeff;
+    }
     .catalyst-item {
       min-width: 0;
       min-height: 132px;
@@ -4986,6 +6329,7 @@ function cardPage({ eyebrow, title, subtitle, body, player, width = CARD_WIDTH }
       border-color: rgba(33, 208, 122, 0.18);
     }
     .catalyst-icon {
+      position: relative;
       width: 58px;
       height: 58px;
       display: grid;
@@ -5003,6 +6347,14 @@ function cardPage({ eyebrow, title, subtitle, body, player, width = CARD_WIDTH }
       height: 100%;
       object-fit: cover;
       display: block;
+    }
+    .item-watermark {
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      width: 22px !important;
+      height: 22px !important;
+      opacity: 0.9;
     }
     .catalyst-main {
       min-width: 0;
@@ -5173,7 +6525,7 @@ function cardPage({ eyebrow, title, subtitle, body, player, width = CARD_WIDTH }
     }
     .gm-recent-row {
       display: grid;
-      grid-template-columns: 180px minmax(0, 1fr);
+      grid-template-columns: 240px minmax(0, 1fr);
       gap: 12px;
       padding: 9px;
       border-radius: 7px;
@@ -5204,18 +6556,35 @@ function cardPage({ eyebrow, title, subtitle, body, player, width = CARD_WIDTH }
       min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
-      white-space: nowrap;
     }
     .gm-recent-activity strong {
       color: #ffffff;
       font-size: 15px;
+      line-height: 1.15;
       font-weight: 950;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      white-space: normal;
     }
     .gm-recent-activity span {
       margin-top: 4px;
       color: #aab4bf;
       font-size: 12px;
+      line-height: 1.2;
       font-weight: 800;
+      white-space: nowrap;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .gm-recent-activity .badge {
+      min-width: 46px;
+      height: 20px;
+      padding: 0 7px;
+      font-size: 12px;
+      line-height: 20px;
+      font-weight: 900;
     }
     .gm-fireteam {
       min-width: 0;
@@ -5242,6 +6611,18 @@ function cardPage({ eyebrow, title, subtitle, body, player, width = CARD_WIDTH }
       overflow: hidden;
       border-radius: 4px;
       background: rgba(255,255,255,0.08);
+      display: grid;
+      place-items: center;
+      color: #d9e5f2;
+      font-size: 13px;
+      line-height: 1;
+      font-weight: 950;
+      text-align: center;
+    }
+    .gm-emblem.empty {
+      background:
+        linear-gradient(135deg, rgba(92, 114, 148, 0.95), rgba(28, 34, 48, 0.96));
+      border: 1px solid rgba(255, 255, 255, 0.12);
     }
     .gm-player-head strong,
     .gm-player-stats {
@@ -5528,7 +6909,10 @@ function cardPage({ eyebrow, title, subtitle, body, player, width = CARD_WIDTH }
       color: #c8d2de;
       font-size: 18px;
       font-weight: 850;
-      line-height: 1;
+      line-height: 30px;
+      vertical-align: middle;
+      text-align: center;
+      white-space: nowrap;
     }
     .badge.ok {
       border-color: rgba(206, 172, 102, 0.86);
@@ -6473,7 +7857,16 @@ function inferCardFromCommand(value) {
     return "crafting";
   }
   if (/催化|catalyst/u.test(command)) {
-    return "catalysts";
+    return inferCatalystCardFromCommand(command);
+  }
+  if (isItemInfoCommand(command)) {
+    return "item_info";
+  }
+  if (
+    /perk查询|查询perk|特性查询|能出|可出|可以出|会出|perk\s*weapons|perk-weapons/iu.test(command) ||
+    looksLikePerkWeaponsCommand(command)
+  ) {
+    return "perk_weapons";
   }
   if (/raid|突袭|无暇|day\s*one|dayone/u.test(command)) {
     return "raid_overview";
@@ -6497,6 +7890,28 @@ function inferCardFromCommand(value) {
     return "summary";
   }
   return "";
+}
+
+function looksLikePerkWeaponsCommand(value) {
+  const command = String(value || "");
+  if (/我的|仓库|背包|身上|当前装备|已装备/u.test(command)) {
+    return false;
+  }
+  const knownPerks = ["爆破专家", "斩首武器", "辉耀炽热", "萤火虫", "蜻蜓", "狂乱", "重建", "重组", "维持生计", "快速命中", "滑射", "首发射击", "精准连击", "不法之徒", "杀戮弹匣", "多杀弹匣", "肾上腺素成瘾", "泉源", "渗透", "诱导推销", "嫉妒刺客", "切勿靠近", "禅意时刻", "测距仪", "风暴之眼", "移动目标", "自动装填枪套", "丰盈满溢", "金中藏弹", "冰冷弹匣", "伏特子弹", "失衡弹药", "动能震颤"];
+  const weaponTypes = ["冲锋枪", "微冲", "smg", "手炮", "hc", "霰弹枪", "喷子", "shotgun", "自动步枪", "脉冲", "斥候", "狙击", "融合", "线融", "榴弹", "火箭", "筒子", "机枪", "剑", "弓", "手枪"];
+  return knownPerks.some((perk) => command.includes(perk)) && weaponTypes.some((type) => command.toLowerCase().includes(String(type).toLowerCase()));
+}
+
+function isItemInfoCommand(value) {
+  const command = String(value || "");
+  if (/我的|仓库|背包|身上|当前装备|已装备/u.test(command)) {
+    return false;
+  }
+  const query = cleanItemInfoQuery(command);
+  if (!query) {
+    return false;
+  }
+  return /查个武器|武器查询|查武器|武器资料|物品查询|perk|perks|来源|出处|怎么获取|哪里出|怎么得|如何获得|是什么武器|是什么|好不好用|好用吗/iu.test(command);
 }
 
 function activityModeIcon(value) {
@@ -6546,7 +7961,7 @@ function normalizeHeatmapRange(value) {
 }
 
 function normalizeGrandmasterSeason(value) {
-  const season = String(value || "current").trim();
+  const season = String(value || "all").trim();
   if (season === "current" || season === "all") {
     return season;
   }
@@ -6683,6 +8098,19 @@ function normalizeItemAction(value) {
   throw new D2StatsInputError("装备操作 action 只支持 transfer、equip、equip_items、lock、unlock、equip_loadout。");
 }
 
+function normalizeLoadoutManageOperation(value) {
+  const operation = String(value || "").trim().toLowerCase();
+  if (!operation || /列表|读取|查看|list|show/u.test(operation)) return "list";
+  if (/装备游戏|换上游戏|equip_bungie|equip-bungie|equip slot|装备第|套装第/u.test(operation)) return "equip_bungie";
+  if (/保存到游戏|游戏内|snapshot|snapshot_bungie|槽/u.test(operation)) return "snapshot_bungie";
+  if (/改名|标识|identifier|rename/u.test(operation)) return "rename_bungie";
+  if (/清空|clear/u.test(operation)) return "clear_bungie";
+  if (/保存|save_local|save-local|save/u.test(operation)) return "save_local";
+  if (/应用|套用|apply_local|apply-local|apply/u.test(operation)) return "apply_local";
+  if (/删除|delete|remove/u.test(operation)) return "delete_local";
+  throw new D2StatsInputError("配装操作只支持 list、show、equip_bungie、snapshot_bungie、rename_bungie、clear_bungie、save_local、apply_local、delete_local。");
+}
+
 function buildInventoryActionBody(action, params = {}) {
   if (action === "transfer") {
     return {
@@ -6720,9 +8148,70 @@ function buildInventoryActionBody(action, params = {}) {
     return {
       characterId: requiredActionId(params.characterId, "characterId"),
       loadoutIndex: clampInteger(params.loadoutIndex, 0, 0, 9),
+      confirm: true,
     };
   }
   throw new D2StatsInputError("不支持的装备操作。");
+}
+
+function buildLoadoutManageBody(operation, params = {}) {
+  if (operation === "equip_bungie" || operation === "snapshot_bungie" || operation === "clear_bungie") {
+    return {
+      characterId: requiredActionId(params.characterId, "characterId"),
+      loadoutIndex: clampInteger(params.loadoutIndex, 0, 0, 9),
+    };
+  }
+  if (operation === "rename_bungie") {
+    const body = {
+      characterId: requiredActionId(params.characterId, "characterId"),
+      loadoutIndex: clampInteger(params.loadoutIndex, 0, 0, 9),
+    };
+    for (const key of ["nameHash", "iconHash", "colorHash"]) {
+      if (params[key] !== undefined && params[key] !== "") {
+        body[key] = requiredActionNumber(params[key], key);
+      }
+    }
+    if (body.nameHash === undefined && body.iconHash === undefined && body.colorHash === undefined) {
+      throw new D2StatsInputError("修改游戏内 Loadout 标识需要 nameHash、iconHash 或 colorHash。");
+    }
+    return body;
+  }
+  if (operation === "save_local") {
+    return {
+      name: requiredActionText(params.name || params.loadoutName, "name"),
+      ...(params.characterId ? { characterId: requiredActionId(params.characterId, "characterId") } : {}),
+      ...(params.source ? { source: String(params.source).trim() } : {}),
+      ...(params.optimizerSessionId ? { optimizerSessionId: String(params.optimizerSessionId).trim() } : {}),
+      ...(params.optimizerBuildId || params.buildId ? { optimizerBuildId: String(params.optimizerBuildId || params.buildId).trim() } : {}),
+      ...(params.notes ? { notes: String(params.notes).trim() } : {}),
+      overwrite: params.overwrite === true,
+    };
+  }
+  if (operation === "apply_local") {
+    const idOrName = requiredSavedLoadoutIdOrName(params);
+    return {
+      idOrName,
+      ...(params.characterId ? { characterId: requiredActionId(params.characterId, "characterId") } : {}),
+    };
+  }
+  if (operation === "delete_local") {
+    return {
+      idOrName: requiredSavedLoadoutIdOrName(params),
+    };
+  }
+  throw new D2StatsInputError("该配装操作不需要写入参数。");
+}
+
+function requiredSavedLoadoutIdOrName(params = {}) {
+  return requiredActionText(params.savedLoadoutId || params.idOrName || params.name || params.loadoutName, "savedLoadoutId");
+}
+
+function requiredActionText(value, name) {
+  const text = String(value || "").trim();
+  if (!text) {
+    throw new D2StatsInputError(`${name} 不能为空。`);
+  }
+  return text;
 }
 
 function requiredActionId(value, name) {
@@ -6761,6 +8250,41 @@ function inventoryConfirmationMessage(action, body) {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function loadoutManageConfirmationMessage(operation, body) {
+  const labels = {
+    equip_bungie: "装备游戏内 Loadout",
+    snapshot_bungie: "把当前装备保存到游戏内 Loadout 槽",
+    rename_bungie: "修改游戏内 Loadout 标识",
+    clear_bungie: "清空游戏内 Loadout 槽",
+    save_local: "保存当前配装到机器人本地配装库",
+    apply_local: "应用机器人本地保存配装",
+    delete_local: "删除机器人本地保存配装",
+  };
+  return [
+    `需要确认后才会执行：${labels[operation] || operation}`,
+    body.name ? `名称: ${body.name}` : "",
+    body.idOrName ? `本地配装: ${body.idOrName}` : "",
+    body.characterId ? `characterId: ${body.characterId}` : "",
+    body.loadoutIndex !== undefined ? `loadoutIndex: ${body.loadoutIndex}` : "",
+    body.nameHash !== undefined ? `nameHash: ${body.nameHash}` : "",
+    body.iconHash !== undefined ? `iconHash: ${body.iconHash}` : "",
+    body.colorHash !== undefined ? `colorHash: ${body.colorHash}` : "",
+    "确认无误后，请再次调用并传 confirm=true。角色通常需要在轨道、社交空间或离线。",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function loadoutManageSuccessMessage(operation, data) {
+  if (operation === "save_local") {
+    return `已保存本地配装：${data?.name || "-"}（${int(data?.itemCount)} 件）。`;
+  }
+  if (operation === "delete_local") {
+    return `已删除本地配装：${data?.idOrName || "-"}`;
+  }
+  return data?.message || "配装操作已提交成功。";
 }
 
 async function fetchWithTimeout(url, options = {}) {

@@ -13,3 +13,4 @@ export default definePluginEntry({
 
 export * from "./lib/core.mjs";
 export * from "./lib/runtime.mjs";
+export * from "./lib/command-gateway.mjs";

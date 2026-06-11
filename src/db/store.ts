@@ -95,6 +95,25 @@ export interface AdminAuditLogRow {
   createdAt: string;
 }
 
+export interface SavedLoadoutRecord {
+  qq: string;
+  name: string;
+  className?: string;
+  characterId?: string;
+  source: string;
+  items: unknown[];
+  statMods?: unknown[];
+  fragments?: unknown[];
+  notes?: string;
+}
+
+export interface SavedLoadoutRow extends SavedLoadoutRecord {
+  id: number;
+  lastAppliedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface MetricsPoint {
   bucket: string;
   total: number;
@@ -131,6 +150,11 @@ export interface Store {
   upsertQqOAuthToken(token: QqOAuthTokenRecord): Promise<QqOAuthTokenRow>;
   getQqOAuthToken(qq: string): Promise<QqOAuthTokenRow | null>;
   revokeQqOAuthToken(qq: string): Promise<boolean>;
+  upsertSavedLoadout(record: SavedLoadoutRecord, overwrite: boolean): Promise<SavedLoadoutRow>;
+  listSavedLoadouts(qq: string): Promise<SavedLoadoutRow[]>;
+  getSavedLoadout(qq: string, idOrName: string): Promise<SavedLoadoutRow | null>;
+  deleteSavedLoadout(qq: string, idOrName: string): Promise<boolean>;
+  touchSavedLoadoutApplied(qq: string, id: number): Promise<void>;
   listQueryLogs(
     filters: { route?: string; cacheHit?: boolean },
     options: PageOptions
@@ -166,6 +190,7 @@ export class NullStore implements Store {
   private readonly qqBindings: QqBindingRow[] = [];
   private readonly qqOAuthTokens: QqOAuthTokenRow[] = [];
   private readonly auditLogs: AdminAuditLogRow[] = [];
+  private readonly savedLoadouts: SavedLoadoutRow[] = [];
 
   async upsertPlayer(player: PlayerCacheRecord): Promise<void> {
     const existing = this.players.find(
@@ -306,6 +331,70 @@ export class NullStore implements Store {
     return true;
   }
 
+  async upsertSavedLoadout(record: SavedLoadoutRecord, overwrite: boolean): Promise<SavedLoadoutRow> {
+    const existing = this.savedLoadouts.find((row) => row.qq === record.qq && row.name === record.name);
+    const now = new Date().toISOString();
+    if (existing) {
+      if (!overwrite) {
+        throw new Error("saved loadout already exists");
+      }
+      Object.assign(existing, {
+        ...record,
+        statMods: record.statMods ?? [],
+        fragments: record.fragments ?? [],
+        updatedAt: now
+      });
+      return existing;
+    }
+    const row: SavedLoadoutRow = {
+      id: this.savedLoadouts.length + 1,
+      ...record,
+      statMods: record.statMods ?? [],
+      fragments: record.fragments ?? [],
+      createdAt: now,
+      updatedAt: now
+    };
+    this.savedLoadouts.push(row);
+    return row;
+  }
+
+  async listSavedLoadouts(qq: string): Promise<SavedLoadoutRow[]> {
+    return this.savedLoadouts
+      .filter((row) => row.qq === qq)
+      .slice()
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  }
+
+  async getSavedLoadout(qq: string, idOrName: string): Promise<SavedLoadoutRow | null> {
+    const text = String(idOrName || "").trim();
+    const id = Number(text);
+    return (
+      this.savedLoadouts.find((row) => row.qq === qq && (row.name === text || (Number.isInteger(id) && row.id === id))) ??
+      null
+    );
+  }
+
+  async deleteSavedLoadout(qq: string, idOrName: string): Promise<boolean> {
+    const existing = await this.getSavedLoadout(qq, idOrName);
+    if (!existing) {
+      return false;
+    }
+    const index = this.savedLoadouts.findIndex((row) => row.id === existing.id);
+    if (index >= 0) {
+      this.savedLoadouts.splice(index, 1);
+    }
+    return true;
+  }
+
+  async touchSavedLoadoutApplied(qq: string, id: number): Promise<void> {
+    const existing = this.savedLoadouts.find((row) => row.qq === qq && row.id === id);
+    if (existing) {
+      const now = new Date().toISOString();
+      existing.lastAppliedAt = now;
+      existing.updatedAt = now;
+    }
+  }
+
   async listQueryLogs(
     filters: { route?: string; cacheHit?: boolean },
     options: PageOptions
@@ -396,6 +485,7 @@ export class NullStore implements Store {
     this.qqBindings.length = 0;
     this.qqOAuthTokens.length = 0;
     this.auditLogs.length = 0;
+    this.savedLoadouts.length = 0;
   }
 
   private makeQqBindingRow(binding: QqBindingRecord): QqBindingRow {

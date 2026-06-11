@@ -1,5 +1,5 @@
 import type { CacheStore } from "../cache/cache.js";
-import type { Store } from "../db/store.js";
+import type { SavedLoadoutRow, Store } from "../db/store.js";
 import { randomBytes } from "node:crypto";
 import { BadRequestError, NotFoundError } from "../lib/errors.js";
 import { asArray, asBoolean, asNumber, asRecord, asString, numberFrom, optionalNumber, optionalString } from "../lib/json.js";
@@ -20,7 +20,11 @@ import type {
   CareerModeSummary,
   CareerSummary,
   CatalystObjectiveSummary,
+  CatalystInfoMatch,
+  CatalystInfoSummary,
   CatalystSlot,
+  CatalystStatusMatch,
+  CatalystStatusSummary,
   CatalystWeaponGroup,
   CatalystWeaponSummary,
   CatalystsSummary,
@@ -50,6 +54,8 @@ import type {
   InventorySocketSummary,
   InventorySummary,
   InventoryWeaponStatSummary,
+  ItemInfoMatch,
+  ItemInfoSummary,
   LoadoutOptimizerApplyResult,
   LoadoutOptimizerArmorItem,
   LoadoutOptimizerBuild,
@@ -60,6 +66,9 @@ import type {
   LoadoutOptimizerStatValue,
   LoadoutsSummary,
   NamecardSummary,
+  PerkWeaponMatch,
+  PerkWeaponPerkSummary,
+  PerkWeaponsSummary,
   PgcrPlayerSummary,
   PgcrSummary,
   PlayerSearchResult,
@@ -72,6 +81,8 @@ import type {
   PvpRecentWeaponSummary,
   RaidOverview,
   RaidOverviewActivity,
+  SavedLoadoutApplyResult,
+  SavedLoadoutSummary,
   WeaponUsageSummary,
   WeaponsSummary
 } from "./destiny-types.js";
@@ -88,7 +99,7 @@ import {
 
 const RAID_MODE_TYPE = 4;
 const DUNGEON_MODE_TYPE = 82;
-const NIGHTFALL_MODE_TYPE = 16;
+const GRANDMASTER_NIGHTFALL_MODE_TYPE = 46;
 const RAID_HISTORY_PAGE_SIZE = 250;
 const HEATMAP_FULL_HISTORY_MAX_PAGES = 100;
 const KINETIC_BUCKET_HASHES = new Set([1498876634]);
@@ -386,13 +397,22 @@ export class DestinyService {
     const activityDefinitions = await this.manifest.getDefinitionMap<RaidActivityDefinition>(
       "DestinyActivityDefinition"
     );
-    const aggregateResponses = await Promise.all(
+    const aggregateResults = await Promise.allSettled(
       profile.characters.map((character) =>
         this.client.get<unknown>(
           `/Destiny2/${membershipType}/Account/${membershipId}/Character/${character.characterId}/Stats/AggregateActivityStats/`
         )
       )
     );
+    const aggregateResponses = aggregateResults.flatMap((result) =>
+      result.status === "fulfilled" ? [result.value] : []
+    );
+    const aggregateErrors = aggregateResults.flatMap((result, index) =>
+      result.status === "rejected"
+        ? [`${profile.characters[index]?.characterId ?? "unknown"}: ${scanErrorMessage(result.reason)}`]
+        : []
+    );
+    const aggregateStatsAvailable = aggregateResponses.length > 0;
 
     const groups = new Map<string, DungeonOverviewGroup>();
     for (const response of aggregateResponses) {
@@ -420,6 +440,15 @@ export class DestinyService {
       if (completed && (!group.lastClearedAt || activity.period > group.lastClearedAt)) {
         group.lastClearedAt = activity.period;
         group.lastActivityId = activity.activityId;
+      }
+      if (!aggregateStatsAvailable && completed) {
+        group.completions += 1;
+        group.fullClears += 1;
+        group.wins = group.fullClears;
+        group.kills += statBasicValue(activity.values, "kills");
+        group.deaths += statBasicValue(activity.values, "deaths");
+        group.secondsPlayed +=
+          statBasicValue(activity.values, "activityDurationSeconds") || statBasicValue(activity.values, "secondsPlayed");
       }
     }
 
@@ -512,7 +541,7 @@ export class DestinyService {
     membershipId: string,
     options: { historyPages: number; pgcrLimit: number; season: GrandmasterSeasonScope }
   ): Promise<GrandmasterOverview> {
-    const cacheKey = `d2:grandmasters:${membershipType}:${membershipId}:${options.historyPages}:${options.pgcrLimit}:${options.season}`;
+    const cacheKey = `d2:grandmasters:v3:${membershipType}:${membershipId}:${options.historyPages}:${options.pgcrLimit}:${options.season}`;
     const cached = await this.cache.getJson<GrandmasterOverview>(cacheKey);
     if (cached) {
       return cached;
@@ -523,13 +552,22 @@ export class DestinyService {
       "DestinyActivityDefinition"
     );
     const activeSeason = await this.getActiveSeasonWindow();
-    const aggregateResponses = await Promise.all(
+    const aggregateResults = await Promise.allSettled(
       profile.characters.map((character) =>
         this.client.get<unknown>(
           `/Destiny2/${membershipType}/Account/${membershipId}/Character/${character.characterId}/Stats/AggregateActivityStats/`
         )
       )
     );
+    const aggregateResponses = aggregateResults.flatMap((result) =>
+      result.status === "fulfilled" ? [result.value] : []
+    );
+    const aggregateErrors = aggregateResults.flatMap((result, index) =>
+      result.status === "rejected"
+        ? [`${profile.characters[index]?.characterId ?? "unknown"}: ${scanErrorMessage(result.reason)}`]
+        : []
+    );
+    const aggregateStatsAvailable = aggregateResponses.length > 0;
 
     const groups = new Map<string, GrandmasterOverviewGroup>();
     for (const response of aggregateResponses) {
@@ -558,10 +596,20 @@ export class DestinyService {
       group.attempts += 1;
       if (completed) {
         group.currentSeasonClears += 1;
+        if (!aggregateStatsAvailable) {
+          group.lifetimeClears += 1;
+          group.completions += 1;
+        }
         if (!group.lastClearedAt || activity.period > group.lastClearedAt) {
           group.lastClearedAt = activity.period;
           group.lastActivityId = activity.activityId;
         }
+      }
+      if (!aggregateStatsAvailable) {
+        group.kills += statBasicValue(activity.values, "kills");
+        group.deaths += statBasicValue(activity.values, "deaths");
+        group.secondsPlayed +=
+          statBasicValue(activity.values, "activityDurationSeconds") || statBasicValue(activity.values, "secondsPlayed");
       }
     }
 
@@ -634,6 +682,9 @@ export class DestinyService {
         historyPages: options.historyPages,
         pgcrLimit: options.pgcrLimit,
         season: options.season,
+        aggregateStatsAvailable,
+        aggregateCharactersScanned: aggregateResponses.length,
+        ...(aggregateErrors.length > 0 ? { aggregateErrors } : {}),
         recentActivitiesScanned: recentActivities.length,
         pgcrScanned,
         currentSeasonReliable,
@@ -773,7 +824,7 @@ export class DestinyService {
   }
 
   async getPgcr(activityId: string): Promise<PgcrSummary> {
-    const cacheKey = `d2:pgcr:${activityId}`;
+    const cacheKey = `d2:pgcr:v2:${activityId}`;
     const cached = await this.cache.getJson<PgcrSummary>(cacheKey);
     if (cached) {
       return cached;
@@ -915,7 +966,7 @@ export class DestinyService {
   }
 
   async getCatalysts(membershipType: number, membershipId: string, accessToken: string): Promise<CatalystsSummary> {
-    const cacheKey = `d2:catalysts:${membershipType}:${membershipId}`;
+    const cacheKey = `d2:catalysts:v2:${membershipType}:${membershipId}`;
     const cached = await this.cache.getJson<CatalystsSummary>(cacheKey);
     if (cached) {
       return cached;
@@ -993,6 +1044,273 @@ export class DestinyService {
 
     await this.cache.setJson(cacheKey, result, CACHE_TTL.catalysts);
     return result;
+  }
+
+  async getCatalystInfo(query: string): Promise<CatalystInfoSummary> {
+    const normalizedQuery = query.trim();
+    if (!normalizedQuery) {
+      throw new BadRequestError("q is required");
+    }
+    const normalizedSearch = normalizeCatalystInfoSearchText(normalizedQuery);
+    if (!normalizedSearch) {
+      throw new BadRequestError("q must include a weapon name");
+    }
+    const cacheKey = `d2:catalyst-info:v2:${normalizedSearch}`;
+    const cached = await this.cache.getJson<CatalystInfoSummary>(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const recordDefinitions = await this.manifest.getDefinitionMap<RecordDefinition>("DestinyRecordDefinition");
+    const catalystPresentationRecords = await this.getCatalystPresentationRecordHashes();
+    const candidateHashes = await this.getCatalystRecordCandidates(recordDefinitions, catalystPresentationRecords);
+    const inventoryDefinitions = await this.safeInventoryDefinitions();
+    const objectiveDefinitions = await this.safeObjectiveDefinitions();
+    const sandboxPerkDefinitions = await this.safeSandboxPerkDefinitions();
+    const matches = candidateHashes
+      .map((recordHash) => {
+        const definition = recordDefinitions[recordHash];
+        return definition
+          ? this.toCatalystInfoMatch(
+              normalizedQuery,
+              recordHash,
+              definition,
+              inventoryDefinitions,
+              objectiveDefinitions,
+              sandboxPerkDefinitions
+            )
+          : null;
+      })
+      .filter((match): match is CatalystInfoMatch => Boolean(match))
+      .sort((left, right) => left.match.score - right.match.score || left.weaponName.localeCompare(right.weaponName))
+      .slice(0, 6);
+
+    const result: CatalystInfoSummary = {
+      query: normalizedQuery,
+      total: matches.length,
+      matches,
+      scan: {
+        recordDefinitions: Object.keys(recordDefinitions).length,
+        candidateRecords: candidateHashes.length,
+        catalystPresentationRecords: catalystPresentationRecords.size,
+        inventoryDefinitions: Object.keys(inventoryDefinitions).length,
+        objectiveDefinitions: Object.keys(objectiveDefinitions).length,
+        note:
+          "催化效果来自 Bungie Manifest 的 Record/Inventory/Objective 定义；这是公开静态资料，不代表玩家个人完成进度。"
+      },
+      updatedAt: new Date().toISOString()
+    };
+
+    await this.cache.setJson(cacheKey, result, CACHE_TTL.catalysts);
+    return result;
+  }
+
+  async getItemInfo(query: string, limit = 6): Promise<ItemInfoSummary> {
+    const normalizedQuery = query.trim();
+    if (!normalizedQuery) {
+      throw new BadRequestError("q is required");
+    }
+    const search = normalizeItemInfoSearchText(normalizedQuery);
+    if (!search) {
+      throw new BadRequestError("q must include an item name");
+    }
+    const parsedLimit = Number.isFinite(limit) ? limit : 6;
+    const resultLimit = Math.max(1, Math.min(12, Math.trunc(parsedLimit)));
+    const cacheKey = `d2:item-info:v1:${search}:${resultLimit}`;
+    const cached = await this.cache.getJson<ItemInfoSummary>(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const [inventoryDefinitions, statDefinitions, sandboxPerkDefinitions, craftableItems] = await Promise.all([
+      this.safeInventoryDefinitions(),
+      this.safeStatDefinitions(),
+      this.safeSandboxPerkDefinitions(),
+      this.getPublicCraftableItemHashes()
+    ]);
+
+    const basicMatches = Object.entries(inventoryDefinitions)
+      .map(([itemHash, definition]) => {
+        const score = itemInfoMatchScore(normalizedQuery, definition);
+        return score ? { itemHash, definition, score } : null;
+      })
+      .filter((match): match is { itemHash: string; definition: InventoryItemDefinition; score: { score: number; reason: string } } =>
+        Boolean(match)
+      )
+      .sort((left, right) => {
+        const weaponDiff = Number(!inventoryDefinitionLooksLikeWeapon(left.definition)) - Number(!inventoryDefinitionLooksLikeWeapon(right.definition));
+        return weaponDiff || left.score.score - right.score.score || itemInfoName(left.definition).localeCompare(itemInfoName(right.definition));
+      })
+      .slice(0, resultLimit);
+
+    const matches = await Promise.all(
+      basicMatches.map(async (match) =>
+        this.toItemInfoMatch(
+          match.itemHash,
+          match.definition,
+          match.score,
+          inventoryDefinitions,
+          statDefinitions,
+          sandboxPerkDefinitions,
+          craftableItems
+        )
+      )
+    );
+
+    const result: ItemInfoSummary = {
+      query: normalizedQuery,
+      total: matches.length,
+      matches,
+      scan: {
+        inventoryDefinitions: Object.keys(inventoryDefinitions).length,
+        statDefinitions: Object.keys(statDefinitions).length,
+        craftableItems: craftableItems.size,
+        note: "武器/物品详情来自 Bungie Manifest 本地缓存；不使用第三方网页数据。"
+      },
+      updatedAt: new Date().toISOString()
+    };
+
+    await this.cache.setJson(cacheKey, result, CACHE_TTL.manifestDefinition);
+    return result;
+  }
+
+  async getPerkWeapons(options: {
+    perks: string[] | string;
+    weaponType?: string;
+    slot?: string;
+    damageType?: string;
+    rpm?: number;
+    craftable?: boolean;
+    query?: string;
+    limit?: number;
+  }): Promise<PerkWeaponsSummary> {
+    const perks = normalizePerkWeaponInputs(options.perks);
+    if (perks.length === 0) {
+      throw new BadRequestError("perks is required");
+    }
+
+    const limit = Math.max(1, Math.min(200, Math.trunc(Number.isFinite(options.limit) ? Number(options.limit) : 50)));
+    const weaponType = normalizeInventoryWeaponType(options.weaponType);
+    const slot = normalizeInventoryFilterText(options.slot);
+    const damageType = normalizeInventoryFilterText(options.damageType);
+    const rpm = parseInventoryRpm(options.rpm);
+    const query = normalizeInventoryFilterText(options.query);
+    const craftable = typeof options.craftable === "boolean" ? options.craftable : undefined;
+    const cacheKey = `d2:perk-weapons:v1:${JSON.stringify({ perks, weaponType, slot, damageType, rpm, craftable, query, limit })}`;
+    const cached = await this.cache.getJson<PerkWeaponsSummary>(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const [inventoryDefinitions, plugSetDefinitions, statDefinitions, craftableItems] = await Promise.all([
+      this.safeInventoryDefinitions(),
+      this.safePlugSetDefinitions(),
+      this.safeStatDefinitions(),
+      this.getPublicCraftableItemHashes()
+    ]);
+
+    const matches: PerkWeaponMatch[] = [];
+    for (const [itemHash, definition] of Object.entries(inventoryDefinitions)) {
+      if (!inventoryDefinitionLooksLikeWeapon(definition)) {
+        continue;
+      }
+      if (!perkWeaponDefinitionMatchesFilters(definition, { weaponType, slot, damageType, rpm, craftable, query }, craftableItems, itemHash)) {
+        continue;
+      }
+      const rollPerks = perkWeaponRollPerksForDefinition(definition, inventoryDefinitions, plugSetDefinitions);
+      const matchedPerks = matchPerkWeaponInputs(perks, rollPerks);
+      if (matchedPerks.length !== perks.length) {
+        continue;
+      }
+      matches.push(perkWeaponMatchFromDefinition(itemHash, definition, matchedPerks, rollPerks, craftableItems, statDefinitions));
+    }
+
+    matches.sort((left, right) => {
+      const craftDiff = Number(!right.craftable) - Number(!left.craftable);
+      const typeDiff = String(left.itemTypeDisplayName ?? "").localeCompare(String(right.itemTypeDisplayName ?? ""));
+      return craftDiff || typeDiff || left.name.localeCompare(right.name);
+    });
+
+    const result: PerkWeaponsSummary = {
+      perks,
+      filters: {
+        ...(weaponType ? { weaponType } : {}),
+        ...(slot ? { slot } : {}),
+        ...(damageType ? { damageType } : {}),
+        ...(rpm !== undefined ? { rpm } : {}),
+        ...(craftable !== undefined ? { craftable } : {}),
+        ...(query ? { query } : {}),
+        limit
+      },
+      total: matches.length,
+      matches: matches.slice(0, limit),
+      scan: {
+        inventoryDefinitions: Object.keys(inventoryDefinitions).length,
+        plugSetDefinitions: Object.keys(plugSetDefinitions).length,
+        craftableItems: craftableItems.size,
+        note:
+          "Perk 反查来自 Bungie Manifest 的武器 socket 和 plug set。结果表示武器 perk 池包含这些 perk，不保证当前赛季可获取。"
+      },
+      updatedAt: new Date().toISOString()
+    };
+
+    await this.cache.setJson(cacheKey, result, CACHE_TTL.manifestDefinition);
+    return result;
+  }
+
+  async getCatalystStatus(
+    membershipType: number,
+    membershipId: string,
+    accessToken: string,
+    query: string
+  ): Promise<CatalystStatusSummary> {
+    const normalizedQuery = query.trim();
+    if (!normalizedQuery) {
+      throw new BadRequestError("q is required");
+    }
+    const normalizedSearch = normalizeCatalystInfoSearchText(normalizedQuery);
+    if (!normalizedSearch) {
+      throw new BadRequestError("q must include a weapon name");
+    }
+
+    const catalysts = await this.getCatalysts(membershipType, membershipId, accessToken);
+    const infoSummaries = await Promise.all(
+      catalystSearchTerms(normalizedQuery).map(async (term) => {
+        try {
+          return await this.getCatalystInfo(term);
+        } catch {
+          return null;
+        }
+      })
+    );
+    const infoMatches = uniqueCatalystInfoMatches(infoSummaries.flatMap((summary) => summary?.matches ?? []));
+    const objectiveDefinitions = await this.safeObjectiveDefinitions();
+    const matches = catalysts.groups
+      .flatMap((group) => group.items)
+      .map((item) => toCatalystStatusMatch(normalizedQuery, item, infoMatches, objectiveDefinitions))
+      .filter((match): match is CatalystStatusMatch => Boolean(match))
+      .sort((left, right) => left.match.score - right.match.score || left.weaponName.localeCompare(right.weaponName))
+      .slice(0, 6);
+
+    return {
+      membershipType,
+      membershipId,
+      query: normalizedQuery,
+      total: matches.length,
+      totals: {
+        obtained: matches.filter((match) => match.obtained).length,
+        visible: matches.filter((match) => match.visible).length,
+        completed: matches.filter((match) => match.completed).length
+      },
+      matches,
+      scan: {
+        candidateRecords: catalysts.scan.candidateRecords,
+        recordsReturned: catalysts.scan.recordsReturned,
+        catalystInfoMatches: infoMatches.length,
+        note: "单武器催化状态来自 QQ OAuth Profile Records/Collectibles；催化效果来自公开 Manifest 定义。"
+      },
+      updatedAt: new Date().toISOString()
+    };
   }
 
   async getPrivateInventory(
@@ -1221,6 +1539,7 @@ export class DestinyService {
       membershipId,
       characters,
       loadouts,
+      savedLoadouts: qq ? (await this.store.listSavedLoadouts(qq)).map(savedLoadoutRowToSummary) : [],
       updatedAt: new Date().toISOString()
     };
   }
@@ -1249,6 +1568,310 @@ export class DestinyService {
       loadoutIndex: request.loadoutIndex,
       bungieResponse: response,
       message: "已装备游戏内 Loadout",
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  async snapshotLoadout(
+    membershipType: number,
+    membershipId: string,
+    accessToken: string,
+    request: { qq?: string; characterId: string; loadoutIndex: number }
+  ): Promise<InventoryActionResult> {
+    const response = await this.client.post<unknown>("/Destiny2/Actions/Loadouts/SnapshotLoadout/", {
+      headers: oauthHeaders(accessToken),
+      body: {
+        loadoutIndex: request.loadoutIndex,
+        characterId: request.characterId,
+        membershipType
+      }
+    });
+    return {
+      qq: request.qq,
+      membershipType,
+      membershipId,
+      action: "snapshotLoadout",
+      ok: true,
+      characterId: request.characterId,
+      loadoutIndex: request.loadoutIndex,
+      bungieResponse: response,
+      message: "已把当前装备保存到游戏内 Loadout 槽",
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  async updateLoadoutIdentifiers(
+    membershipType: number,
+    membershipId: string,
+    accessToken: string,
+    request: {
+      qq?: string;
+      characterId: string;
+      loadoutIndex: number;
+      colorHash?: number;
+      iconHash?: number;
+      nameHash?: number;
+    }
+  ): Promise<InventoryActionResult> {
+    if (request.colorHash === undefined && request.iconHash === undefined && request.nameHash === undefined) {
+      throw new BadRequestError("at least one of colorHash, iconHash, or nameHash is required");
+    }
+    const response = await this.client.post<unknown>("/Destiny2/Actions/Loadouts/UpdateLoadoutIdentifiers/", {
+      headers: oauthHeaders(accessToken),
+      body: {
+        loadoutIndex: request.loadoutIndex,
+        characterId: request.characterId,
+        membershipType,
+        ...(request.colorHash !== undefined ? { colorHash: request.colorHash } : {}),
+        ...(request.iconHash !== undefined ? { iconHash: request.iconHash } : {}),
+        ...(request.nameHash !== undefined ? { nameHash: request.nameHash } : {})
+      }
+    });
+    return {
+      qq: request.qq,
+      membershipType,
+      membershipId,
+      action: "updateLoadoutIdentifiers",
+      ok: true,
+      characterId: request.characterId,
+      loadoutIndex: request.loadoutIndex,
+      bungieResponse: response,
+      message: "已更新游戏内 Loadout 标识",
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  async clearLoadout(
+    membershipType: number,
+    membershipId: string,
+    accessToken: string,
+    request: { qq?: string; characterId: string; loadoutIndex: number }
+  ): Promise<InventoryActionResult> {
+    const response = await this.client.post<unknown>("/Destiny2/Actions/Loadouts/ClearLoadout/", {
+      headers: oauthHeaders(accessToken),
+      body: {
+        loadoutIndex: request.loadoutIndex,
+        characterId: request.characterId,
+        membershipType
+      }
+    });
+    return {
+      qq: request.qq,
+      membershipType,
+      membershipId,
+      action: "clearLoadout",
+      ok: true,
+      characterId: request.characterId,
+      loadoutIndex: request.loadoutIndex,
+      bungieResponse: response,
+      message: "已清空游戏内 Loadout 槽",
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  async saveLocalLoadout(
+    membershipType: number,
+    membershipId: string,
+    accessToken: string,
+    request: {
+      qq: string;
+      name: string;
+      characterId?: string;
+      source?: string;
+      optimizerSessionId?: string;
+      optimizerBuildId?: string;
+      notes?: string;
+      overwrite: boolean;
+    }
+  ): Promise<SavedLoadoutSummary> {
+    const name = normalizeSavedLoadoutName(request.name);
+    const existing = await this.store.getSavedLoadout(request.qq, name);
+    if (existing && !request.overwrite) {
+      throw new BadRequestError("saved loadout already exists; pass overwrite=true to replace it", { name });
+    }
+
+    if (request.optimizerSessionId && request.optimizerBuildId) {
+      const cached = await this.cache.getJson<LoadoutOptimizerSearchSummary>(
+        optimizerSessionCacheKey(request.qq, request.optimizerSessionId)
+      );
+      if (!cached || cached.qq !== request.qq || cached.membershipType !== membershipType || cached.membershipId !== membershipId) {
+        throw new NotFoundError("loadout optimizer session was not found or expired");
+      }
+      const build = cached.builds.find((entry) => entry.buildId === request.optimizerBuildId);
+      if (!build) {
+        throw new NotFoundError("loadout optimizer build was not found");
+      }
+      const row = await this.store.upsertSavedLoadout(
+        {
+          qq: request.qq,
+          name,
+          className: cached.className,
+          characterId: cached.characterId,
+          source: request.source || "optimizer",
+          items: build.armor.map((item) => optimizerArmorToInventorySnapshot(item)),
+          statMods: build.statMods,
+          fragments: build.fragments,
+          notes: request.notes
+        },
+        request.overwrite
+      );
+      return savedLoadoutRowToSummary(row);
+    }
+
+    const inventory = await this.getPrivateInventory(membershipType, membershipId, accessToken, request.qq);
+    const character = selectSavedLoadoutCharacter(inventory.characters, request.characterId);
+    if (!character) {
+      throw new BadRequestError("characterId was not found on this account");
+    }
+    const items = inventory.items.filter(
+      (item) =>
+        item.owner === "equipped" &&
+        item.characterId === character.characterId &&
+        item.itemInstanceId &&
+        isSavedLoadoutGearItem(item)
+    );
+    if (!items.length) {
+      throw new BadRequestError("selected character has no equipped items to save");
+    }
+    const row = await this.store.upsertSavedLoadout(
+      {
+        qq: request.qq,
+        name,
+        className: character.className,
+        characterId: character.characterId,
+        source: request.source || "current_equipped",
+        items: items.map(savedInventoryItemSnapshot),
+        statMods: [],
+        fragments: [],
+        notes: request.notes
+      },
+      request.overwrite
+    );
+    return savedLoadoutRowToSummary(row);
+  }
+
+  async getSavedLoadout(qq: string, idOrName: string): Promise<SavedLoadoutSummary> {
+    const row = await this.store.getSavedLoadout(qq, idOrName);
+    if (!row) {
+      throw new NotFoundError("saved loadout was not found");
+    }
+    return savedLoadoutRowToSummary(row);
+  }
+
+  async listSavedLoadouts(qq: string): Promise<SavedLoadoutSummary[]> {
+    return (await this.store.listSavedLoadouts(qq)).map(savedLoadoutRowToSummary);
+  }
+
+  async applySavedLoadout(
+    membershipType: number,
+    membershipId: string,
+    accessToken: string,
+    request: { qq: string; idOrName: string; characterId?: string; confirm: boolean }
+  ): Promise<SavedLoadoutApplyResult> {
+    if (!request.confirm) {
+      throw new BadRequestError("confirm must be true to apply a saved loadout");
+    }
+    const row = await this.store.getSavedLoadout(request.qq, request.idOrName);
+    if (!row) {
+      throw new NotFoundError("saved loadout was not found");
+    }
+    const inventory = await this.getPrivateInventory(membershipType, membershipId, accessToken, request.qq);
+    const character = selectSavedLoadoutCharacter(inventory.characters, request.characterId || row.characterId);
+    if (!character) {
+      throw new BadRequestError("target character was not found on this account");
+    }
+
+    const savedItems = Array.isArray(row.items) ? row.items.map((item) => asRecord(item)) : [];
+    const currentByInstanceId = new Map(
+      inventory.items
+        .filter((item) => item.itemInstanceId)
+        .map((item) => [String(item.itemInstanceId), item])
+    );
+    const missingItemIds: string[] = [];
+    const itemsToEquip: InventoryItemSummary[] = [];
+    for (const savedItem of savedItems) {
+      const itemInstanceId = optionalString(savedItem.itemInstanceId);
+      if (!itemInstanceId) {
+        continue;
+      }
+      const current = currentByInstanceId.get(itemInstanceId);
+      if (!current) {
+        missingItemIds.push(itemInstanceId);
+        continue;
+      }
+      if (current.canEquip && isSavedLoadoutGearItem(current)) {
+        itemsToEquip.push(current);
+      }
+    }
+    if (missingItemIds.length) {
+      throw new BadRequestError("saved loadout contains items that are no longer available", { missingItemIds });
+    }
+    if (!itemsToEquip.length) {
+      throw new BadRequestError("saved loadout has no equippable items");
+    }
+
+    const transferredItemIds: string[] = [];
+    const bungieResponses: unknown[] = [];
+    for (const item of itemsToEquip) {
+      const itemInstanceId = item.itemInstanceId;
+      if (!itemInstanceId) {
+        continue;
+      }
+      if (item.owner === "vault") {
+        const transfer = await this.transferInventoryItem(membershipType, membershipId, accessToken, {
+          qq: request.qq,
+          itemReferenceHash: item.itemHash,
+          stackSize: 1,
+          transferToVault: false,
+          itemId: itemInstanceId,
+          characterId: character.characterId
+        });
+        transferredItemIds.push(itemInstanceId);
+        bungieResponses.push(transfer.bungieResponse);
+      } else if (item.characterId && item.characterId !== character.characterId) {
+        const toVault = await this.transferInventoryItem(membershipType, membershipId, accessToken, {
+          qq: request.qq,
+          itemReferenceHash: item.itemHash,
+          stackSize: 1,
+          transferToVault: true,
+          itemId: itemInstanceId,
+          characterId: item.characterId
+        });
+        const fromVault = await this.transferInventoryItem(membershipType, membershipId, accessToken, {
+          qq: request.qq,
+          itemReferenceHash: item.itemHash,
+          stackSize: 1,
+          transferToVault: false,
+          itemId: itemInstanceId,
+          characterId: character.characterId
+        });
+        transferredItemIds.push(itemInstanceId);
+        bungieResponses.push(toVault.bungieResponse, fromVault.bungieResponse);
+      }
+    }
+
+    const equippedItemIds = itemsToEquip.map((item) => String(item.itemInstanceId)).filter(Boolean);
+    const equip = await this.equipInventoryItems(membershipType, membershipId, accessToken, {
+      qq: request.qq,
+      itemIds: equippedItemIds,
+      characterId: character.characterId
+    });
+    bungieResponses.push(equip.bungieResponse);
+    await this.store.touchSavedLoadoutApplied(request.qq, row.id);
+    return {
+      qq: request.qq,
+      membershipType,
+      membershipId,
+      savedLoadoutId: row.id,
+      savedLoadoutName: row.name,
+      characterId: character.characterId,
+      transferredItemIds,
+      equippedItemIds,
+      missingItemIds,
+      statMods: savedLoadoutRowToSummary(row).statMods,
+      fragments: savedLoadoutRowToSummary(row).fragments,
+      bungieResponses,
+      message: `已应用本地保存配装：${row.name}。模组、碎片、皮肤和染色请按保存信息手动调整。`,
       updatedAt: new Date().toISOString()
     };
   }
@@ -1402,13 +2025,22 @@ export class DestinyService {
     const activityDefinitions = await this.manifest.getDefinitionMap<RaidActivityDefinition>(
       "DestinyActivityDefinition"
     );
-    const aggregateResponses = await Promise.all(
+    const aggregateResults = await Promise.allSettled(
       profile.characters.map((character) =>
         this.client.get<unknown>(
           `/Destiny2/${membershipType}/Account/${membershipId}/Character/${character.characterId}/Stats/AggregateActivityStats/`
         )
       )
     );
+    const aggregateResponses = aggregateResults.flatMap((result) =>
+      result.status === "fulfilled" ? [result.value] : []
+    );
+    const aggregateErrors = aggregateResults.flatMap((result, index) =>
+      result.status === "rejected"
+        ? [`${profile.characters[index]?.characterId ?? "unknown"}: ${scanErrorMessage(result.reason)}`]
+        : []
+    );
+    const aggregateStatsAvailable = aggregateResponses.length > 0;
 
     const groups = new Map<string, RaidOverviewGroup>();
     for (const response of aggregateResponses) {
@@ -1434,6 +2066,15 @@ export class DestinyService {
       if (completed && (!group.lastClearedAt || activity.period > group.lastClearedAt)) {
         group.lastClearedAt = activity.period;
         group.lastActivityId = activity.activityId;
+      }
+      if (!aggregateStatsAvailable && completed) {
+        group.completions += 1;
+        group.fullClears += 1;
+        group.wins = group.fullClears;
+        group.kills += statBasicValue(activity.values, "kills");
+        group.deaths += statBasicValue(activity.values, "deaths");
+        group.secondsPlayed +=
+          statBasicValue(activity.values, "activityDurationSeconds") || statBasicValue(activity.values, "secondsPlayed");
       }
     }
 
@@ -1479,7 +2120,7 @@ export class DestinyService {
 
     const raids = [...groups.values()]
       .map(finalizeRaidGroup)
-      .filter((raid) => raid.clears > 0 || raid.completions > 0)
+      .filter((raid) => raid.clears > 0 || raid.completions > 0 || raid.scannedCompletions > 0)
       .sort((a, b) => b.sortOrder - a.sortOrder || difficultySort(a.difficulty) - difficultySort(b.difficulty) || a.name.localeCompare(b.name));
 
     const result: RaidOverview = {
@@ -1498,9 +2139,14 @@ export class DestinyService {
       scan: {
         historyPages: options.historyPages,
         pgcrLimit: options.pgcrLimit,
+        aggregateStatsAvailable,
+        aggregateCharactersScanned: aggregateResponses.length,
+        ...(aggregateErrors.length > 0 ? { aggregateErrors } : {}),
         recentActivitiesScanned: recentActivities.length,
         pgcrScanned,
-        note: "fullClears/completions/fastest are all-time aggregate stats; sherpa/flawless/dayOne/solo/trio are only confirmed from scanned recent PGCRs"
+        note: aggregateStatsAvailable
+          ? "fullClears/completions/fastest are all-time aggregate stats; sherpa/flawless/dayOne/solo/trio are only confirmed from scanned recent PGCRs"
+          : "Bungie aggregate raid stats are unavailable right now; counts are best-effort from recent activity history and scanned PGCRs"
       },
       updatedAt: new Date().toISOString()
     };
@@ -1798,7 +2444,7 @@ export class DestinyService {
       membershipType: optionalNumber(destinyUserInfo.membershipType),
       membershipId,
       characterId: optionalString(entry.characterId),
-      emblemPath: optionalString(player.emblemPath),
+      emblemPath: optionalString(player.emblemPath) ?? optionalString(destinyUserInfo.iconPath),
       team: optionalNumber(entry.team),
       standing: optionalNumber(entry.standing),
       ...values,
@@ -1894,6 +2540,24 @@ export class DestinyService {
     return groups;
   }
 
+  private async getPublicCraftableItemHashes(): Promise<Set<string>> {
+    const hashes = new Set<string>();
+    try {
+      const definitions = await this.manifest.getDefinitionMap<PresentationNodeDefinition>("DestinyPresentationNodeDefinition");
+      for (const definition of Object.values(definitions)) {
+        for (const craftable of asArray(definition.children?.craftables)) {
+          const itemHash = optionalNumber(asRecord(craftable).craftableItemHash) ?? optionalString(asRecord(craftable).craftableItemHash);
+          if (itemHash !== undefined) {
+            hashes.add(String(itemHash));
+          }
+        }
+      }
+    } catch {
+      return hashes;
+    }
+    return hashes;
+  }
+
   private async toCraftableWeapon(
     itemHash: string,
     craftable: Record<string, unknown>,
@@ -1923,6 +2587,60 @@ export class DestinyService {
       requirementCount,
       socketCount
     };
+  }
+
+  private async toItemInfoMatch(
+    itemHash: string,
+    definition: InventoryItemDefinition,
+    match: { score: number; reason: string },
+    inventoryDefinitions: Record<string, InventoryItemDefinition>,
+    statDefinitions: Record<string, StatDefinition>,
+    sandboxPerkDefinitions: Record<string, SandboxPerkDefinition>,
+    craftableItems: Set<string>
+  ): Promise<ItemInfoMatch> {
+    const name = itemInfoName(definition, `Item ${itemHash}`);
+    const catalyst = await this.itemInfoCatalystSummary(name);
+    return {
+      itemHash,
+      name,
+      description: optionalString(definition.displayProperties?.description),
+      iconPath: optionalString(definition.displayProperties?.icon),
+      watermarkIconPath:
+        optionalString(definition.iconWatermark) ??
+        optionalString(definition.iconWatermarkShelved) ??
+        optionalString(definition.quality?.displayVersionWatermarkIcons?.[0]),
+      itemTypeDisplayName: optionalString(definition.itemTypeDisplayName),
+      tierTypeName: optionalString(definition.inventory?.tierTypeName),
+      bucketName: optionalString(definition.inventory?.bucketTypeName),
+      slotLabel: itemInfoSlotLabel(definition),
+      damageType: itemInfoDamageType(definition),
+      ammoType: itemInfoAmmoType(definition),
+      className: itemInfoClassName(definition),
+      source: itemInfoSource(definition),
+      craftable: craftableItems.has(itemHash),
+      stats: itemInfoStats(definition, statDefinitions),
+      perks: itemInfoPerks(definition, inventoryDefinitions, sandboxPerkDefinitions),
+      ...(catalyst ? { catalyst } : {}),
+      match
+    };
+  }
+
+  private async itemInfoCatalystSummary(weaponName: string): Promise<ItemInfoMatch["catalyst"] | undefined> {
+    try {
+      const info = await this.getCatalystInfo(weaponName);
+      const match = info.matches.find((entry) => normalizeItemInfoMatchName(entry.weaponName) === normalizeItemInfoMatchName(weaponName)) ?? info.matches[0];
+      if (!match) {
+        return undefined;
+      }
+      return {
+        recordHash: match.recordHash,
+        catalystName: match.catalystName,
+        effectDescription: match.effectDescription,
+        completionDescription: match.completionDescription
+      };
+    } catch {
+      return undefined;
+    }
   }
 
   private async getCatalystPresentationRecordHashes(): Promise<Set<string>> {
@@ -1994,6 +2712,22 @@ export class DestinyService {
     }
   }
 
+  private async safeObjectiveDefinitions(): Promise<Record<string, ObjectiveDefinition>> {
+    try {
+      return await this.manifest.getDefinitionMap<ObjectiveDefinition>("DestinyObjectiveDefinition");
+    } catch {
+      return {};
+    }
+  }
+
+  private async safeSandboxPerkDefinitions(): Promise<Record<string, SandboxPerkDefinition>> {
+    try {
+      return await this.manifest.getDefinitionMap<SandboxPerkDefinition>("DestinySandboxPerkDefinition");
+    } catch {
+      return {};
+    }
+  }
+
   private async safeInventoryBucketDefinitions(): Promise<Record<string, InventoryBucketDefinition>> {
     try {
       return await this.manifest.getDefinitionMap<InventoryBucketDefinition>("DestinyInventoryBucketDefinition");
@@ -2005,6 +2739,14 @@ export class DestinyService {
   private async safeStatDefinitions(): Promise<Record<string, StatDefinition>> {
     try {
       return await this.manifest.getDefinitionMap<StatDefinition>("DestinyStatDefinition");
+    } catch {
+      return {};
+    }
+  }
+
+  private async safePlugSetDefinitions(): Promise<Record<string, PlugSetDefinition>> {
+    try {
+      return await this.manifest.getDefinitionMap<PlugSetDefinition>("DestinyPlugSetDefinition");
     } catch {
       return {};
     }
@@ -2210,6 +2952,79 @@ export class DestinyService {
     };
   }
 
+  private toCatalystInfoMatch(
+    query: string,
+    recordHash: string,
+    definition: RecordDefinition,
+    inventoryDefinitions: Record<string, InventoryItemDefinition>,
+    objectiveDefinitions: Record<string, ObjectiveDefinition>,
+    sandboxPerkDefinitions: Record<string, SandboxPerkDefinition>
+  ): CatalystInfoMatch | null {
+    const recordName = catalystDisplayName(definition, `Catalyst ${recordHash}`);
+    const weaponHash = findCatalystWeaponHash(definition, recordName, inventoryDefinitions);
+    const weaponDefinition = weaponHash ? inventoryDefinitions[weaponHash] : undefined;
+    const catalystItemHash = findCatalystItemHash(definition, weaponHash, inventoryDefinitions);
+    const catalystDefinition = catalystItemHash ? inventoryDefinitions[catalystItemHash] : undefined;
+    const fallbackName = stripCatalystWords(recordName) || recordName;
+    const recordDescription = optionalString(definition.displayProperties?.description);
+    const catalystItemName = optionalString(catalystDefinition?.displayProperties?.name);
+    const catalystItemDescription = optionalString(catalystDefinition?.displayProperties?.description);
+    const aliasFallback = catalystAliasFallbackFor(
+      recordName,
+      fallbackName,
+      optionalString(weaponDefinition?.displayProperties?.name),
+      catalystItemName,
+      catalystItemDescription
+    );
+    const weaponName = aliasFallback?.weaponName ?? asString(weaponDefinition?.displayProperties?.name, fallbackName);
+    if (isLikelyCraftingPatternRecord(recordName, recordDescription, catalystItemName, catalystItemDescription)) {
+      return null;
+    }
+    const score = catalystInfoMatchScore(query, {
+      weaponName,
+      recordName,
+      recordDescription,
+      catalystItemName,
+      catalystItemDescription
+    });
+    if (!score) {
+      return null;
+    }
+    const objectives = toCatalystInfoObjectives(definition, objectiveDefinitions);
+    const definitionSlot = catalystSlotFromItem(weaponDefinition);
+    const slot = definitionSlot === "unknown" && aliasFallback?.slot ? aliasFallback.slot : definitionSlot;
+    const catalystDescription = recordDescription;
+    const perkEffectDescription = catalystEffectDescriptionFromPerks(catalystDefinition, sandboxPerkDefinitions);
+    const weaponDescription = optionalString(weaponDefinition?.displayProperties?.description);
+    const effectDescription =
+      firstMeaningfulCatalystText(
+        perkEffectDescription,
+        isGenericCatalystObjectiveText(catalystItemDescription) ? undefined : catalystItemDescription,
+        isGenericCatalystObjectiveText(catalystDescription) ? undefined : catalystDescription,
+        isGenericCatalystObjectiveText(weaponDescription) ? undefined : weaponDescription
+      ) ?? undefined;
+    const completionDescription = objectives.map((objective) => objective.description).filter(Boolean).join("；") || undefined;
+    return {
+      recordHash,
+      weaponHash,
+      catalystItemHash,
+      weaponName,
+      catalystName: recordName,
+      catalystDescription,
+      effectDescription,
+      completionDescription,
+      iconPath:
+        optionalString(weaponDefinition?.displayProperties?.icon) ??
+        optionalString(catalystDefinition?.displayProperties?.icon) ??
+        optionalString(definition.displayProperties?.icon),
+      itemTypeDisplayName: optionalString(weaponDefinition?.itemTypeDisplayName) ?? aliasFallback?.itemTypeDisplayName,
+      slot,
+      slotLabel: CATALYST_SLOT_LABELS[slot],
+      objectives,
+      match: score
+    };
+  }
+
   private toCatalystWeapon(
     recordHash: string,
     definition: RecordDefinition,
@@ -2219,25 +3034,32 @@ export class DestinyService {
     const recordName = catalystDisplayName(definition, `Catalyst ${recordHash}`);
     const weaponHash = findCatalystWeaponHash(definition, recordName, inventoryDefinitions);
     const weaponDefinition = weaponHash ? inventoryDefinitions[weaponHash] : undefined;
+    const componentRecord = asRecord(component);
     const objectives = toCatalystObjectives(component, definition);
     const progress = objectives.reduce((sum, objective) => sum + objective.progress, 0);
     const completionValue = objectives.reduce((sum, objective) => sum + objective.completionValue, 0);
-    const redeemed = hasRecordState(asRecord(component).state, 1);
-    const visible = !hasRecordState(asRecord(component).state, 8) && !hasRecordState(asRecord(component).state, 16);
+    const redeemed = hasRecordState(componentRecord.state, 1);
+    const visible = !hasRecordState(componentRecord.state, 8) && !hasRecordState(componentRecord.state, 16);
     const completed = redeemed || (objectives.length > 0 && objectives.every((objective) => objective.complete));
     const percent = completionValue > 0 ? round((Math.min(progress, completionValue) / completionValue) * 100) : completed ? 100 : 0;
+    const obtained =
+      visible &&
+      (Boolean(component && Object.keys(componentRecord).length > 0) || redeemed || completed || progress > 0);
     const slot = catalystSlotFromItem(weaponDefinition);
     const fallbackName = stripCatalystWords(recordName) || recordName;
+    const aliasFallback = catalystAliasFallbackFor(recordName, fallbackName, optionalString(weaponDefinition?.displayProperties?.name));
+    const resolvedSlot = slot === "unknown" && aliasFallback?.slot ? aliasFallback.slot : slot;
     return {
       recordHash,
       weaponHash,
-      name: asString(weaponDefinition?.displayProperties?.name, fallbackName),
+      name: aliasFallback?.weaponName ?? asString(weaponDefinition?.displayProperties?.name, fallbackName),
       description: optionalString(definition.displayProperties?.description),
       iconPath: optionalString(weaponDefinition?.displayProperties?.icon) ?? optionalString(definition.displayProperties?.icon),
-      itemTypeDisplayName: optionalString(weaponDefinition?.itemTypeDisplayName),
-      slot,
-      slotLabel: CATALYST_SLOT_LABELS[slot],
+      itemTypeDisplayName: optionalString(weaponDefinition?.itemTypeDisplayName) ?? aliasFallback?.itemTypeDisplayName,
+      slot: resolvedSlot,
+      slotLabel: CATALYST_SLOT_LABELS[resolvedSlot],
       completed,
+      obtained,
       redeemed,
       visible,
       percent,
@@ -2385,7 +3207,7 @@ export class DestinyService {
     const raidMode = parsePublicMode("raid");
     const perCharacter = await Promise.all(
       characterIds.map(async (characterId) => {
-        const pages = await Promise.all(
+        const pages = await Promise.allSettled(
           Array.from({ length: historyPages }, (_, page) =>
             this.getCharacterActivitiesForRaidScan(
               membershipType,
@@ -2398,7 +3220,7 @@ export class DestinyService {
             )
           )
         );
-        return pages.flat();
+        return pages.flatMap((page) => (page.status === "fulfilled" ? page.value : []));
       })
     );
 
@@ -2534,7 +3356,7 @@ export class DestinyService {
         query: {
           count,
           page,
-          mode: NIGHTFALL_MODE_TYPE
+          mode: GRANDMASTER_NIGHTFALL_MODE_TYPE
         }
       }
     );
@@ -2797,6 +3619,8 @@ interface RaidActivityDefinition {
   };
   activityModeTypes?: number[];
   activityModeHashes?: number[];
+  directActivityModeType?: number;
+  directActivityModeHash?: number;
   recommendedLight?: number;
   pgcrImage?: string;
   [key: string]: unknown;
@@ -3157,15 +3981,38 @@ function normalizeActivityDisplayName(name: string): string {
 }
 
 function grandmasterDisplayName(definition: RaidActivityDefinition | undefined, fallback: string): string {
-  const raw =
+  const rawName =
     optionalString(definition?.displayProperties?.name) ??
     optionalString(definition?.selectionScreenDisplayProperties?.name) ??
     fallback;
-  return raw
+  const cleaned = rawName
     .replace(/\s*[:：]\s*(Grandmaster|宗师)\s*$/iu, "")
     .replace(/\s*[（(]\s*(Grandmaster|宗师)\s*[）)]\s*$/iu, "")
     .replace(/\s+/gu, " ")
     .trim();
+  if (isGenericGrandmasterDisplayName(cleaned)) {
+    const specificName = [
+      definition?.displayProperties?.description,
+      optionalString(asRecord(definition?.originalDisplayProperties).description),
+      fallback
+    ]
+      .map((value) => optionalString(value))
+      .find((value) => value && !isGenericGrandmasterDisplayName(value));
+    if (specificName) {
+      return `宗师日落: ${specificName.replace(/\s+/gu, " ").trim()}`;
+    }
+  }
+  return cleaned;
+}
+
+function isGenericGrandmasterDisplayName(value: string | undefined): boolean {
+  const normalized = String(value || "")
+    .replace(/\s*[:：]\s*(Grandmaster|宗师)\s*$/iu, "")
+    .replace(/\s*[（(]\s*(Grandmaster|宗师)\s*[）)]\s*$/iu, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()
+    .toLowerCase();
+  return normalized === "nightfall" || normalized === "grandmaster" || normalized === "日落" || normalized === "宗师";
 }
 
 function isPantheonActivityName(name: string): boolean {
@@ -3369,6 +4216,13 @@ function heatmapErrorMessage(error: unknown): string {
     return error.message;
   }
   return String(error || "unknown heatmap scan error");
+}
+
+function scanErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return String(error || "unknown scan error");
 }
 
 function buildHeatmapCalendar(days: HeatmapBucket[], range: HeatmapRange, targetYear: number | undefined): HeatmapCalendarYear[] {
@@ -3769,6 +4623,14 @@ function isCatalystText(...values: unknown[]): boolean {
   return values.some((value) => /催化|catalyst/iu.test(String(value ?? "")));
 }
 
+function isLikelyCraftingPatternRecord(...values: unknown[]): boolean {
+  const text = values.map((value) => String(value ?? "")).join(" ");
+  if (!text.trim()) {
+    return false;
+  }
+  return /深视|共振|模式|图纸|锻造|pattern|deepsight|resonance|extract|shape/iu.test(text) && !isCatalystText(text);
+}
+
 function catalystDisplayName(definition: RecordDefinition | undefined, fallback = "Unknown Catalyst"): string {
   return asString(definition?.displayProperties?.name, fallback);
 }
@@ -3783,11 +4645,161 @@ function stripCatalystWords(value: string): string {
     .trim();
 }
 
+const CATALYST_WEAPON_ALIAS_GROUPS = [
+  ["虫狙", "蠕虫低语", "低语", "whisper of the worm", "whisper"],
+  ["挽歌", "the lament", "lament"],
+  ["黑桃", "黑桃a", "ace of spades", "ace"],
+  ["睡炮", "睡者之吼", "sleeper simulant", "sleeper"],
+  ["烈日", "烈日弹丸", "sunshot"],
+  ["三体", "三体坐观者", "trinity ghoul"],
+  ["帝王蝶", "le monarque", "monarque"],
+  ["枯萎", "枯萎囤积", "withhoard"],
+  ["雷神", "雷神机枪", "thunderlord"],
+  ["加拉尔", "加拉尔号角", "gjallarhorn", "gjally"]
+] as const;
+
+const CATALYST_WEAPON_ALIAS_FALLBACKS: Array<{
+  terms: readonly string[];
+  weaponName: string;
+  itemTypeDisplayName?: string;
+  slot?: CatalystSlot;
+}> = [
+  {
+    terms: ["虫狙", "蠕虫低语", "低语", "whisper of the worm", "whisper"],
+    weaponName: "蠕虫低语",
+    itemTypeDisplayName: "狙击步枪",
+    slot: "power"
+  },
+  {
+    terms: ["挽歌", "the lament", "lament"],
+    weaponName: "挽歌",
+    itemTypeDisplayName: "刀剑",
+    slot: "power"
+  },
+  {
+    terms: ["睡炮", "睡者之吼", "sleeper simulant", "sleeper"],
+    weaponName: "睡者之吼",
+    itemTypeDisplayName: "线性融合步枪",
+    slot: "power"
+  },
+  {
+    terms: ["加拉尔", "加拉尔号角", "gjallarhorn", "gjally"],
+    weaponName: "加拉尔号角",
+    itemTypeDisplayName: "火箭发射器",
+    slot: "power"
+  }
+];
+
 function normalizeCatalystMatchName(value: string): string {
   return value
     .toLowerCase()
     .replace(/[\s'’"“”《》:：·\-|/\\()[\]{}]+/gu, "")
     .trim();
+}
+
+function normalizeCatalystInfoSearchText(value: string): string {
+  return normalizeCatalystMatchName(
+    value
+      .replace(/催化剂|催化效果|催化进度|催化|效果|查询一下|查询下|查询|查一下|查下|查看|帮我查|帮忙查|看一下|看下|看看|查|我需要|需要|我的|我|有没有|有没|是否|是什么|什么|的/gu, "")
+      .trim()
+  );
+}
+
+function catalystSearchTerms(query: string): string[] {
+  const normalized = normalizeCatalystInfoSearchText(query);
+  const terms = new Set<string>();
+  if (normalized) {
+    terms.add(normalized);
+  }
+  for (const group of CATALYST_WEAPON_ALIAS_GROUPS) {
+    const normalizedGroup = group.map((entry) => normalizeCatalystMatchName(entry)).filter(Boolean);
+    if (
+      normalizedGroup.some(
+        (entry) =>
+          entry === normalized ||
+          (entry.length >= 2 && normalized.includes(entry)) ||
+          (normalized.length >= 2 && entry.includes(normalized))
+      )
+    ) {
+      for (const entry of normalizedGroup) {
+        terms.add(entry);
+      }
+    }
+  }
+  return [...terms];
+}
+
+function catalystAliasFallbackFor(...values: Array<string | undefined>): (typeof CATALYST_WEAPON_ALIAS_FALLBACKS)[number] | undefined {
+  const normalizedValues = new Set<string>();
+  for (const value of values) {
+    const raw = String(value ?? "").trim();
+    if (!raw) {
+      continue;
+    }
+    const normalized = normalizeCatalystInfoSearchText(raw) || normalizeCatalystMatchName(raw);
+    if (normalized) {
+      normalizedValues.add(normalized);
+    }
+    for (const term of catalystSearchTerms(raw)) {
+      normalizedValues.add(term);
+    }
+  }
+
+  for (const fallback of CATALYST_WEAPON_ALIAS_FALLBACKS) {
+    const terms = fallback.terms.map((term) => normalizeCatalystMatchName(term)).filter(Boolean);
+    if (
+      terms.some((term) =>
+        [...normalizedValues].some(
+          (value) => value === term || (term.length >= 2 && value.includes(term)) || (value.length >= 2 && term.includes(value))
+        )
+      )
+    ) {
+      return fallback;
+    }
+  }
+  return undefined;
+}
+
+function catalystInfoMatchScore(
+  query: string,
+  values: {
+    weaponName?: string;
+    recordName?: string;
+    recordDescription?: string;
+    catalystItemName?: string;
+    catalystItemDescription?: string;
+  }
+): { score: number; reason: string } | null {
+  const normalizedQueries = catalystSearchTerms(query);
+  if (normalizedQueries.length === 0) {
+    return null;
+  }
+  const candidates: Array<[string, string, number]> = [
+    ["武器名", values.weaponName ?? "", 0],
+    ["催化记录", stripCatalystWords(values.recordName ?? ""), 10],
+    ["催化名", values.recordName ?? "", 20],
+    ["催化物品", values.catalystItemName ?? "", 30],
+    ["催化说明", values.catalystItemDescription ?? "", 50],
+    ["记录说明", values.recordDescription ?? "", 60]
+  ];
+  for (const [reason, raw, baseScore] of candidates) {
+    const normalized = normalizeCatalystMatchName(raw);
+    if (!normalized) {
+      continue;
+    }
+    for (const normalizedQuery of normalizedQueries) {
+      if (normalized === normalizedQuery) {
+        return { score: baseScore, reason: `${reason}精确匹配` };
+      }
+      if (normalized.includes(normalizedQuery)) {
+        return { score: baseScore + 5, reason: `${reason}包含查询词` };
+      }
+      if (normalizedQuery.includes(normalized) && normalized.length >= 2) {
+        return { score: baseScore + 8, reason: `${reason}被查询词包含` };
+      }
+    }
+  }
+  return null;
 }
 
 function findCatalystWeaponHash(
@@ -3803,7 +4815,6 @@ function findCatalystWeaponHash(
     }
   }
 
-  const fallbackHash = rewardHashes.find((hash) => inventoryDefinitions[hash]);
   const cleanName = normalizeCatalystMatchName(stripCatalystWords(recordName));
   if (cleanName.length >= 2) {
     for (const [hash, item] of Object.entries(inventoryDefinitions)) {
@@ -3814,7 +4825,92 @@ function findCatalystWeaponHash(
     }
   }
 
-  return fallbackHash;
+  return undefined;
+}
+
+function findCatalystItemHash(
+  definition: RecordDefinition,
+  weaponHash: string | undefined,
+  inventoryDefinitions: Record<string, InventoryItemDefinition>
+): string | undefined {
+  const rewardHashes = extractItemHashes(definition).filter((hash) => hash !== weaponHash);
+  const catalystHash = rewardHashes.find((hash) => {
+    const item = inventoryDefinitions[hash];
+    return item && isLikelyCatalystInventoryItem(item);
+  });
+  if (catalystHash) {
+    return catalystHash;
+  }
+
+  const recordName = catalystDisplayName(definition, "");
+  const normalizedRecordName = normalizeCatalystMatchName(recordName);
+  if (normalizedRecordName.length >= 2) {
+    const byName = Object.entries(inventoryDefinitions).find(([, item]) => {
+      const itemName = normalizeCatalystMatchName(asString(item.displayProperties?.name));
+      return itemName === normalizedRecordName && isLikelyCatalystInventoryItem(item);
+    });
+    if (byName) {
+      return byName[0];
+    }
+
+    const byContainedName = Object.entries(inventoryDefinitions).find(([, item]) => {
+      const itemName = normalizeCatalystMatchName(asString(item.displayProperties?.name));
+      return itemName.includes(normalizedRecordName) && isLikelyCatalystInventoryItem(item);
+    });
+    if (byContainedName) {
+      return byContainedName[0];
+    }
+  }
+
+  return rewardHashes.find((hash) => {
+    const item = inventoryDefinitions[hash];
+    return item && !isLikelyWeaponItem(item);
+  });
+}
+
+function isLikelyCatalystInventoryItem(item: InventoryItemDefinition): boolean {
+  const traitIds = asArray(item.traitIds).map((entry) => String(entry).toLowerCase());
+  return (
+    traitIds.some((entry) => entry.includes("exotic_catalyst") || entry.includes("catalyst")) ||
+    isCatalystText(item.displayProperties?.name, item.displayProperties?.description, item.itemTypeDisplayName)
+  );
+}
+
+function catalystEffectDescriptionFromPerks(
+  catalystDefinition: InventoryItemDefinition | undefined,
+  sandboxPerkDefinitions: Record<string, SandboxPerkDefinition>
+): string | undefined {
+  const perkHashes = asArray(catalystDefinition?.perks)
+    .map((perk) => {
+      const record = asRecord(perk);
+      const value = optionalNumber(record.perkHash) ?? optionalString(record.perkHash);
+      return value === undefined ? undefined : String(value);
+    })
+    .filter((hash): hash is string => Boolean(hash));
+
+  for (const perkHash of perkHashes) {
+    const definition = sandboxPerkDefinitions[perkHash];
+    if (!definition || definition.isDisplayable === false) {
+      continue;
+    }
+    const name = optionalString(definition.displayProperties?.name);
+    const description = optionalString(definition.displayProperties?.description);
+    if (!description || isGenericCatalystObjectiveText(description)) {
+      continue;
+    }
+    return name ? `${name}：${description}` : description;
+  }
+  return undefined;
+}
+
+function isGenericCatalystObjectiveText(value: string | undefined): boolean {
+  const text = String(value ?? "").trim();
+  return (
+    !text ||
+    /使用.*击败目标|使用.*消灭目标|击败目标|消灭目标|完成目标|将此武器升级为大师杰作|use .*defeat|defeat targets|masterwork/iu.test(
+      text
+    )
+  );
 }
 
 function extractItemHashes(value: unknown, depth = 0): string[] {
@@ -3873,6 +4969,161 @@ function toCatalystObjectives(
       };
     })
     .filter((objective) => objective.objectiveHash.length > 0);
+}
+
+function toCatalystInfoObjectives(
+  definition: RecordDefinition,
+  objectiveDefinitions: Record<string, ObjectiveDefinition>
+): CatalystInfoMatch["objectives"] {
+  return asArray(definition.objectiveHashes)
+    .map((hash, index) => {
+      const objectiveHash = optionalNumber(hash) ?? optionalString(hash);
+      const key = objectiveHash === undefined ? String(index) : String(objectiveHash);
+      const objective = objectiveDefinitions[key];
+      return {
+        objectiveHash: key,
+        description:
+          optionalString(objective?.displayProperties?.description) ??
+          optionalString(objective?.progressDescription) ??
+          optionalString(objective?.displayProperties?.name),
+        completionValue: optionalNumber(objective?.completionValue)
+      };
+    })
+    .filter((objective) => objective.objectiveHash.length > 0);
+}
+
+function uniqueCatalystInfoMatches(matches: CatalystInfoMatch[]): CatalystInfoMatch[] {
+  const byKey = new Map<string, CatalystInfoMatch>();
+  for (const match of matches) {
+    const key = match.recordHash || match.weaponHash || `${match.weaponName}:${match.catalystName}`;
+    const existing = byKey.get(key);
+    if (!existing || match.match.score < existing.match.score) {
+      byKey.set(key, match);
+    }
+  }
+  return [...byKey.values()];
+}
+
+function toCatalystStatusMatch(
+  query: string,
+  item: CatalystWeaponSummary,
+  infoMatches: CatalystInfoMatch[],
+  objectiveDefinitions: Record<string, ObjectiveDefinition>
+): CatalystStatusMatch | null {
+  const exactInfo = infoMatches.find(
+    (info) =>
+      info.recordHash === item.recordHash ||
+      (info.weaponHash !== undefined && item.weaponHash !== undefined && info.weaponHash === item.weaponHash)
+  );
+  if (
+    isLikelyCraftingPatternRecord(
+      item.name,
+      item.description,
+      exactInfo?.catalystName,
+      exactInfo?.catalystDescription,
+      exactInfo?.effectDescription,
+      exactInfo?.completionDescription
+    )
+  ) {
+    return null;
+  }
+  const score =
+    catalystInfoMatchScore(query, {
+      weaponName: item.name,
+      recordName: exactInfo?.catalystName,
+      recordDescription: item.description,
+      catalystItemName: exactInfo?.catalystName,
+      catalystItemDescription: exactInfo?.effectDescription
+    }) ??
+    (exactInfo
+      ? {
+          score: exactInfo.match.score + 25,
+          reason: exactInfo.match.reason
+        }
+      : null);
+  if (!score) {
+    return null;
+  }
+
+  const objectives = item.objectives.map((objective) => {
+    const definition = objectiveDefinitions[objective.objectiveHash];
+    return {
+      ...objective,
+      description:
+        optionalString(definition?.displayProperties?.description) ??
+        optionalString(definition?.progressDescription) ??
+        optionalString(definition?.displayProperties?.name)
+    };
+  });
+  const effectDescription =
+    exactInfo?.effectDescription ??
+    (isGenericCatalystObjectiveText(exactInfo?.catalystDescription) ? undefined : exactInfo?.catalystDescription) ??
+    (isGenericCatalystObjectiveText(item.description) ? undefined : item.description) ??
+    "Manifest 没有提供明确催化效果；下方显示的是完成目标。";
+  const objectiveDescription = objectives
+    .map((objective) => objective.description)
+    .filter(Boolean)
+    .join("；");
+  const completionDescription = exactInfo?.completionDescription ?? (objectiveDescription || item.description);
+  const aliasFallback = catalystAliasFallbackFor(
+    query,
+    item.name,
+    item.description,
+    exactInfo?.weaponName,
+    exactInfo?.catalystName,
+    exactInfo?.effectDescription,
+    exactInfo?.completionDescription
+  );
+  const slot = item.slot === "unknown" && exactInfo?.slot && exactInfo.slot !== "unknown" ? exactInfo.slot : item.slot;
+  const resolvedSlot = slot === "unknown" && aliasFallback?.slot ? aliasFallback.slot : slot;
+  const itemTypeDisplayName =
+    item.itemTypeDisplayName ?? exactInfo?.itemTypeDisplayName ?? aliasFallback?.itemTypeDisplayName;
+
+  return {
+    recordHash: item.recordHash,
+    weaponHash: item.weaponHash,
+    catalystItemHash: exactInfo?.catalystItemHash,
+    weaponName: aliasFallback?.weaponName ?? exactInfo?.weaponName ?? item.name,
+    catalystName: exactInfo?.catalystName ?? `${item.name}催化`,
+    catalystDescription: exactInfo?.catalystDescription ?? item.description,
+    effectDescription,
+    completionDescription,
+    iconPath: item.iconPath ?? exactInfo?.iconPath,
+    itemTypeDisplayName,
+    slot: resolvedSlot,
+    slotLabel: CATALYST_SLOT_LABELS[resolvedSlot],
+    obtained: item.obtained,
+    visible: item.visible,
+    completed: item.completed,
+    redeemed: item.redeemed,
+    percent: item.percent,
+    progress: item.progress,
+    completionValue: item.completionValue,
+    objectives,
+    infoObjectives: exactInfo?.objectives ?? [],
+    statusLabel: catalystStatusLabel(item),
+    match: score
+  };
+}
+
+function catalystStatusLabel(item: CatalystWeaponSummary): string {
+  if (item.completed) {
+    return "已完成";
+  }
+  if (!item.visible) {
+    return "当前不可见";
+  }
+  if (item.obtained) {
+    return "已获得 / 进行中";
+  }
+  return "未获得";
+}
+
+function firstMeaningfulCatalystText(...values: Array<string | undefined>): string | undefined {
+  const candidates = values
+    .map((value) => String(value ?? "").trim())
+    .filter((value) => value.length > 0 && value !== "???");
+  return candidates.find((value) => !/已添加至收藏品|可从收藏品重新获取/u.test(value)) ?? candidates[0];
 }
 
 function toCatalystObjective(objective: Record<string, unknown>, fallbackHash: string): CatalystObjectiveSummary {
@@ -4030,6 +5281,11 @@ interface StatDefinition {
   [key: string]: unknown;
 }
 
+interface PlugSetDefinition {
+  reusablePlugItems?: unknown[];
+  [key: string]: unknown;
+}
+
 interface InventorySearchCriteria {
   query: string;
   weaponType?: string;
@@ -4049,6 +5305,26 @@ interface RecordDefinition {
   rewardItems?: unknown[];
   loreHash?: unknown;
   recordTypeName?: unknown;
+  [key: string]: unknown;
+}
+
+interface ObjectiveDefinition {
+  displayProperties?: {
+    name?: string;
+    description?: string;
+  };
+  completionValue?: unknown;
+  progressDescription?: unknown;
+  [key: string]: unknown;
+}
+
+interface SandboxPerkDefinition {
+  displayProperties?: {
+    name?: string;
+    description?: string;
+    icon?: string;
+  };
+  isDisplayable?: boolean;
   [key: string]: unknown;
 }
 
@@ -4281,6 +5557,413 @@ function escapeRegExp(value: string): string {
 
 function uniqueStrings(values: string[]): string[] {
   return [...new Set(values.map((value) => normalizeSearchText(value)).filter(Boolean))];
+}
+
+function normalizeItemInfoSearchText(value: string): string {
+  return String(value || "")
+    .replace(/^\/+/u, " ")
+    .replace(/(@\S+\s*)+/gu, " ")
+    .replace(
+      /命运2|destiny\s*2|destiny2|d2stats|d2|查个武器|武器查询|查武器|武器资料|物品查询|查询一下|查询下|查询|查一下|查一查|查下|查看|帮我查|帮忙查|看一下|看下|看看|查|我需要|需要|这个|一下|一个|的|perk|perks|来源|出处|怎么获取|哪里出|怎么得|如何获得|是什么武器|是什么|什么|好不好用|好用吗|评价|资料/giu,
+      " "
+    )
+    .replace(/[，,：:、。？?！!；;]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function normalizeItemInfoMatchName(value: unknown): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}#]+/gu, "");
+}
+
+function itemInfoName(definition: InventoryItemDefinition | undefined, fallback = ""): string {
+  return asString(definition?.displayProperties?.name, fallback);
+}
+
+function itemInfoMatchScore(
+  query: string,
+  definition: InventoryItemDefinition
+): { score: number; reason: string } | null {
+  const search = normalizeItemInfoMatchName(normalizeItemInfoSearchText(query));
+  if (!search) {
+    return null;
+  }
+
+  const source = itemInfoSource(definition) ?? "";
+  const fields = [
+    { label: "名称", value: itemInfoName(definition), base: 0 },
+    { label: "类型", value: definition.itemTypeDisplayName, base: 35 },
+    { label: "来源", value: source, base: 55 },
+    { label: "描述", value: definition.displayProperties?.description, base: 70 }
+  ];
+
+  for (const field of fields) {
+    const normalized = normalizeItemInfoMatchName(field.value);
+    if (!normalized) {
+      continue;
+    }
+    if (normalized === search) {
+      return { score: field.base, reason: `${field.label}精确匹配` };
+    }
+    if (normalized.includes(search)) {
+      return { score: field.base + Math.max(1, normalized.length - search.length), reason: `${field.label}包含查询词` };
+    }
+    if (search.includes(normalized) && normalized.length >= 2) {
+      return { score: field.base + 25, reason: `查询词包含${field.label}` };
+    }
+  }
+
+  return null;
+}
+
+function itemInfoSlotLabel(definition: InventoryItemDefinition | undefined): string | undefined {
+  const bucketHash =
+    optionalNumber(definition?.inventory?.bucketTypeHash) ?? numberFrom(definition?.inventory?.bucketTypeHash, Number.NaN);
+  if (KINETIC_BUCKET_HASHES.has(bucketHash)) return "动能";
+  if (ENERGY_BUCKET_HASHES.has(bucketHash)) return "能量";
+  if (POWER_BUCKET_HASHES.has(bucketHash)) return "威能";
+  return optionalString(definition?.inventory?.bucketTypeName);
+}
+
+function itemInfoDamageType(definition: InventoryItemDefinition | undefined): string | undefined {
+  const direct =
+    optionalString(asRecord(definition).damageTypeName) ??
+    optionalString(asArray(asRecord(definition).damageTypeNames)[0]);
+  if (direct) {
+    return direct;
+  }
+  const damageType =
+    optionalNumber(asRecord(definition).defaultDamageType) ??
+    optionalNumber(asRecord(definition).damageType) ??
+    numberFrom(asRecord(definition).defaultDamageType ?? asRecord(definition).damageType, Number.NaN);
+  switch (damageType) {
+    case 1:
+      return "动能";
+    case 2:
+      return "电弧";
+    case 3:
+      return "烈日";
+    case 4:
+      return "虚空";
+    case 6:
+      return "冰影";
+    case 7:
+      return "缚丝";
+    default:
+      return undefined;
+  }
+}
+
+function itemInfoAmmoType(definition: InventoryItemDefinition | undefined): string | undefined {
+  const ammoType = optionalNumber(asRecord(definition?.equippingBlock).ammoType);
+  switch (ammoType) {
+    case 1:
+      return "主弹药";
+    case 2:
+      return "特殊弹药";
+    case 3:
+      return "重弹药";
+    default:
+      return undefined;
+  }
+}
+
+function itemInfoClassName(definition: InventoryItemDefinition | undefined): string | undefined {
+  switch (optionalNumber(definition?.classType)) {
+    case 0:
+      return "泰坦";
+    case 1:
+      return "猎人";
+    case 2:
+      return "术士";
+    default:
+      return undefined;
+  }
+}
+
+function itemInfoSource(definition: InventoryItemDefinition | undefined): string | undefined {
+  const record = asRecord(definition);
+  const direct = optionalString(record.displaySource) ?? optionalString(record.sourceString);
+  if (direct) {
+    return direct;
+  }
+  const sources = asArray(asRecord(record.sourceData).sources)
+    .map((source) => optionalString(asRecord(source).sourceString) ?? optionalString(asRecord(source).description))
+    .filter((value): value is string => Boolean(value));
+  return sources[0];
+}
+
+function itemInfoStats(
+  definition: InventoryItemDefinition | undefined,
+  statDefinitions: Record<string, StatDefinition>
+): ItemInfoMatch["stats"] {
+  const seen = new Set<string>();
+  const stats = asArray(definition?.investmentStats)
+    .map((rawStat): ItemInfoMatch["stats"][number] | null => {
+      const stat = asRecord(rawStat);
+      const hash = optionalNumber(stat.statTypeHash) ?? numberFrom(stat.statTypeHash, Number.NaN);
+      const value = optionalNumber(stat.value) ?? optionalNumber(stat.statValue);
+      if (!Number.isFinite(hash) || value === undefined || !Number.isFinite(value) || value <= 0) {
+        return null;
+      }
+      const hashText = String(hash);
+      if (seen.has(hashText)) {
+        return null;
+      }
+      seen.add(hashText);
+      return {
+        hash: hashText,
+        name: optionalString(statDefinitions[hashText]?.displayProperties?.name) ?? (hash === WEAPON_RPM_STAT_HASH ? "RPM" : hashText),
+        value
+      };
+    })
+    .filter((stat): stat is ItemInfoMatch["stats"][number] => stat !== null);
+
+  return stats
+    .sort((left, right) => {
+      if (left.hash === String(WEAPON_RPM_STAT_HASH)) return -1;
+      if (right.hash === String(WEAPON_RPM_STAT_HASH)) return 1;
+      return right.value - left.value;
+    })
+    .slice(0, 10);
+}
+
+function itemInfoPerks(
+  definition: InventoryItemDefinition | undefined,
+  inventoryDefinitions: Record<string, InventoryItemDefinition>,
+  sandboxPerkDefinitions: Record<string, SandboxPerkDefinition>
+): ItemInfoMatch["perks"] {
+  const perks: ItemInfoMatch["perks"] = [];
+  const seen = new Set<string>();
+  const push = (itemHash: unknown, source: "sandbox" | "inventory") => {
+    const hash = optionalNumber(itemHash) ?? numberFrom(itemHash, Number.NaN);
+    if (!Number.isFinite(hash)) {
+      return;
+    }
+    const key = `${source}:${hash}`;
+    if (seen.has(key)) {
+      return;
+    }
+    const definitionSource = source === "sandbox" ? sandboxPerkDefinitions[String(hash)] : inventoryDefinitions[String(hash)];
+    const name = optionalString(definitionSource?.displayProperties?.name);
+    if (!name || !isUsefulItemInfoPerkName(name, definitionSource?.displayProperties?.description)) {
+      return;
+    }
+    seen.add(key);
+    perks.push({
+      itemHash: String(hash),
+      name,
+      description: optionalString(definitionSource?.displayProperties?.description),
+      iconPath: optionalString(definitionSource?.displayProperties?.icon)
+    });
+  };
+
+  for (const perk of asArray(asRecord(definition).perks)) {
+    push(asRecord(perk).perkHash, "sandbox");
+  }
+
+  for (const socketEntry of asArray(definition?.sockets?.socketEntries)) {
+    const entry = asRecord(socketEntry);
+    push(entry.singleInitialItemHash, "inventory");
+    for (const plug of asArray(entry.reusablePlugItems)) {
+      push(asRecord(plug).plugItemHash, "inventory");
+    }
+  }
+
+  return perks.slice(0, 14);
+}
+
+function normalizePerkWeaponInputs(value: string[] | string): string[] {
+  const rawValues = Array.isArray(value)
+    ? value
+    : String(value || "")
+        .split(/[,，、+＋&＆/|]|(?:\s+(?:和|与|以及)\s*)/gu)
+        .flatMap((part) => part.split(/\s+(?=[\u4e00-\u9fff]{2,})/gu));
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const raw of rawValues) {
+    const cleaned = String(raw || "")
+      .replace(/^\/+/u, "")
+      .replace(/^[\s:：,，、+＋&＆/|]+|[\s:：,，、+＋&＆/|]+$/gu, "")
+      .trim();
+    const key = normalizeItemInfoMatchName(cleaned);
+    if (!cleaned || !key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(cleaned);
+  }
+  return result;
+}
+
+function perkWeaponRollPerksForDefinition(
+  definition: InventoryItemDefinition | undefined,
+  inventoryDefinitions: Record<string, InventoryItemDefinition>,
+  plugSetDefinitions: Record<string, PlugSetDefinition>
+): PerkWeaponPerkSummary[] {
+  const perks: PerkWeaponPerkSummary[] = [];
+  const seen = new Set<string>();
+  const push = (
+    itemHash: unknown,
+    source: PerkWeaponPerkSummary["source"],
+    socketIndex: number,
+    plugSetHash?: string
+  ) => {
+    const hash = optionalNumber(itemHash) ?? numberFrom(itemHash, Number.NaN);
+    if (!Number.isFinite(hash)) {
+      return;
+    }
+    const hashText = String(hash);
+    const definitionSource = inventoryDefinitions[hashText];
+    const name = optionalString(definitionSource?.displayProperties?.name);
+    if (!name || !isUsefulItemInfoPerkName(name, definitionSource?.displayProperties?.description)) {
+      return;
+    }
+    const key = `${hashText}:${socketIndex}:${plugSetHash ?? source}`;
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    perks.push({
+      itemHash: hashText,
+      name,
+      description: optionalString(definitionSource?.displayProperties?.description),
+      iconPath: optionalString(definitionSource?.displayProperties?.icon),
+      socketIndex,
+      ...(plugSetHash ? { plugSetHash } : {}),
+      source
+    });
+  };
+
+  for (const [socketIndex, rawSocketEntry] of asArray(definition?.sockets?.socketEntries).entries()) {
+    const entry = asRecord(rawSocketEntry);
+    push(entry.singleInitialItemHash, "initial", socketIndex);
+    for (const plug of asArray(entry.reusablePlugItems)) {
+      push(asRecord(plug).plugItemHash, "reusable", socketIndex);
+    }
+    for (const [field, source] of [
+      ["reusablePlugSetHash", "reusablePlugSet"],
+      ["randomizedPlugSetHash", "randomizedPlugSet"]
+    ] as const) {
+      const plugSetHash = optionalNumber(entry[field]) ?? numberFrom(entry[field], Number.NaN);
+      if (!Number.isFinite(plugSetHash)) {
+        continue;
+      }
+      const plugSetHashText = String(plugSetHash);
+      const plugSet = plugSetDefinitions[plugSetHashText];
+      for (const plug of asArray(plugSet?.reusablePlugItems)) {
+        push(asRecord(plug).plugItemHash, source, socketIndex, plugSetHashText);
+      }
+    }
+  }
+
+  return perks;
+}
+
+function matchPerkWeaponInputs(perks: string[], rollPerks: PerkWeaponPerkSummary[]): PerkWeaponPerkSummary[] {
+  const matches: PerkWeaponPerkSummary[] = [];
+  const usedKeys = new Set<string>();
+  for (const perk of perks) {
+    const normalized = normalizeItemInfoMatchName(perk);
+    const matched = rollPerks.find((candidate) => {
+      const key = `${candidate.itemHash}:${candidate.socketIndex}:${candidate.plugSetHash ?? candidate.source}`;
+      if (usedKeys.has(key)) {
+        return false;
+      }
+      if (candidate.itemHash === perk) {
+        return true;
+      }
+      const candidateName = normalizeItemInfoMatchName(candidate.name);
+      return candidateName === normalized || candidateName.includes(normalized) || normalized.includes(candidateName);
+    });
+    if (!matched) {
+      return [];
+    }
+    usedKeys.add(`${matched.itemHash}:${matched.socketIndex}:${matched.plugSetHash ?? matched.source}`);
+    matches.push(matched);
+  }
+  return matches;
+}
+
+function perkWeaponDefinitionMatchesFilters(
+  definition: InventoryItemDefinition,
+  filters: {
+    weaponType?: string;
+    slot?: string;
+    damageType?: string;
+    rpm?: number;
+    craftable?: boolean;
+    query?: string;
+  },
+  craftableItems: Set<string>,
+  itemHash: string
+): boolean {
+  if (filters.weaponType && !inventoryItemMatchesText([filters.weaponType], `${definition.itemTypeDisplayName ?? ""} ${definition.displayProperties?.name ?? ""}`)) {
+    return false;
+  }
+  if (filters.slot && !inventoryItemMatchesText([filters.slot], `${itemInfoSlotLabel(definition) ?? ""} ${definition.inventory?.bucketTypeName ?? ""}`)) {
+    return false;
+  }
+  if (filters.damageType && !inventoryItemMatchesText([filters.damageType], itemInfoDamageType(definition) ?? "")) {
+    return false;
+  }
+  if (filters.rpm !== undefined && inventoryInvestmentStatValue(definition, WEAPON_RPM_STAT_HASH) !== filters.rpm) {
+    return false;
+  }
+  if (filters.craftable !== undefined && craftableItems.has(itemHash) !== filters.craftable) {
+    return false;
+  }
+  if (filters.query) {
+    const text = normalizeSearchText(
+      `${definition.displayProperties?.name ?? ""} ${definition.itemTypeDisplayName ?? ""} ${definition.displayProperties?.description ?? ""} ${itemInfoSource(definition) ?? ""}`
+    );
+    if (!inventoryItemMatchesText(inventorySearchCandidates(filters.query), text)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function perkWeaponMatchFromDefinition(
+  itemHash: string,
+  definition: InventoryItemDefinition,
+  matchedPerks: PerkWeaponPerkSummary[],
+  rollPerks: PerkWeaponPerkSummary[],
+  craftableItems: Set<string>,
+  statDefinitions: Record<string, StatDefinition>
+): PerkWeaponMatch {
+  const rpm = inventoryInvestmentStatValue(definition, WEAPON_RPM_STAT_HASH);
+  const stats = itemInfoStats(definition, statDefinitions);
+  const fallbackRpm = stats.find((stat) => stat.hash === String(WEAPON_RPM_STAT_HASH))?.value;
+  return {
+    itemHash,
+    name: itemInfoName(definition, `Item ${itemHash}`),
+    description: optionalString(definition.displayProperties?.description),
+    iconPath: optionalString(definition.displayProperties?.icon),
+    watermarkIconPath:
+      optionalString(definition.iconWatermark) ??
+      optionalString(definition.iconWatermarkShelved) ??
+      optionalString(definition.quality?.displayVersionWatermarkIcons?.[0]),
+    itemTypeDisplayName: optionalString(definition.itemTypeDisplayName),
+    tierTypeName: optionalString(definition.inventory?.tierTypeName),
+    bucketName: optionalString(definition.inventory?.bucketTypeName),
+    slotLabel: itemInfoSlotLabel(definition),
+    damageType: itemInfoDamageType(definition),
+    ammoType: itemInfoAmmoType(definition),
+    source: itemInfoSource(definition),
+    craftable: craftableItems.has(itemHash),
+    ...(rpm !== undefined || fallbackRpm !== undefined ? { rpm: rpm ?? fallbackRpm } : {}),
+    matchedPerks,
+    allRollPerks: rollPerks.slice(0, 80)
+  };
+}
+
+function isUsefulItemInfoPerkName(name: string, description: string | undefined): boolean {
+  const text = `${name} ${description ?? ""}`.toLowerCase();
+  return !/空插槽|默认皮肤|默认着色器|默认装饰|击杀记录器|tracker|shader|ornament|memento|empty socket|disabled/u.test(text);
 }
 
 function inventoryOwnerCounts(items: InventoryItemSummary[]): InventorySummary["totals"] {
@@ -5194,6 +6877,132 @@ function dateMs(value: string | undefined): number | undefined {
   }
   const ms = new Date(value).getTime();
   return Number.isFinite(ms) ? ms : undefined;
+}
+
+function normalizeSavedLoadoutName(value: string): string {
+  const name = String(value || "").trim();
+  if (!name) {
+    throw new BadRequestError("name is required");
+  }
+  if (name.length > 80) {
+    throw new BadRequestError("name must be 80 characters or fewer");
+  }
+  return name;
+}
+
+function selectSavedLoadoutCharacter(
+  characters: CharacterSummary[],
+  characterId?: string
+): CharacterSummary | undefined {
+  if (characterId) {
+    return characters.find((character) => character.characterId === characterId);
+  }
+  return [...characters].sort((left, right) => {
+    const rightTime = new Date(right.dateLastPlayed || 0).getTime();
+    const leftTime = new Date(left.dateLastPlayed || 0).getTime();
+    return (Number.isFinite(rightTime) ? rightTime : 0) - (Number.isFinite(leftTime) ? leftTime : 0);
+  })[0];
+}
+
+function savedInventoryItemSnapshot(item: InventoryItemSummary): InventoryItemSummary {
+  return JSON.parse(JSON.stringify(item)) as InventoryItemSummary;
+}
+
+function optimizerArmorToInventorySnapshot(item: LoadoutOptimizerArmorItem): InventoryItemSummary {
+  return {
+    itemHash: item.itemHash,
+    itemInstanceId: item.itemInstanceId,
+    quantity: 1,
+    owner: item.owner,
+    ...(item.characterId ? { characterId: item.characterId } : {}),
+    name: item.name,
+    iconPath: item.iconPath,
+    bucketName: item.slotLabel,
+    itemTypeDisplayName: item.slotLabel,
+    tierTypeName: item.tierTypeName,
+    power: item.power,
+    locked: false,
+    canEquip: true,
+    armorStats: {
+      total: item.currentStats.reduce((sum, stat) => sum + Number(stat.value || 0), 0),
+      stats: item.currentStats.map((stat) => ({
+        hash: stat.hash,
+        name: stat.name,
+        value: stat.value
+      }))
+    }
+  };
+}
+
+function savedLoadoutRowToSummary(row: SavedLoadoutRow): SavedLoadoutSummary {
+  const items = (Array.isArray(row.items) ? row.items : [])
+    .map((item) => asRecord(item))
+    .map((item): InventoryItemSummary => ({
+      itemHash: optionalNumber(item.itemHash) ?? 0,
+      ...(optionalString(item.itemInstanceId) ? { itemInstanceId: optionalString(item.itemInstanceId) } : {}),
+      quantity: optionalNumber(item.quantity) ?? 1,
+      owner: normalizeInventoryOwner(optionalString(item.owner)),
+      ...(optionalString(item.characterId) ? { characterId: optionalString(item.characterId) } : {}),
+      ...(optionalNumber(item.bucketHash) !== undefined ? { bucketHash: optionalNumber(item.bucketHash) } : {}),
+      bucketName: optionalString(item.bucketName),
+      name: asString(item.name, "Unknown Item"),
+      iconPath: optionalString(item.iconPath),
+      itemTypeDisplayName: optionalString(item.itemTypeDisplayName),
+      tierTypeName: optionalString(item.tierTypeName),
+      ...(optionalNumber(item.power) !== undefined ? { power: optionalNumber(item.power) } : {}),
+      locked: asBoolean(item.locked, false),
+      canEquip: asBoolean(item.canEquip, true),
+      transferStatus: optionalNumber(item.transferStatus),
+      state: optionalNumber(item.state),
+      classType: optionalNumber(item.classType),
+      damageType: optionalString(item.damageType),
+      energyCapacity: optionalNumber(item.energyCapacity),
+      energyUsed: optionalNumber(item.energyUsed),
+      sockets: Array.isArray(item.sockets) ? (item.sockets as InventorySocketSummary[]) : undefined,
+      armorStats: isInventoryArmorStats(item.armorStats) ? (item.armorStats as InventoryArmorStatsSummary) : undefined,
+      weaponStats: isInventoryWeaponStats(item.weaponStats) ? (item.weaponStats as InventoryItemSummary["weaponStats"]) : undefined
+    }));
+  return {
+    id: row.id,
+    qq: row.qq,
+    name: row.name,
+    className: row.className,
+    characterId: row.characterId,
+    source: row.source,
+    itemCount: items.length,
+    items,
+    statMods: Array.isArray(row.statMods) ? (row.statMods as LoadoutOptimizerStatModSuggestion[]) : [],
+    fragments: Array.isArray(row.fragments) ? (row.fragments as LoadoutOptimizerFragmentSuggestion[]) : [],
+    notes: row.notes,
+    lastAppliedAt: row.lastAppliedAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt
+  };
+}
+
+function normalizeInventoryOwner(value: string | undefined): InventoryOwner {
+  if (value === "vault" || value === "inventory" || value === "equipped") {
+    return value;
+  }
+  return "inventory";
+}
+
+function isInventoryArmorStats(value: unknown): value is InventoryArmorStatsSummary {
+  const record = asRecord(value);
+  return Array.isArray(record.stats);
+}
+
+function isInventoryWeaponStats(value: unknown): value is InventoryItemSummary["weaponStats"] {
+  const record = asRecord(value);
+  return Array.isArray(record.stats) || optionalNumber(record.rpm) !== undefined;
+}
+
+function isSavedLoadoutGearItem(item: InventoryItemSummary): boolean {
+  if (optimizerArmorSlot(item) || optimizerItemLooksLikeSubclass(item)) {
+    return true;
+  }
+  const text = `${item.bucketName ?? ""} ${item.itemTypeDisplayName ?? ""} ${item.name ?? ""}`.toLowerCase();
+  return /kinetic|energy|power|武器|步枪|手炮|弓|榴弹|霰弹|狙击|机枪|火箭|融合|剑|手枪|追踪|刀剑|glaive|sidearm|rifle|cannon|bow|launcher|shotgun|sniper|machine|rocket|fusion|sword|smg|trace|grenade/iu.test(text);
 }
 
 const ACTIVITY_MODE_LABELS = new Map<number, string>([

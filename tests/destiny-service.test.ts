@@ -44,7 +44,7 @@ const fakeManifest = {
         },
         "901": {
           displayProperties: { name: "突袭" },
-          children: { craftables: [{ craftableItemHash: 101 }, { craftableItemHash: 102 }] }
+          children: { craftables: [{ craftableItemHash: 101 }, { craftableItemHash: 102 }, { craftableItemHash: 601 }] }
         },
         "990": {
           displayProperties: { name: "催化" },
@@ -63,6 +63,24 @@ const fakeManifest = {
           rewardItems: [{ itemHash: 201 }],
           objectiveHashes: [9001]
         },
+        "702": {
+          displayProperties: {
+            name: "挽歌催化",
+            description: "用挽歌击败目标以解锁催化效果。",
+            icon: "/common/destiny2_content/icons/lament-catalyst.jpg"
+          },
+          rewardItems: [{ itemHash: 502 }],
+          objectiveHashes: [9002]
+        },
+        "703": {
+          displayProperties: {
+            name: "低语催化",
+            description: "用蠕虫低语击败目标以解锁催化效果。",
+            icon: "/common/destiny2_content/icons/whisper-catalyst.jpg"
+          },
+          rewardItems: [{ itemHash: 503 }],
+          objectiveHashes: [9003]
+        },
         "701": {
           displayProperties: { name: "普通记录" }
         }
@@ -74,6 +92,36 @@ const fakeManifest = {
           displayProperties: { name: "纪念", icon: "/common/destiny2_content/icons/memorial.jpg" },
           itemTypeDisplayName: "机枪",
           inventory: { bucketTypeHash: 953998645, tierTypeName: "传说" }
+        },
+        "202": {
+          displayProperties: { name: "挽歌", icon: "/common/destiny2_content/icons/lament.jpg" },
+          itemTypeDisplayName: "刀剑",
+          inventory: { bucketTypeHash: 953998645, tierTypeName: "异域" }
+        },
+        "203": {
+          displayProperties: { name: "蠕虫低语", icon: "/common/destiny2_content/icons/whisper.jpg" },
+          itemTypeDisplayName: "狙击步枪",
+          inventory: { bucketTypeHash: 953998645, tierTypeName: "异域" }
+        },
+        "502": {
+          displayProperties: {
+            name: "挽歌催化剂",
+            description: "将此武器升级为大师杰作。\n\n使用此武器消灭目标以解锁这项升级。",
+            icon: "/common/destiny2_content/icons/lament-catalyst.jpg"
+          },
+          itemTypeDisplayName: "催化剂",
+          perks: [{ perkHash: 9102 }],
+          inventory: { tierTypeName: "异域" }
+        },
+        "503": {
+          displayProperties: {
+            name: "蠕虫低语催化剂",
+            description: "将此武器升级为大师杰作。\n\n使用此武器消灭目标以解锁这项升级。",
+            icon: "/common/destiny2_content/icons/whisper-catalyst.jpg"
+          },
+          itemTypeDisplayName: "催化剂",
+          perks: [{ perkHash: 9103 }],
+          inventory: { tierTypeName: "异域" }
         },
         "301": {
           displayProperties: { name: "纪念", icon: "/common/destiny2_content/icons/memorial.jpg" },
@@ -88,12 +136,28 @@ const fakeManifest = {
         "303": {
           displayProperties: { name: "不散恐惧", icon: "/common/destiny2_content/icons/smg.jpg" },
           itemTypeDisplayName: "微型冲锋枪",
-          inventory: { bucketTypeHash: 1498876634, tierTypeName: "传说" }
+          inventory: { bucketTypeHash: 1498876634, bucketTypeName: "动能武器", tierTypeName: "传说" },
+          defaultDamageType: 6,
+          investmentStats: [{ statTypeHash: 4284893193, value: 900 }],
+          sockets: {
+            socketEntries: [
+              { singleInitialItemHash: 602 },
+              { randomizedPlugSetHash: 8801 },
+              { reusablePlugSetHash: 8802 }
+            ]
+          }
         },
         "304": {
           displayProperties: { name: "玫瑰", icon: "/common/destiny2_content/icons/rose.jpg" },
           itemTypeDisplayName: "手炮",
           inventory: { bucketTypeHash: 1498876634, tierTypeName: "传说" }
+        },
+        "305": {
+          displayProperties: { name: "喷子测试", icon: "/common/destiny2_content/icons/shotgun.jpg" },
+          itemTypeDisplayName: "霰弹枪",
+          inventory: { bucketTypeHash: 2465295065, bucketTypeName: "能量武器", tierTypeName: "传说" },
+          investmentStats: [{ statTypeHash: 4284893193, value: 55 }],
+          sockets: { socketEntries: [{ randomizedPlugSetHash: 8802 }] }
         },
         "401": {
           displayProperties: { name: "配装头盔", icon: "/common/destiny2_content/icons/helmet.jpg" },
@@ -124,6 +188,60 @@ const fakeManifest = {
           itemTypeDisplayName: "职业物品",
           classType: 2,
           inventory: { bucketTypeHash: 1585787867, bucketTypeName: "职业物品", tierTypeName: "传说" }
+        },
+        "601": {
+          displayProperties: {
+            name: "极高反射",
+            description: "一把来自木卫二的轻型手枪。",
+            icon: "/common/destiny2_content/icons/high-albedo.jpg"
+          },
+          itemTypeDisplayName: "手枪",
+          inventory: { bucketTypeHash: 1498876634, bucketTypeName: "动能武器", tierTypeName: "传说" },
+          displaySource: "来源：木卫二活动",
+          equippingBlock: { ammoType: 1 },
+          defaultDamageType: 1,
+          investmentStats: [
+            { statTypeHash: 4284893193, value: 491 },
+            { statTypeHash: 3871231066, value: 45 }
+          ],
+          perks: [{ perkHash: 9104 }],
+          sockets: { socketEntries: [{ singleInitialItemHash: 602 }] },
+          quality: { displayVersionWatermarkIcons: ["/common/destiny2_content/icons/watermark.png"] }
+        },
+        "602": {
+          displayProperties: {
+            name: "轻质框架",
+            description: "手感绝佳。装备此武器时移动速度更快。",
+            icon: "/common/destiny2_content/icons/lightweight-frame.jpg"
+          },
+          itemTypeDisplayName: "固有特性",
+          inventory: { tierTypeName: "传说" }
+        },
+        "88001": {
+          displayProperties: {
+            name: "爆破专家",
+            description: "使用此武器造成击杀会生成手雷能量。"
+          },
+          itemTypeDisplayName: "武器特性",
+          inventory: { tierTypeName: "传说" }
+        },
+        "88002": {
+          displayProperties: {
+            name: "斩首武器",
+            description: "对首领、载具和守护者超能造成额外伤害。"
+          },
+          itemTypeDisplayName: "武器特性",
+          inventory: { tierTypeName: "传说" }
+        }
+      };
+    }
+    if (entityType === "DestinyPlugSetDefinition") {
+      return {
+        "8801": {
+          reusablePlugItems: [{ plugItemHash: 88001 }, { plugItemHash: 88002 }]
+        },
+        "8802": {
+          reusablePlugItems: [{ plugItemHash: 88001 }]
         }
       };
     }
@@ -147,7 +265,31 @@ const fakeManifest = {
         "1735777505": { displayProperties: { name: "纪律" } },
         "144602215": { displayProperties: { name: "智慧" } },
         "4244567218": { displayProperties: { name: "力量" } },
-        "4284893193": { displayProperties: { name: "每分钟发射数" } }
+        "4284893193": { displayProperties: { name: "每分钟发射数" } },
+        "3871231066": { displayProperties: { name: "弹匣" } }
+      };
+    }
+    if (entityType === "DestinyObjectiveDefinition") {
+      return {
+        "9001": { displayProperties: { description: "击败目标" }, completionValue: 100 },
+        "9002": { displayProperties: { description: "使用挽歌击败目标" }, completionValue: 400 },
+        "9003": { displayProperties: { description: "使用蠕虫低语击败目标" }, completionValue: 500 }
+      };
+    }
+    if (entityType === "DestinySandboxPerkDefinition") {
+      return {
+        "9102": {
+          displayProperties: { name: "燃烧野心", description: "造成持续伤害会灼烧目标。" },
+          isDisplayable: true
+        },
+        "9103": {
+          displayProperties: { name: "屏息", description: "瞄准一小段时间后提高精准伤害。" },
+          isDisplayable: true
+        },
+        "9104": {
+          displayProperties: { name: "适配框架", description: "均衡可靠，适合多种战斗场景。" },
+          isDisplayable: true
+        }
       };
     }
     if (entityType === "DestinyActivityDefinition") {
@@ -163,7 +305,8 @@ const fakeManifest = {
             description: "宗师夜幕"
           },
           selectionScreenDisplayProperties: { description: "Grandmaster Nightfall" },
-          activityModeTypes: [16],
+          activityModeTypes: [46, 18, 7],
+          directActivityModeType: 46,
           pgcrImage: "/common/destiny2_content/icons/gm.jpg"
         },
         "8001": {
@@ -433,6 +576,10 @@ class FakeBungieClient {
                 "700": {
                   state: 4,
                   objectives: [{ objectiveHash: 9001, progress: 50, completionValue: 100, complete: false }]
+                },
+                "703": {
+                  state: 4,
+                  objectives: [{ objectiveHash: 9003, progress: 120, completionValue: 500, complete: false }]
                 }
               }
             }
@@ -520,7 +667,7 @@ class FakeBungieClient {
           ]
         };
       }
-      if (Number(options?.query?.mode) === 16) {
+      if (Number(options?.query?.mode) === 46) {
         return {
           activities: [
             {
@@ -528,7 +675,7 @@ class FakeBungieClient {
               activityDetails: {
                 instanceId: "990",
                 referenceId: 7001,
-                mode: 16
+                mode: 46
               },
               values: {
                 completed: { basic: { value: 1 } },
@@ -590,7 +737,7 @@ class FakeBungieClient {
           period: "2026-06-03T00:00:00.000Z",
           activityDetails: {
             referenceId: 7001,
-            mode: 16
+            mode: 46
           },
           entries: [
             {
@@ -727,6 +874,35 @@ class FakeBungieClient {
   }
 }
 
+class RaidAggregateFailingBungieClient extends FakeBungieClient {
+  override async get(path: string, options?: { query?: Record<string, unknown> }) {
+    if (path.includes("/Stats/AggregateActivityStats/")) {
+      throw new Error("aggregate unavailable");
+    }
+    if (path.includes("/Stats/Activities/") && Number(options?.query?.mode) === 4) {
+      return {
+        activities: [
+          {
+            period: "2026-06-03T00:00:00.000Z",
+            activityDetails: {
+              instanceId: "123",
+              referenceId: 1,
+              mode: 4
+            },
+            values: {
+              completed: { basic: { value: 1 } },
+              kills: { basic: { value: 20 } },
+              deaths: { basic: { value: 4 } },
+              activityDurationSeconds: { basic: { value: 1200 } }
+            }
+          }
+        ]
+      };
+    }
+    return super.get(path, options);
+  }
+}
+
 class HeatmapBungieClient extends FakeBungieClient {
   activityCalls = 0;
 
@@ -795,26 +971,126 @@ describe("DestinyService", () => {
         }
       ]
     });
-    await expect(service.getCatalysts(3, "4611686018", "access-token")).resolves.toMatchObject({
-      totals: { catalysts: 1, completed: 0, incomplete: 1 },
-      groups: [
+    const catalysts = await service.getCatalysts(3, "4611686018", "access-token");
+    expect(catalysts).toMatchObject({
+      totals: { catalysts: 3, completed: 0, incomplete: 3 },
+      scan: { candidateRecords: 3, recordsReturned: 2, collectiblesReturned: 1 }
+    });
+    expect(catalysts.groups).toMatchObject([{ key: "power", name: "威能武器" }]);
+    expect(catalysts.groups[0]?.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          recordHash: "700",
+          weaponHash: "201",
+          name: "纪念",
+          itemTypeDisplayName: "机枪",
+          percent: 50,
+          progress: 50,
+          completionValue: 100
+        }),
+        expect.objectContaining({
+          recordHash: "702",
+          weaponHash: "202",
+          name: "挽歌",
+          itemTypeDisplayName: "刀剑",
+          percent: 0,
+          progress: 0,
+          completionValue: 0
+        }),
+        expect.objectContaining({
+          recordHash: "703",
+          name: "蠕虫低语",
+          itemTypeDisplayName: "狙击步枪",
+          slot: "power",
+          slotLabel: "威能武器",
+          percent: 24,
+          progress: 120,
+          completionValue: 500
+        })
+      ])
+    );
+    await expect(service.getCatalystInfo("挽歌")).resolves.toMatchObject({
+      query: "挽歌",
+      total: 1,
+      matches: [
         {
-          key: "power",
-          name: "威能武器",
-          items: [
-            {
-              recordHash: "700",
-              weaponHash: "201",
-              name: "纪念",
-              itemTypeDisplayName: "机枪",
-              percent: 50,
-              progress: 50,
-              completionValue: 100
-            }
-          ]
+          recordHash: "702",
+          weaponHash: "202",
+          catalystItemHash: "502",
+          weaponName: "挽歌",
+          catalystName: "挽歌催化",
+          effectDescription: "燃烧野心：造成持续伤害会灼烧目标。",
+          completionDescription: "使用挽歌击败目标",
+          itemTypeDisplayName: "刀剑",
+          slot: "power",
+          objectives: [{ objectiveHash: "9002", description: "使用挽歌击败目标", completionValue: 400 }]
         }
-      ],
-      scan: { candidateRecords: 1, recordsReturned: 1, collectiblesReturned: 1 }
+      ]
+    });
+    await expect(service.getItemInfo("查个武器，极高反射")).resolves.toMatchObject({
+      query: "查个武器，极高反射",
+      total: 1,
+      matches: [
+        {
+          itemHash: "601",
+          name: "极高反射",
+          itemTypeDisplayName: "手枪",
+          tierTypeName: "传说",
+          slotLabel: "动能",
+          damageType: "动能",
+          ammoType: "主弹药",
+          source: "来源：木卫二活动",
+          craftable: true,
+          stats: expect.arrayContaining([
+            expect.objectContaining({ name: "每分钟发射数", value: 491 }),
+            expect.objectContaining({ name: "弹匣", value: 45 })
+          ]),
+          perks: expect.arrayContaining([
+            expect.objectContaining({ name: "适配框架" }),
+            expect.objectContaining({ name: "轻质框架" })
+          ]),
+          match: { reason: "名称精确匹配" }
+        }
+      ]
+    });
+    await expect(service.getPerkWeapons({ perks: ["爆破专家", "斩首武器"], weaponType: "冲锋枪", limit: 50 })).resolves.toMatchObject({
+      perks: ["爆破专家", "斩首武器"],
+      filters: { weaponType: "冲锋枪", limit: 50 },
+      total: 1,
+      matches: [
+        {
+          name: "不散恐惧",
+          itemTypeDisplayName: "微型冲锋枪",
+          rpm: 900,
+          matchedPerks: expect.arrayContaining([
+            expect.objectContaining({ name: "爆破专家" }),
+            expect.objectContaining({ name: "斩首武器" })
+          ])
+        }
+      ]
+    });
+    await expect(service.getPerkWeapons({ perks: ["爆破专家", "斩首武器"], weaponType: "霰弹枪", limit: 50 })).resolves.toMatchObject({
+      total: 0,
+      matches: []
+    });
+    await expect(service.getCatalystStatus(3, "4611686018", "access-token", "查询下虫狙的催化")).resolves.toMatchObject({
+      query: "查询下虫狙的催化",
+      total: 1,
+      totals: { obtained: 1, visible: 1, completed: 0 },
+      matches: [
+        {
+          recordHash: "703",
+          weaponName: "蠕虫低语",
+          catalystName: "低语催化",
+          itemTypeDisplayName: "狙击步枪",
+          slot: "power",
+          slotLabel: "威能武器",
+          effectDescription: "屏息：瞄准一小段时间后提高精准伤害。",
+          progress: 120,
+          completionValue: 500,
+          objectives: [{ objectiveHash: "9003", description: "使用蠕虫低语击败目标", progress: 120, completionValue: 500 }]
+        }
+      ]
     });
     await expect(service.getPrivateInventory(3, "4611686018", "access-token", "607972716")).resolves.toMatchObject({
       qq: "607972716",
@@ -1043,6 +1319,45 @@ describe("DestinyService", () => {
       ],
       scan: { recentActivitiesScanned: 1, pgcrScanned: 1 }
     });
+  });
+
+  it("returns raid overview from recent history when aggregate stats fail", async () => {
+    const service = new DestinyService(
+      new RaidAggregateFailingBungieClient() as never,
+      new MemoryCacheStore(),
+      new NullStore(),
+      fakeManifest as never
+    );
+
+    const result = await service.getRaidOverview(3, "4611686018", { historyPages: 1, pgcrLimit: 1 });
+
+    expect(result).toMatchObject({
+      totals: {
+        raids: 1,
+        clears: 1,
+        completions: 1,
+        kills: 20,
+        deaths: 4,
+        secondsPlayed: 1200
+      },
+      scan: {
+        aggregateStatsAvailable: false,
+        aggregateCharactersScanned: 0,
+        recentActivitiesScanned: 1,
+        pgcrScanned: 1
+      },
+      raids: [
+        {
+          name: "玻璃拱顶",
+          fullClears: 1,
+          completions: 1,
+          kills: 20,
+          deaths: 4,
+          secondsPlayed: 1200
+        }
+      ]
+    });
+    expect(result.scan.aggregateErrors?.[0]).toContain("aggregate unavailable");
   });
 
   it("builds year heatmap calendars and caches full scans", async () => {

@@ -207,7 +207,15 @@ export interface InventoryActionResult {
   qq?: string;
   membershipType: number;
   membershipId: string;
-  action: "transfer" | "equip" | "equipItems" | "lock" | "equipLoadout";
+  action:
+    | "transfer"
+    | "equip"
+    | "equipItems"
+    | "lock"
+    | "equipLoadout"
+    | "snapshotLoadout"
+    | "updateLoadoutIdentifiers"
+    | "clearLoadout";
   ok: boolean;
   itemId?: string;
   itemIds?: string[];
@@ -229,12 +237,30 @@ export interface LoadoutSummary {
   raw?: unknown;
 }
 
+export interface SavedLoadoutSummary {
+  id: number;
+  qq?: string;
+  name: string;
+  className?: string;
+  characterId?: string;
+  source: string;
+  itemCount: number;
+  items: InventoryItemSummary[];
+  statMods: LoadoutOptimizerStatModSuggestion[];
+  fragments: LoadoutOptimizerFragmentSuggestion[];
+  notes?: string;
+  lastAppliedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface LoadoutsSummary {
   qq?: string;
   membershipType: number;
   membershipId: string;
   characters: CharacterSummary[];
   loadouts: LoadoutSummary[];
+  savedLoadouts: SavedLoadoutSummary[];
   updatedAt: string;
 }
 
@@ -342,6 +368,23 @@ export interface LoadoutOptimizerApplyResult {
   updatedAt: string;
 }
 
+export interface SavedLoadoutApplyResult {
+  qq?: string;
+  membershipType: number;
+  membershipId: string;
+  savedLoadoutId: number;
+  savedLoadoutName: string;
+  characterId: string;
+  transferredItemIds: string[];
+  equippedItemIds: string[];
+  missingItemIds: string[];
+  statMods: LoadoutOptimizerStatModSuggestion[];
+  fragments: LoadoutOptimizerFragmentSuggestion[];
+  bungieResponses: unknown[];
+  message: string;
+  updatedAt: string;
+}
+
 export interface CraftableWeaponSummary {
   itemHash: string;
   name: string;
@@ -404,6 +447,7 @@ export interface CatalystWeaponSummary {
   slot: CatalystSlot;
   slotLabel: string;
   completed: boolean;
+  obtained: boolean;
   redeemed: boolean;
   visible: boolean;
   percent: number;
@@ -438,6 +482,208 @@ export interface CatalystsSummary {
     recordsReturned: number;
     collectiblesReturned: number;
     catalystPresentationRecords: number;
+    note: string;
+  };
+  updatedAt: string;
+}
+
+export interface CatalystInfoObjectiveSummary {
+  objectiveHash: string;
+  description?: string;
+  completionValue?: number;
+}
+
+export interface CatalystInfoMatch {
+  recordHash: string;
+  weaponHash?: string;
+  catalystItemHash?: string;
+  weaponName: string;
+  catalystName: string;
+  catalystDescription?: string;
+  effectDescription?: string;
+  completionDescription?: string;
+  iconPath?: string;
+  itemTypeDisplayName?: string;
+  slot: CatalystSlot;
+  slotLabel: string;
+  objectives: CatalystInfoObjectiveSummary[];
+  match: {
+    score: number;
+    reason: string;
+  };
+}
+
+export interface CatalystInfoSummary {
+  query: string;
+  total: number;
+  matches: CatalystInfoMatch[];
+  scan: {
+    recordDefinitions: number;
+    candidateRecords: number;
+    catalystPresentationRecords: number;
+    inventoryDefinitions: number;
+    objectiveDefinitions: number;
+    note: string;
+  };
+  updatedAt: string;
+}
+
+export interface ItemInfoStatSummary {
+  hash: string;
+  name: string;
+  value: number;
+}
+
+export interface ItemInfoPerkSummary {
+  itemHash: string;
+  name: string;
+  description?: string;
+  iconPath?: string;
+}
+
+export interface ItemInfoCatalystSummary {
+  recordHash?: string;
+  catalystName?: string;
+  effectDescription?: string;
+  completionDescription?: string;
+}
+
+export interface ItemInfoMatch {
+  itemHash: string;
+  name: string;
+  description?: string;
+  iconPath?: string;
+  watermarkIconPath?: string;
+  itemTypeDisplayName?: string;
+  tierTypeName?: string;
+  bucketName?: string;
+  slotLabel?: string;
+  damageType?: string;
+  ammoType?: string;
+  className?: string;
+  source?: string;
+  craftable: boolean;
+  stats: ItemInfoStatSummary[];
+  perks: ItemInfoPerkSummary[];
+  catalyst?: ItemInfoCatalystSummary;
+  match: {
+    score: number;
+    reason: string;
+  };
+}
+
+export interface ItemInfoSummary {
+  query: string;
+  total: number;
+  matches: ItemInfoMatch[];
+  scan: {
+    inventoryDefinitions: number;
+    statDefinitions: number;
+    craftableItems: number;
+    note: string;
+  };
+  updatedAt: string;
+}
+
+export interface PerkWeaponPerkSummary {
+  itemHash: string;
+  name: string;
+  description?: string;
+  iconPath?: string;
+  socketIndex?: number;
+  plugSetHash?: string;
+  source: "reusable" | "reusablePlugSet" | "randomizedPlugSet" | "initial";
+}
+
+export interface PerkWeaponMatch {
+  itemHash: string;
+  name: string;
+  description?: string;
+  iconPath?: string;
+  watermarkIconPath?: string;
+  itemTypeDisplayName?: string;
+  tierTypeName?: string;
+  bucketName?: string;
+  slotLabel?: string;
+  damageType?: string;
+  ammoType?: string;
+  source?: string;
+  craftable: boolean;
+  rpm?: number;
+  matchedPerks: PerkWeaponPerkSummary[];
+  allRollPerks: PerkWeaponPerkSummary[];
+}
+
+export interface PerkWeaponsSummary {
+  perks: string[];
+  filters: {
+    weaponType?: string;
+    slot?: string;
+    damageType?: string;
+    rpm?: number;
+    craftable?: boolean;
+    query?: string;
+    limit: number;
+  };
+  total: number;
+  matches: PerkWeaponMatch[];
+  scan: {
+    inventoryDefinitions: number;
+    plugSetDefinitions: number;
+    craftableItems: number;
+    note: string;
+  };
+  updatedAt: string;
+}
+
+export interface CatalystStatusObjectiveSummary extends CatalystObjectiveSummary {
+  description?: string;
+}
+
+export interface CatalystStatusMatch {
+  recordHash: string;
+  weaponHash?: string;
+  catalystItemHash?: string;
+  weaponName: string;
+  catalystName: string;
+  catalystDescription?: string;
+  effectDescription?: string;
+  completionDescription?: string;
+  iconPath?: string;
+  itemTypeDisplayName?: string;
+  slot: CatalystSlot;
+  slotLabel: string;
+  obtained: boolean;
+  visible: boolean;
+  completed: boolean;
+  redeemed: boolean;
+  percent: number;
+  progress: number;
+  completionValue: number;
+  objectives: CatalystStatusObjectiveSummary[];
+  infoObjectives: CatalystInfoObjectiveSummary[];
+  statusLabel: string;
+  match: {
+    score: number;
+    reason: string;
+  };
+}
+
+export interface CatalystStatusSummary {
+  membershipType: number;
+  membershipId: string;
+  query: string;
+  total: number;
+  totals: {
+    obtained: number;
+    visible: number;
+    completed: number;
+  };
+  matches: CatalystStatusMatch[];
+  scan: {
+    candidateRecords: number;
+    recordsReturned: number;
+    catalystInfoMatches: number;
     note: string;
   };
   updatedAt: string;
@@ -647,6 +893,9 @@ export interface DungeonOverview {
   scan: {
     historyPages: number;
     pgcrLimit: number;
+    aggregateStatsAvailable?: boolean;
+    aggregateCharactersScanned?: number;
+    aggregateErrors?: string[];
     recentActivitiesScanned: number;
     pgcrScanned: number;
     note: string;
@@ -731,6 +980,9 @@ export interface GrandmasterOverview {
     historyPages: number;
     pgcrLimit: number;
     season: GrandmasterSeasonScope;
+    aggregateStatsAvailable?: boolean;
+    aggregateCharactersScanned?: number;
+    aggregateErrors?: string[];
     recentActivitiesScanned: number;
     pgcrScanned: number;
     currentSeasonReliable: boolean;
@@ -872,6 +1124,9 @@ export interface RaidOverview {
   scan: {
     historyPages: number;
     pgcrLimit: number;
+    aggregateStatsAvailable?: boolean;
+    aggregateCharactersScanned?: number;
+    aggregateErrors?: string[];
     recentActivitiesScanned: number;
     pgcrScanned: number;
     note: string;

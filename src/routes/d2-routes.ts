@@ -7,7 +7,8 @@ import type {
   InventoryBucketFilter,
   InventoryActionResult,
   LoadoutOptimizerApplyResult,
-  PlayerSearchResult
+  PlayerSearchResult,
+  SavedLoadoutApplyResult
 } from "../destiny/destiny-types.js";
 import type { QqOAuthService } from "../oauth/qq-oauth-service.js";
 import { parseQq } from "../bindings/qq.js";
@@ -374,6 +375,7 @@ export async function registerD2Routes(app: FastifyInstance, deps: D2RouteDeps):
     const qq = parseQq((request.params as Params).qq);
     const { binding, accessToken } = await resolveQqOAuthContext(deps, qq, "Loadout equip");
     const body = requireRecordBody(request.body);
+    requireConfirmed(body);
     return runInventoryAction(deps, request, qq, "loadout.equip", body.loadoutIndex, async () =>
       deps.destinyService.equipLoadout(binding.membershipType, binding.membershipId, accessToken, {
         qq,
@@ -381,6 +383,145 @@ export async function registerD2Routes(app: FastifyInstance, deps: D2RouteDeps):
         loadoutIndex: parseBoundedInteger(body.loadoutIndex, "loadoutIndex", 0, 9, 0)
       })
     );
+  });
+
+  app.post("/api/d2/loadouts/qq/:qq/snapshot", async (request) => {
+    const qq = parseQq((request.params as Params).qq);
+    const { binding, accessToken } = await resolveQqOAuthContext(deps, qq, "Loadout snapshot");
+    const body = requireRecordBody(request.body);
+    requireConfirmed(body);
+    return runInventoryAction(deps, request, qq, "loadout.snapshot", body.loadoutIndex, async () =>
+      deps.destinyService.snapshotLoadout(binding.membershipType, binding.membershipId, accessToken, {
+        qq,
+        characterId: parseNumericId(body.characterId, "characterId"),
+        loadoutIndex: parseBoundedInteger(body.loadoutIndex, "loadoutIndex", 0, 9, 0)
+      })
+    );
+  });
+
+  app.post("/api/d2/loadouts/qq/:qq/update-identifiers", async (request) => {
+    const qq = parseQq((request.params as Params).qq);
+    const { binding, accessToken } = await resolveQqOAuthContext(deps, qq, "Loadout identifiers");
+    const body = requireRecordBody(request.body);
+    requireConfirmed(body);
+    return runInventoryAction(deps, request, qq, "loadout.updateIdentifiers", body.loadoutIndex, async () =>
+      deps.destinyService.updateLoadoutIdentifiers(binding.membershipType, binding.membershipId, accessToken, {
+        qq,
+        characterId: parseNumericId(body.characterId, "characterId"),
+        loadoutIndex: parseBoundedInteger(body.loadoutIndex, "loadoutIndex", 0, 9, 0),
+        colorHash: parseOptionalHash(body.colorHash, "colorHash"),
+        iconHash: parseOptionalHash(body.iconHash, "iconHash"),
+        nameHash: parseOptionalHash(body.nameHash, "nameHash")
+      })
+    );
+  });
+
+  app.post("/api/d2/loadouts/qq/:qq/clear", async (request) => {
+    const qq = parseQq((request.params as Params).qq);
+    const { binding, accessToken } = await resolveQqOAuthContext(deps, qq, "Loadout clear");
+    const body = requireRecordBody(request.body);
+    requireConfirmed(body);
+    return runInventoryAction(deps, request, qq, "loadout.clear", body.loadoutIndex, async () =>
+      deps.destinyService.clearLoadout(binding.membershipType, binding.membershipId, accessToken, {
+        qq,
+        characterId: parseNumericId(body.characterId, "characterId"),
+        loadoutIndex: parseBoundedInteger(body.loadoutIndex, "loadoutIndex", 0, 9, 0)
+      })
+    );
+  });
+
+  app.get("/api/d2/saved-loadouts/qq/:qq", async (request) => {
+    const started = Date.now();
+    const qq = parseQq((request.params as Params).qq);
+    await resolveQqOAuthContext(deps, qq, "Saved loadouts");
+    const items = await deps.destinyService.listSavedLoadouts(qq);
+    await deps.store.touchQqBinding(qq);
+    await recordQuery(deps.store, request, false);
+    return ok({ qq, items }, { tookMs: Date.now() - started });
+  });
+
+  app.post("/api/d2/saved-loadouts/qq/:qq", async (request) => {
+    const started = Date.now();
+    const qq = parseQq((request.params as Params).qq);
+    const { binding, accessToken } = await resolveQqOAuthContext(deps, qq, "Saved loadout save");
+    const body = requireRecordBody(request.body);
+    requireConfirmed(body);
+    const data = await deps.destinyService.saveLocalLoadout(
+      binding.membershipType,
+      binding.membershipId,
+      accessToken,
+      {
+        qq,
+        name: getRequiredBodyString(body, "name"),
+        characterId:
+          body.characterId === undefined || body.characterId === "" ? undefined : parseNumericId(body.characterId, "characterId"),
+        source: typeof body.source === "string" && body.source.trim().length > 0 ? body.source.trim() : undefined,
+        optimizerSessionId:
+          typeof body.optimizerSessionId === "string" && body.optimizerSessionId.trim().length > 0
+            ? body.optimizerSessionId.trim()
+            : undefined,
+        optimizerBuildId:
+          typeof body.optimizerBuildId === "string" && body.optimizerBuildId.trim().length > 0
+            ? body.optimizerBuildId.trim()
+            : undefined,
+        notes: typeof body.notes === "string" && body.notes.trim().length > 0 ? body.notes.trim() : undefined,
+        overwrite: parseOptionalBoolean(body.overwrite, false)
+      }
+    );
+    await auditInventoryAction(deps.store, request, qq, "savedLoadout.create", data.id, {
+      ok: true,
+      savedLoadoutId: data.id,
+      name: data.name,
+      itemCount: data.itemCount
+    });
+    await deps.store.touchQqBinding(qq);
+    await recordQuery(deps.store, request, false);
+    return ok(data, { tookMs: Date.now() - started });
+  });
+
+  app.get("/api/d2/saved-loadouts/qq/:qq/:idOrName", async (request) => {
+    const started = Date.now();
+    const qq = parseQq((request.params as Params).qq);
+    await resolveQqOAuthContext(deps, qq, "Saved loadout");
+    const data = await deps.destinyService.getSavedLoadout(qq, getRequiredParamString(request.params as Params, "idOrName"));
+    await deps.store.touchQqBinding(qq);
+    await recordQuery(deps.store, request, false);
+    return ok(data, { tookMs: Date.now() - started });
+  });
+
+  app.post("/api/d2/saved-loadouts/qq/:qq/:idOrName/apply", async (request) => {
+    const qq = parseQq((request.params as Params).qq);
+    const { binding, accessToken } = await resolveQqOAuthContext(deps, qq, "Saved loadout apply");
+    const body = requireRecordBody(request.body);
+    return runInventoryAction(deps, request, qq, "savedLoadout.apply", (request.params as Params).idOrName, async () =>
+      deps.destinyService.applySavedLoadout(binding.membershipType, binding.membershipId, accessToken, {
+        qq,
+        idOrName: getRequiredParamString(request.params as Params, "idOrName"),
+        characterId:
+          body.characterId === undefined || body.characterId === "" ? undefined : parseNumericId(body.characterId, "characterId"),
+        confirm: parseBoolean(body.confirm, "confirm")
+      })
+    );
+  });
+
+  app.delete("/api/d2/saved-loadouts/qq/:qq/:idOrName", async (request) => {
+    const started = Date.now();
+    const qq = parseQq((request.params as Params).qq);
+    await resolveQqOAuthContext(deps, qq, "Saved loadout delete");
+    const body = isRecord(request.body) ? request.body : {};
+    const query = request.query as Query;
+    if (!parseOptionalBoolean(body.confirm ?? query.confirm, false)) {
+      throw new BadRequestError("confirm must be true to delete a saved loadout");
+    }
+    const idOrName = getRequiredParamString(request.params as Params, "idOrName");
+    const deleted = await deps.store.deleteSavedLoadout(qq, idOrName);
+    if (!deleted) {
+      throw new NotFoundError("saved loadout was not found");
+    }
+    await auditInventoryAction(deps.store, request, qq, "savedLoadout.delete", idOrName, { ok: true });
+    await deps.store.touchQqBinding(qq);
+    await recordQuery(deps.store, request, false);
+    return ok({ qq, deleted: true, idOrName }, { tookMs: Date.now() - started });
   });
 
   app.post("/api/d2/loadout-optimizer/qq/:qq/search", async (request) => {
@@ -434,6 +575,58 @@ export async function registerD2Routes(app: FastifyInstance, deps: D2RouteDeps):
     const { binding, accessToken } = await resolveQqOAuthContext(deps, qq, "Catalyst progress");
     const data = await deps.destinyService.getCatalysts(binding.membershipType, binding.membershipId, accessToken);
     await deps.store.touchQqBinding(qq);
+    await recordQuery(deps.store, request, false);
+    return ok(data, { tookMs: Date.now() - started });
+  });
+
+  app.get("/api/d2/catalysts/qq/:qq/item", async (request) => {
+    const started = Date.now();
+    const qq = parseQq((request.params as Params).qq);
+    const { binding, accessToken } = await resolveQqOAuthContext(deps, qq, "Catalyst status");
+    const data = await deps.destinyService.getCatalystStatus(
+      binding.membershipType,
+      binding.membershipId,
+      accessToken,
+      getRequiredQueryString(request.query as Query, "q")
+    );
+    await deps.store.touchQqBinding(qq);
+    await recordQuery(deps.store, request, false);
+    return ok(data, { tookMs: Date.now() - started });
+  });
+
+  app.get("/api/d2/catalyst-info", async (request) => {
+    const started = Date.now();
+    const data = await deps.destinyService.getCatalystInfo(getRequiredQueryString(request.query as Query, "q"));
+    await recordQuery(deps.store, request, false);
+    return ok(data, { tookMs: Date.now() - started });
+  });
+
+  app.get("/api/d2/item-info", async (request) => {
+    const started = Date.now();
+    const query = request.query as Query;
+    const limit = typeof query.limit === "string" ? Number(query.limit) : 6;
+    const data = await deps.destinyService.getItemInfo(getRequiredQueryString(query, "q"), limit);
+    await recordQuery(deps.store, request, false);
+    return ok(data, { tookMs: Date.now() - started });
+  });
+
+  app.get("/api/d2/perk-weapons", async (request) => {
+    const started = Date.now();
+    const query = request.query as Query;
+    const rawPerks = query.perks ?? query.perk;
+    const perks = Array.isArray(rawPerks)
+      ? rawPerks.flatMap((value) => String(value).split(/[，,]/u))
+      : getRequiredQueryString({ perks: rawPerks }, "perks").split(/[，,]/u);
+    const data = await deps.destinyService.getPerkWeapons({
+      perks: perks.map((value) => value.trim()).filter(Boolean),
+      weaponType: typeof query.weaponType === "string" ? query.weaponType : undefined,
+      slot: typeof query.slot === "string" ? query.slot : undefined,
+      damageType: typeof query.damageType === "string" ? query.damageType : undefined,
+      rpm: parseOptionalBoundedInteger(query.rpm, "rpm", 1, 2000),
+      craftable: query.craftable === undefined ? undefined : parseBoolean(query.craftable, "craftable"),
+      query: typeof query.query === "string" ? query.query : undefined,
+      limit: parseOptionalBoundedInteger(query.limit, "limit", 1, 200)
+    });
     await recordQuery(deps.store, request, false);
     return ok(data, { tookMs: Date.now() - started });
   });
@@ -687,6 +880,14 @@ function getRequiredBodyString(body: Record<string, unknown>, key: string): stri
   return value.trim();
 }
 
+function getRequiredParamString(params: Params, key: string): string {
+  const value = params[key];
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new BadRequestError(`${key} is required`);
+  }
+  return value.trim();
+}
+
 function parseBoundedInteger(
   value: unknown,
   name: string,
@@ -750,6 +951,13 @@ function parseHash(value: unknown, name: string): number {
   return number;
 }
 
+function parseOptionalHash(value: unknown, name: string): number | undefined {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+  return parseHash(value, name);
+}
+
 function parseNumericId(value: unknown, name: string): string {
   if (typeof value === "number" && Number.isInteger(value)) {
     return parseId(String(value), name);
@@ -772,6 +980,12 @@ function requireRecordBody(body: unknown): Record<string, unknown> {
     throw new BadRequestError("Request body must be an object");
   }
   return body;
+}
+
+function requireConfirmed(body: Record<string, unknown>): void {
+  if (!parseOptionalBoolean(body.confirm, false)) {
+    throw new BadRequestError("confirm must be true");
+  }
 }
 
 function friendlyInventoryErrorMessage(error: ReturnType<typeof toAppError>): string {
@@ -886,7 +1100,7 @@ async function runInventoryAction(
   qq: string,
   action: string,
   target: unknown,
-  execute: () => Promise<InventoryActionResult | LoadoutOptimizerApplyResult>
+  execute: () => Promise<InventoryActionResult | LoadoutOptimizerApplyResult | SavedLoadoutApplyResult>
 ) {
   const started = Date.now();
   try {
@@ -900,7 +1114,9 @@ async function runInventoryAction(
       characterId: data.characterId,
       loadoutIndex: "loadoutIndex" in data ? data.loadoutIndex : undefined,
       sessionId: "sessionId" in data ? data.sessionId : undefined,
-      buildId: "buildId" in data ? data.buildId : undefined
+      buildId: "buildId" in data ? data.buildId : undefined,
+      savedLoadoutId: "savedLoadoutId" in data ? data.savedLoadoutId : undefined,
+      savedLoadoutName: "savedLoadoutName" in data ? data.savedLoadoutName : undefined
     });
     await deps.store.touchQqBinding(qq);
     await recordQuery(deps.store, request, false);

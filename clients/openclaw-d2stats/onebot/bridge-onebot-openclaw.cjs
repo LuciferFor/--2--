@@ -4,6 +4,7 @@ const crypto = require("crypto");
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const { pathToFileURL } = require("url");
 
 const IS_MAIN = require.main === module;
 let WebSocket;
@@ -19,6 +20,7 @@ const WORKSPACE = "/home/node/.openclaw/workspace";
 const IMAGEGEN_SCRIPT = `${WORKSPACE}/skills/codex-local-imagegen/scripts/enqueue_generate_with_codex.sh`;
 const IMAGE_SEND_SCRIPT = `${WORKSPACE}/skills/codex-local-imagegen/scripts/send_onebot_image.sh`;
 const D2_PLUGIN_CORE = "/home/node/.openclaw/plugins/d2stats/lib/core.mjs";
+const D2_PLUGIN_COMMAND_GATEWAY = process.env.D2_PLUGIN_COMMAND_GATEWAY || "/home/node/.openclaw/plugins/d2stats/lib/command-gateway.mjs";
 const D2_DIRECT_OUT_DIR = "/tmp/openclaw-d2-direct-cards";
 const DEEPSEEK_DELEGATE_SCRIPT = `${WORKSPACE}/skills/deepseek-delegate/scripts/delegate_reply.js`;
 const IMAGE_PROMPT_DIR = `${WORKSPACE}/skills/codex-local-imagegen/queue/prompts`;
@@ -152,6 +154,37 @@ const lanes = new Map();
 const groupMemberNameCache = new Map();
 const recentD2DirectQueries = new Map();
 let reconnectMs = 1000;
+
+const D2_COMMANDS = loadD2Commands();
+
+function loadD2Commands() {
+  const candidates = [
+    path.join(__dirname, "../lib/commands.cjs"),
+    "/home/node/.openclaw/plugins/d2stats/lib/commands.cjs",
+  ];
+  for (const candidate of candidates) {
+    try {
+      return require(candidate);
+    } catch (_) {}
+  }
+  return null;
+}
+
+async function importD2CommandGateway() {
+  const candidates = [
+    D2_PLUGIN_COMMAND_GATEWAY,
+    path.join(__dirname, "../lib/command-gateway.mjs"),
+  ].filter(Boolean);
+  let lastError;
+  for (const candidate of candidates) {
+    try {
+      return await import(pathToFileURL(candidate).href);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("D2 command gateway is unavailable");
+}
 
 function log(...parts) {
   const line = `${new Date().toISOString()} ${parts.map(String).join(" ")}\n`;
@@ -1118,11 +1151,16 @@ function hasAnyD2Word(text, words) {
   return words.some((word) => lower.includes(String(word).toLowerCase()));
 }
 
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 const D2_DIRECT_KEYWORDS = [
   "\u547d\u8fd02", "destiny 2", "destiny2", "d2", "bungie", "\u68d2\u9e21", "\u6218\u7ee9", "\u5730\u7262", "\u7a81\u88ad", "raid", "\u914d\u88c5", "\u4e09\u767e", "\u4e09\u767e\u5957", "loadout", "build",
   "\u5b97\u5e08", "\u65e5\u843d", "\u591c\u5e55", "gm", "\u70ed\u529b\u56fe", "\u6d3b\u8dc3", "\u953b\u9020", "\u56fe\u7eb8",
   "\u50ac\u5316", "\u4ed3\u5e93", "\u5e93\u5b58", "\u80cc\u5305", "\u88c5\u5907", "equipped", "\u6b66\u5668", "\u540d\u7247", "\u751f\u6daf",
   "pvp", "\u7194\u7089", "\u8bd5\u70bc", "\u6700\u8fd1", "\u6d3b\u52a8", "\u5355\u5c40", "pgcr",
+  "perk", "perks", "\u6765\u6e90", "\u51fa\u5904", "\u600e\u4e48\u83b7\u53d6", "\u54ea\u91cc\u51fa", "\u600e\u4e48\u5f97", "\u5982\u4f55\u83b7\u5f97", "\u662f\u4ec0\u4e48\u6b66\u5668",
 ];
 
 const D2_INVENTORY_SEARCH_WORDS = [
@@ -1166,6 +1204,14 @@ const D2_INVENTORY_SEARCH_KEYWORDS = [
   "\u6709\u54ea\u4e9b", "\u54ea\u4e9b", "\u6709\u6ca1\u6709", "\u627e", "\u641c", "\u641c\u7d22",
 ];
 
+const D2_KNOWN_PERK_SEARCH_TERMS = [
+  "爆破专家", "斩首武器", "辉耀炽热", "萤火虫", "蜻蜓", "狂乱", "重建", "重组", "维持生计",
+  "快速命中", "滑射", "首发射击", "精准连击", "不法之徒", "杀戮弹匣", "多杀弹匣",
+  "肾上腺素成瘾", "泉源", "渗透", "诱导推销", "嫉妒刺客", "切勿靠近", "禅意时刻",
+  "测距仪", "风暴之眼", "移动目标", "自动装填枪套", "丰盈满溢", "金中藏弹",
+  "冰冷弹匣", "伏特子弹", "失衡弹药", "动能震颤",
+];
+
 const D2_LOADOUT_HINT_WORDS = [
   "\u914d\u88c5", "\u5957\u88c5", "\u4e09\u767e", "\u4e09\u767e\u5957", "\u51d1", "\u80fd\u51d1", "\u8fbe\u5230", "\u6709\u6ca1\u6709", "\u80fd\u4e0d\u80fd",
   "loadout", "build",
@@ -1187,12 +1233,27 @@ const D2_DIRECT_REPLAY_WORDS = [
 
 function inferD2DirectCard(text) {
   const value = normalizeD2Text(text);
-  if (!value || (!hasAnyD2Word(value, D2_DIRECT_KEYWORDS) && !hasAnyD2Word(value, D2_INVENTORY_SEARCH_WORDS) && !hasD2LoadoutIntent(value))) return null;
+  const itemInfoIntent = hasD2ItemInfoIntent(value);
+  const personalItemInfoIntent = hasD2PersonalItemInfoIntent(value);
+  const perkWeaponsIntent = hasD2PerkWeaponsIntent(value);
+  if (
+    !value ||
+    (!hasAnyD2Word(value, D2_DIRECT_KEYWORDS) &&
+      !hasAnyD2Word(value, D2_INVENTORY_SEARCH_WORDS) &&
+      !hasD2LoadoutIntent(value) &&
+      !hasD2LoadoutManageIntent(value) &&
+      !perkWeaponsIntent &&
+      !itemInfoIntent &&
+      !personalItemInfoIntent)
+  ) return null;
   if (hasAnyD2Word(value, ["\u5e2e\u52a9", "\u83dc\u5355", "help", "\u6307\u4ee4", "\u547d\u4ee4"])) return "help";
+  if (hasD2LoadoutManageIntent(value)) return "loadout_manage";
   if (hasD2LoadoutIntent(value)) return "loadout_optimizer";
+  if (personalItemInfoIntent) return "inventory";
+  if (perkWeaponsIntent) return "perk_weapons";
   if (hasAnyD2Word(value, ["\u4ed3\u5e93\u641c\u7d22", "\u4ed3\u5e93", "\u5e93\u5b58", "\u80cc\u5305", "\u73b0\u6709\u88c5\u5907", "\u8eab\u4e0a\u88c5\u5907", "\u5f53\u524d\u88c5\u5907", "\u6211\u7a7f\u4ec0\u4e48", "\u67e5\u88c5\u5907", "\u88c5\u5907", "inventory", "vault", "equipped"])) return "inventory";
   if (hasAnyD2Word(value, D2_INVENTORY_SEARCH_WORDS) && hasAnyD2Word(value, D2_INVENTORY_SEARCH_KEYWORDS)) return "inventory";
-  if (hasAnyD2Word(value, ["\u50ac\u5316", "catalyst"])) return "catalysts";
+  if (hasAnyD2Word(value, ["\u50ac\u5316", "catalyst"])) return inferD2CatalystCard(value);
   if (hasAnyD2Word(value, ["\u953b\u9020", "\u56fe\u7eb8", "craft", "pattern"])) return "crafting";
   if (hasAnyD2Word(value, ["\u5b97\u5e08", "\u65e5\u843d", "\u591c\u5e55", "grandmaster", "gm"])) return "grandmasters";
   if (hasAnyD2Word(value, ["\u5730\u7262", "dungeon"])) return "dungeon_overview";
@@ -1201,6 +1262,7 @@ function inferD2DirectCard(text) {
   if (hasAnyD2Word(value, ["\u751f\u6daf", "career"])) return "career";
   if (hasAnyD2Word(value, ["\u540d\u7247", "namecard"])) return "namecard";
   if (hasAnyD2Word(value, ["pvp", "\u7194\u7089", "\u8bd5\u70bc", "trials", "crucible"])) return "pvp";
+  if (itemInfoIntent) return "item_info";
   if (hasAnyD2Word(value, ["\u6b66\u5668", "weapon"])) return "weapons";
   if (hasAnyD2Word(value, ["\u5355\u5c40", "pgcr"])) return "activity";
   if (hasAnyD2Word(value, ["\u6700\u8fd1\u4e00\u628a", "\u6700\u8fd1\u6d3b\u52a8", "latest"])) return "latest_activity";
@@ -1208,6 +1270,121 @@ function inferD2DirectCard(text) {
   if (hasAnyD2Word(value, ["\u8d44\u6599", "\u89d2\u8272", "profile"])) return "profile";
   if (hasAnyD2Word(value, ["\u6218\u7ee9", "\u603b\u89c8", "\u547d\u8fd02", "destiny 2", "destiny2", "d2"])) return "summary";
   return null;
+}
+
+function hasD2ItemInfoIntent(text) {
+  const value = normalizeD2Text(text);
+  if (!extractD2ItemInfoQuery(value)) return false;
+  if (hasAnyD2Word(value, ["\u6211\u7684", "\u4ed3\u5e93", "\u80cc\u5305", "\u8eab\u4e0a", "\u5f53\u524d\u88c5\u5907", "\u5df2\u88c5\u5907"])) {
+    return false;
+  }
+  return hasAnyD2Word(value, ["\u67e5\u4e2a\u6b66\u5668", "\u6b66\u5668\u67e5\u8be2", "\u67e5\u6b66\u5668", "\u6b66\u5668\u8d44\u6599", "\u7269\u54c1\u67e5\u8be2", "perk", "perks", "\u6765\u6e90", "\u51fa\u5904", "\u600e\u4e48\u83b7\u53d6", "\u54ea\u91cc\u51fa", "\u600e\u4e48\u5f97", "\u5982\u4f55\u83b7\u5f97", "\u662f\u4ec0\u4e48\u6b66\u5668", "\u662f\u4ec0\u4e48", "\u597d\u4e0d\u597d\u7528", "\u597d\u7528\u5417"]);
+}
+
+function hasD2PersonalItemInfoIntent(text) {
+  const value = normalizeD2Text(text);
+  if (!extractD2ItemInfoQuery(value)) return false;
+  if (hasAnyD2Word(value, ["\u6548\u679c", "\u6765\u6e90", "\u51fa\u5904", "\u600e\u4e48\u83b7\u53d6", "\u54ea\u91cc\u51fa", "\u600e\u4e48\u5f97", "\u5982\u4f55\u83b7\u5f97", "\u662f\u4ec0\u4e48"])) return false;
+  return hasAnyD2Word(value, ["\u6211\u7684", "\u4ed3\u5e93", "\u80cc\u5305", "\u8eab\u4e0a", "\u5f53\u524d\u88c5\u5907", "\u5df2\u88c5\u5907"]);
+}
+
+function extractD2ItemInfoQuery(text) {
+  return normalizeD2Text(text)
+    .replace(/^\/+/u, "")
+    .replace(/(@\S+\s*)+/gu, " ")
+    .replace(/\u547d\u8fd02|destiny\s*2|destiny2|d2stats|d2|\u67e5\u4e2a\u6b66\u5668|\u6b66\u5668\u67e5\u8be2|\u67e5\u6b66\u5668|\u6b66\u5668\u8d44\u6599|\u7269\u54c1\u67e5\u8be2|\u67e5\u8be2\u4e00\u4e0b|\u67e5\u8be2\u4e0b|\u67e5\u8be2|\u67e5\u4e00\u4e0b|\u67e5\u4e00\u67e5|\u67e5\u4e0b|\u67e5\u770b|\u5e2e\u6211\u67e5|\u5e2e\u5fd9\u67e5|\u770b\u4e00\u4e0b|\u770b\u4e0b|\u770b\u770b|\u67e5|\u6211\u9700\u8981|\u9700\u8981|\u8fd9\u4e2a|\u4e00\u4e0b|\u4e00\u4e2a|\u7684|perk|perks|\u6765\u6e90|\u51fa\u5904|\u600e\u4e48\u83b7\u53d6|\u54ea\u91cc\u51fa|\u600e\u4e48\u5f97|\u5982\u4f55\u83b7\u5f97|\u662f\u4ec0\u4e48\u6b66\u5668|\u662f\u4ec0\u4e48|\u4ec0\u4e48|\u597d\u4e0d\u597d\u7528|\u597d\u7528\u5417|\u8bc4\u4ef7|\u8d44\u6599/giu, " ")
+    .replace(/[，,：:、。？?！!；;]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function hasD2PerkWeaponsIntent(text) {
+  const value = normalizeD2Text(text);
+  if (!value || hasD2PersonalItemInfoIntent(value)) return false;
+  const params = d2PerkWeaponParamsFromText(value);
+  if (!params.perks.length) return false;
+  if (params.weaponType || params.rpm || params.craftable !== undefined) return true;
+  return hasAnyD2Word(value, ["perk查询", "查询perk", "特性查询", "能出", "可出", "可以出", "会出", "带", "有哪些武器", "哪些武器", "什么武器", "枪械", "特性", "词条"]);
+}
+
+function d2PerkWeaponParamsFromText(text) {
+  const rawText = normalizeD2Text(text);
+  const perks = d2UniquePerkTerms(d2PerkTermsFromNaturalText(rawText));
+  const weaponType = d2InventoryWeaponTypeFromText(rawText);
+  const rpm = d2InventoryRpmFromText(rawText, Boolean(weaponType));
+  const craftable = hasAnyD2Word(rawText, ["可锻造", "图纸"]) ? true : undefined;
+  return {
+    perks,
+    ...(weaponType ? { weaponType } : {}),
+    ...(rpm ? { rpm } : {}),
+    ...(craftable !== undefined ? { craftable } : {}),
+    limit: 50,
+  };
+}
+
+function d2PerkTermsFromNaturalText(text) {
+  const known = [];
+  let working = normalizeD2Text(text);
+  for (const term of [...D2_KNOWN_PERK_SEARCH_TERMS].sort((a, b) => b.length - a.length)) {
+    if (working.includes(term)) {
+      known.push(term);
+      working = working.replace(new RegExp(escapeRegExp(term), "gu"), " ");
+    }
+  }
+  if (known.length) return known;
+  const cleaned = cleanD2PerkWeaponQuery(working);
+  return cleaned.split(/[,，、+＋&＆/|]|\s+(?:和|与|以及)\s+/gu).map(cleanD2PerkWeaponQuery).filter((term) => term.length >= 2);
+}
+
+function cleanD2PerkWeaponQuery(value) {
+  let cleaned = normalizeD2Text(value)
+    .replace(/^\/+/u, "")
+    .replace(/命运2|destiny\s*2|destiny2|d2stats|d2|perk查询|查询perk|特性查询|查询一下|查询下|查询|查一下|查一查|查下|查看|帮我查|帮忙查|看一下|看下|看看|查|哪些|有哪些|什么|所有|全部|可滚|能出|可出|可以出|会出|有|带|的|枪械|枪|perk|perks|特性|词条/giu, " ")
+    .replace(/[，,：:、。？?！!；;]+/gu, " ");
+  const weaponType = d2InventoryWeaponTypeFromText(cleaned);
+  if (weaponType) cleaned = stripD2InventoryWeaponTypeTerms(cleaned, weaponType);
+  return cleaned.replace(/\s+/gu, " ").trim();
+}
+
+function d2UniquePerkTerms(values) {
+  const seen = new Set();
+  const result = [];
+  for (const value of values) {
+    const cleaned = String(value || "").trim();
+    const key = cleaned.replace(/\s+/gu, "").toLowerCase();
+    if (!cleaned || !key || seen.has(key)) continue;
+    seen.add(key);
+    result.push(cleaned);
+  }
+  return result;
+}
+
+function inferD2CatalystCard(text) {
+  const value = normalizeD2Text(text);
+  const q = extractD2CatalystInfoQuery(value);
+  if (
+    /^\/?\s*\u50ac\u5316\s*$/u.test(value) ||
+    (!q && hasAnyD2Word(value, ["\u6211\u7684", "\u8d26\u53f7", "\u5e10\u865f", "\u8fdb\u5ea6", "\u9032\u5ea6", "\u5b8c\u6210", "\u72b6\u6001", "\u72c0\u614b", "\u5168\u91cf", "\u5168\u90e8", "\u6240\u6709", "\u5217\u8868", "qq", "oauth"]))
+  ) {
+    return "catalysts";
+  }
+  if (
+    q &&
+    hasAnyD2Word(value, ["\u6548\u679c", "\u662f\u4ec0\u4e48", "\u4ec0\u4e48", "\u8bf4\u660e", "\u4ecb\u7ecd"]) &&
+    !hasAnyD2Word(value, ["\u6211\u7684", "\u8fdb\u5ea6", "\u9032\u5ea6", "\u5b8c\u6210", "\u83b7\u5f97", "\u7372\u5f97", "\u6709\u6ca1\u6709", "\u6709\u6ca1", "\u72b6\u6001", "\u72c0\u614b"])
+  ) {
+    return "catalyst_info";
+  }
+  return q ? "catalyst_status" : "catalysts";
+}
+
+function extractD2CatalystInfoQuery(text) {
+  return normalizeD2Text(text)
+    .replace(/^\/+/u, "")
+    .replace(/(@\S+\s*)+/gu, " ")
+    .replace(/\u50ac\u5316\u5242|\u50ac\u5316\u6548\u679c|\u50ac\u5316\u8fdb\u5ea6|\u50ac\u5316|\u6548\u679c|\u67e5\u8be2\u4e00\u4e0b|\u67e5\u8be2\u4e0b|\u67e5\u8be2|\u67e5\u4e00\u4e0b|\u67e5\u4e0b|\u67e5\u770b|\u5e2e\u6211\u67e5|\u5e2e\u5fd9\u67e5|\u770b\u4e00\u4e0b|\u770b\u4e0b|\u770b\u770b|\u67e5|\u6211\u9700\u8981|\u9700\u8981|\u6211\u7684|\u6211|\u6709\u6ca1\u6709|\u6709\u6ca1|\u662f\u5426|\u662f\u4ec0\u4e48|\u4ec0\u4e48|\u7684|\u547d\u8fd02|destiny\s*2|d2/giu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
 }
 
 function hasD2LoadoutIntent(text) {
@@ -1220,9 +1397,21 @@ function hasD2LoadoutIntent(text) {
   return false;
 }
 
+function hasD2LoadoutManageIntent(text) {
+  const value = normalizeD2Text(text);
+  if (!value) return false;
+  return hasAnyD2Word(value, [
+    "\u5957\u88c5\u5217\u8868", "\u914d\u88c5\u5217\u8868", "\u8bfb\u53d6\u914d\u88c5", "\u67e5\u770b\u914d\u88c5", "\u67e5\u770b\u6211\u7684\u914d\u88c5", "\u67e5\u914d\u88c5", "\u6211\u7684\u914d\u88c5",
+    "\u6e38\u620f\u5185\u914d\u88c5", "\u672c\u5730\u914d\u88c5", "\u4fdd\u5b58\u7684\u914d\u88c5", "\u4fdd\u5b58\u914d\u88c5", "\u5df2\u4fdd\u5b58\u914d\u88c5",
+    "\u4fdd\u5b58\u5f53\u524d\u88c5\u5907", "\u4fdd\u5b58\u5f53\u524d\u914d\u88c5", "\u4fdd\u5b58\u5230\u6e38\u620f\u5185", "\u4fdd\u5b58\u5230\u7b2c", "\u4fdd\u5b58\u4e3a",
+    "\u88c5\u5907\u7b2c", "\u5e94\u7528", "\u5957\u7528", "\u5220\u9664\u914d\u88c5", "\u5220\u6389\u914d\u88c5", "\u6e05\u7a7a\u7b2c", "\u6e05\u7a7a\u6e38\u620f\u5185",
+    "loadout list", "list loadout", "save loadout", "equip loadout", "apply loadout", "delete loadout", "clear loadout",
+  ]);
+}
+
 function extractD2DirectTarget(text, event, card) {
   const value = normalizeD2Text(text);
-  if (card === "help") return "";
+  if (card === "help" || card === "item_info" || card === "catalyst_info" || card === "perk_weapons") return "";
   if (card === "activity") {
     const activity = /(?:activityId|pgcr)?\D*([0-9]{8,20})/iu.exec(value);
     return activity ? activity[1] : "";
@@ -1382,6 +1571,117 @@ function d2LoadoutTargetStats(text) {
   return result;
 }
 
+function d2LoadoutManageParams(text, target) {
+  const value = normalizeD2Text(text);
+  const operation = d2LoadoutManageOperation(value);
+  const params = { target, operation };
+  const index = d2LoadoutIndexFromText(value);
+  if (index !== undefined) {
+    params.loadoutIndex = index;
+  }
+  const name = operation === "list" ? "" : d2LoadoutNameFromText(value, operation);
+  if (name) {
+    if (operation === "apply_local" || operation === "delete_local" || operation === "show") {
+      params.idOrName = name;
+    } else {
+      params.name = name;
+    }
+  }
+  if (hasAnyD2Word(value, ["\u8986\u76d6", "overwrite"])) {
+    params.overwrite = true;
+  }
+  return params;
+}
+
+function d2DirectFallbackMessage(card, operation, rawMessage) {
+  const message = String(rawMessage || "\u547d\u8fd02\u67e5\u8be2\u6ca1\u6709\u8fd4\u56de\u53ef\u53d1\u9001\u5185\u5bb9\u3002");
+  if (/https?:\/\/|\u7ed1\u5b9a|\u767b\u5f55|\u7f51\u9875|\u94fe\u63a5/u.test(message)) {
+    return message;
+  }
+  const isLoadoutRead = card === "loadout_manage" && ["list", "show"].includes(String(operation || "list"));
+  if (card === "catalyst_info") {
+    return `\u6ca1\u6709\u751f\u6210\u50ac\u5316\u6548\u679c\u56fe\u7247\uff1a${message}`;
+  }
+  if (card === "item_info") {
+    return `\u6ca1\u6709\u751f\u6210\u6b66\u5668\u8be6\u60c5\u56fe\u7247\uff1a${message}`;
+  }
+  if (card === "perk_weapons") {
+    return `\u6ca1\u6709\u751f\u6210 Perk \u53cd\u67e5\u56fe\u7247\uff1a${message}`;
+  }
+  if (card === "catalyst_status") {
+    return `\u6ca1\u6709\u751f\u6210\u50ac\u5316\u56fe\u7247\uff1a${message}`;
+  }
+  return isLoadoutRead
+    ? `\u6ca1\u6709\u751f\u6210\u914d\u88c5\u56fe\u7247\uff1a${message}`
+    : `\u6ca1\u6709\u751f\u6210\u56fe\u7247\uff1a${message}`;
+}
+
+function d2LoadoutManageOperation(text) {
+  const value = normalizeD2Text(text);
+  if (hasAnyD2Word(value, ["\u6e05\u7a7a", "clear"])) return "clear_bungie";
+  if (hasAnyD2Word(value, ["\u4fdd\u5b58\u5230\u6e38\u620f\u5185", "\u4fdd\u5b58\u5230\u7b2c", "snapshot"])) return "snapshot_bungie";
+  if (hasAnyD2Word(value, ["\u4fee\u6539\u6e38\u620f\u5185", "\u91cd\u547d\u540d\u6e38\u620f\u5185", "rename"])) return "rename_bungie";
+  if (hasAnyD2Word(value, ["\u5220\u9664", "\u5220\u6389", "delete"])) return "delete_local";
+  if (hasAnyD2Word(value, ["\u5e94\u7528", "\u5957\u7528", "apply"])) return "apply_local";
+  if (hasAnyD2Word(value, ["\u88c5\u5907\u7b2c", "equip loadout"])) return "equip_bungie";
+  if (hasAnyD2Word(value, ["\u4fdd\u5b58\u5f53\u524d", "\u4fdd\u5b58\u4e3a", "save loadout"])) return "save_local";
+  if (hasAnyD2Word(value, ["\u5957\u88c5\u5217\u8868", "\u914d\u88c5\u5217\u8868", "\u8bfb\u53d6\u914d\u88c5", "\u6e38\u620f\u5185\u914d\u88c5", "\u672c\u5730\u914d\u88c5", "\u4fdd\u5b58\u7684\u914d\u88c5", "\u4fdd\u5b58\u914d\u88c5", "\u5df2\u4fdd\u5b58\u914d\u88c5"])) return "list";
+  if (hasAnyD2Word(value, ["\u663e\u793a", "\u67e5\u770b", "show"]) && d2LoadoutNameFromText(value, "show")) return "show";
+  return "list";
+}
+
+function d2LoadoutIndexFromText(text) {
+  const value = normalizeD2Text(text);
+  const match = /(?:第|槽|slot\s*)\s*([0-9一二三四五六七八九十]+)/iu.exec(value) || /([0-9一二三四五六七八九十]+)\s*(?:槽|套|slot)/iu.exec(value);
+  if (!match) return undefined;
+  const number = d2ChineseNumber(match[1]);
+  if (!Number.isInteger(number) || number <= 0) return undefined;
+  return Math.max(0, Math.min(9, number - 1));
+}
+
+function d2ChineseNumber(value) {
+  const text = String(value || "").trim();
+  if (/^[0-9]+$/u.test(text)) return Number(text);
+  const map = { "\u4e00": 1, "\u4e8c": 2, "\u4e09": 3, "\u56db": 4, "\u4e94": 5, "\u516d": 6, "\u4e03": 7, "\u516b": 8, "\u4e5d": 9, "\u5341": 10 };
+  if (map[text]) return map[text];
+  if (text === "\u5341") return 10;
+  return 0;
+}
+
+function d2LoadoutNameFromText(text, operation) {
+  let value = normalizeD2Text(text);
+  const patterns = [
+    /保存当前(?:装备|配装)?为\s*([^\s，。,.]+)/u,
+    /保存为\s*([^\s，。,.]+)/u,
+    /应用\s*([^\s，。,.]+)/u,
+    /套用\s*([^\s，。,.]+)/u,
+    /删除(?:配装)?\s*([^\s，。,.]+)/u,
+    /查看\s*([^\s，。,.]+)/u,
+    /show\s+([^\s，。,.]+)/iu,
+  ];
+  for (const pattern of patterns) {
+    const match = pattern.exec(value);
+    if (match?.[1]) {
+      return cleanD2LoadoutName(match[1]);
+    }
+  }
+  if (operation === "apply_local" || operation === "delete_local") {
+    value = value
+      .replace(/^(?:应用|套用|删除|删掉|配装|套装|我的|帮我|请|查|看)+/gu, " ")
+      .replace(/(?:配装|套装)$/gu, " ");
+    return cleanD2LoadoutName(value);
+  }
+  return "";
+}
+
+function cleanD2LoadoutName(value) {
+  return String(value || "")
+    .replace(/[\/!?#\uFF1F]+/gu, " ")
+    .replace(/^(?:我的|本地|配装|套装|第[0-9一二三四五六七八九十]+套)+/gu, " ")
+    .replace(/(?:配装|套装|确认)$/gu, " ")
+    .trim();
+}
+
 function d2LoadoutMentionedStats(text) {
   const value = normalizeD2Text(text);
   return D2_LOADOUT_STATS
@@ -1422,6 +1722,7 @@ function d2ReplayKey(event) {
 }
 
 function isD2DirectReplayRequest(text) {
+  if (D2_COMMANDS?.isReplayRequest?.(text)) return true;
   const value = normalizeD2Text(text);
   if (!value) return false;
   return hasAnyD2Word(value, D2_DIRECT_REPLAY_WORDS);
@@ -1449,10 +1750,33 @@ function rememberD2DirectQuery(event, invocation) {
 }
 
 function buildD2DirectInvocation(event, text) {
+  const gatewayInvocation = D2_COMMANDS?.buildCommandInvocationFromText?.(event, text);
+  if (gatewayInvocation) return gatewayInvocation;
+
   const card = inferD2DirectCard(text);
   if (!card) return null;
   const target = extractD2DirectTarget(text, event, card);
-  if (card !== "help" && !target) return null;
+  if (card !== "help" && card !== "catalyst_info" && card !== "item_info" && card !== "perk_weapons" && !target) return null;
+  if (card === "catalyst_info") {
+    const q = extractD2CatalystInfoQuery(text);
+    if (!q) return null;
+    return { card, target: "", params: { card, q } };
+  }
+  if (card === "item_info") {
+    const q = extractD2ItemInfoQuery(text);
+    if (!q) return null;
+    return { card, target: "", params: { card, q } };
+  }
+  if (card === "perk_weapons") {
+    const perkParams = d2PerkWeaponParamsFromText(text);
+    if (!perkParams.perks.length) return null;
+    return { card, target: "", params: { card, ...perkParams } };
+  }
+  if (card === "catalyst_status") {
+    const q = extractD2CatalystInfoQuery(text);
+    if (!q) return null;
+    return { card, target, params: { target, card, q } };
+  }
   const params = card === "help"
     ? { card }
     : card === "activity"
@@ -1491,6 +1815,13 @@ function buildD2DirectInvocation(event, text) {
     const bucket = d2InventoryBucket(text, view);
     return { card, target, params: { target, ...searchParts, view, bucket } };
   }
+  if (card === "loadout_manage") {
+    return {
+      card,
+      target,
+      params: d2LoadoutManageParams(text, target),
+    };
+  }
   if (card === "loadout_optimizer") {
     return {
       card,
@@ -1512,35 +1843,24 @@ async function executeD2DirectInvocation(event, invocation, options = {}) {
   const { card, target } = invocation;
   log("d2-direct-start", event.message_type, event.group_id || event.user_id, event.user_id, card, target || "-", options.replay ? "replay" : "fresh");
   try {
-    const core = await import(D2_PLUGIN_CORE);
     const config = { baseUrl: "http://192.168.31.11:3011", timeoutMs: 120000, shareUploadToken: process.env.D2_SHARE_UPLOAD_TOKEN || "p4OS4jG5KnA0e0Idtd3dyb2IcsedjmJ9GYdi21lK7MM" };
-    let result;
-    if (card === "inventory") {
-      result = await core.queryInventory(invocation.params, config);
-    } else if (card === "loadout_optimizer") {
-      result = await core.queryLoadoutOptimizer({
-        ...invocation.params,
-      }, config);
-    } else {
-      result = await core.queryCard(invocation.params, config);
-    }
-    const content = Array.isArray(result?.content) ? result.content : [];
-    const imageParts = content.filter((part) => part?.type === "image" && part.data);
-    if (imageParts.length) {
+    const gateway = await importD2CommandGateway();
+    const { result, envelope } = await gateway.executeD2CommandInvocation(invocation, config);
+    if (envelope?.type === "image" && Array.isArray(envelope.images) && envelope.images.length) {
       fs.mkdirSync(D2_DIRECT_OUT_DIR, { recursive: true });
       const files = [];
-      for (let index = 0; index < imageParts.length; index += 1) {
-        const part = imageParts[index];
+      for (let index = 0; index < envelope.images.length; index += 1) {
+        const part = envelope.images[index];
         const file = path.join(D2_DIRECT_OUT_DIR, `d2-${card}-${Date.now()}-${index + 1}-${crypto.randomBytes(4).toString("hex")}.png`);
-        fs.writeFileSync(file, Buffer.from(String(part.data), "base64"));
+        fs.writeFileSync(file, Buffer.from(String(part.imageBase64), "base64"));
         files.push(file);
         try {
           await sendExistingImageConfirmed(event, file);
-          log("d2-direct-image", event.message_type, event.group_id || event.user_id, card, file, `${index + 1}/${imageParts.length}`, result?.details?.bytes || "-");
+          log("d2-direct-image", event.message_type, event.group_id || event.user_id, card, file, `${index + 1}/${envelope.images.length}`, part.bytes || envelope?.meta?.bytes || "-");
         } finally {
           removeTempImageFile(file);
         }
-        if (index < imageParts.length - 1) {
+        if (index < envelope.images.length - 1) {
           await sleepMs(1400);
         }
       }
@@ -1548,14 +1868,13 @@ async function executeD2DirectInvocation(event, invocation, options = {}) {
       rememberD2DirectQuery(event, invocation);
       return true;
     }
-    const first = content[0];
-    const rawMessage = first?.text || "\u547d\u8fd02\u67e5\u8be2\u6ca1\u6709\u8fd4\u56de\u53ef\u53d1\u9001\u5185\u5bb9\u3002";
-    const message = /https?:\/\/|\u7ed1\u5b9a|\u767b\u5f55|\u7f51\u9875|\u94fe\u63a5/u.test(rawMessage)
+    const rawMessage = envelope?.message || "\u547d\u8fd02\u67e5\u8be2\u6ca1\u6709\u8fd4\u56de\u53ef\u53d1\u9001\u5185\u5bb9\u3002";
+    const message = ["share", "bind_link", "confirmation", "text"].includes(String(envelope?.type || ""))
       ? rawMessage
-      : `\u6ca1\u6709\u751f\u6210\u56fe\u7247\uff1a${rawMessage}`;
+      : d2DirectFallbackMessage(card, invocation.params?.operation, rawMessage);
     cleanupD2ResultMedia(result);
     await sendReply(event, message);
-    log("d2-direct-text", event.message_type, event.group_id || event.user_id, card, JSON.stringify(message).slice(0, 200));
+    log("d2-direct-text", event.message_type, event.group_id || event.user_id, card, envelope?.type || "text", JSON.stringify(message).slice(0, 200));
     return true;
   } catch (err) {
     log("d2-direct-error", event.message_type, event.group_id || event.user_id, card, target || "-", err.message, String(err.stack || "").slice(0, 500));
@@ -1759,6 +2078,8 @@ if (IS_MAIN) {
     cleanD2InventoryQuery,
     d2InventoryBucket,
     d2InventoryView,
+    d2DirectFallbackMessage,
+    d2LoadoutManageParams,
     d2LoadoutTargetStats,
     executeD2DirectInvocation,
     extractInventoryQuery,
