@@ -1563,6 +1563,89 @@ describe("Fastify routes", () => {
     await app.close();
   });
 
+  it("executes batch inventory transfer through QQ OAuth and writes audit logs", async () => {
+    const store = new NullStore();
+    await store.createQqBinding({
+      qq: "607972716",
+      membershipType: 3,
+      membershipId: "4611686018"
+    });
+    await store.upsertQqOAuthToken({
+      qq: "607972716",
+      bungieMembershipId: "4352344",
+      membershipType: 3,
+      membershipId: "4611686018",
+      accessTokenEncrypted: "encrypted-access",
+      accessExpiresAt: new Date(Date.now() + 3600_000).toISOString()
+    });
+    const transferInventoryItems = vi.fn(async (_membershipType: number, _membershipId: string, _token: string, request: unknown) => ({
+      membershipType: 3,
+      membershipId: "4611686018",
+      action: "transferItems",
+      ok: true,
+      mode: "execute",
+      planned: 2,
+      moved: 2,
+      failed: 0,
+      skipped: 0,
+      source: { owner: "character", className: "warlock" },
+      destination: { owner: "vault" },
+      filters: { itemKind: "armor", includeEquipped: false },
+      maxItems: 100,
+      items: [],
+      errors: [],
+      message: "移动完成：成功 2 件，失败 0 件，跳过 0 件。",
+      updatedAt: "2026-06-03T00:00:00.000Z",
+      request
+    }));
+    const app = await buildApp({
+      config: makeTestConfig(),
+      cache: new MemoryCacheStore(),
+      store,
+      destinyService: { ...fakeDestinyService, transferInventoryItems } as never,
+      cardService: fakeCardService as never,
+      qqOAuthService: { getValidAccessTokenForQq: vi.fn(async () => "access-token") } as never
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/d2/inventory/qq/607972716/transfer-items",
+      payload: {
+        mode: "execute",
+        source: { owner: "character", className: "warlock" },
+        destination: { owner: "vault" },
+        filters: { itemKind: "armor", includeEquipped: false },
+        maxItems: 100
+      }
+    });
+    expect(response.statusCode).toBe(200);
+    expect(transferInventoryItems).toHaveBeenCalledWith(
+      3,
+      "4611686018",
+      "access-token",
+      expect.objectContaining({
+        qq: "607972716",
+        mode: "execute",
+        source: { owner: "character", className: "warlock" },
+        destination: { owner: "vault" },
+        filters: expect.objectContaining({ itemKind: "armor", includeEquipped: false }),
+        maxItems: 100
+      })
+    );
+    expect(response.json()).toMatchObject({
+      success: true,
+      data: { action: "transferItems", planned: 2, moved: 2, failed: 0, skipped: 0 }
+    });
+    const audit = await store.listAdminAuditLogs({ page: 1, pageSize: 10 });
+    expect(audit.items[0]).toMatchObject({
+      actor: "qq:607972716",
+      action: "inventory.transferItems",
+      target: "batch",
+      details: { ok: true, planned: 2, moved: 2, failed: 0, skipped: 0 }
+    });
+    await app.close();
+  });
+
   it("searches and applies loadout optimizer builds through QQ OAuth", async () => {
     const store = new NullStore();
     await store.createQqBinding({

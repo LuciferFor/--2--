@@ -2057,6 +2057,113 @@ describe("d2stats core", () => {
     assert.match(result.content[0].text, /confirm=true/);
   });
 
+  it("executes batch transfer item actions and renders a result image", async () => {
+    const posted = [];
+    const result = await itemAction(
+      {
+        target: "607972716",
+        action: "transfer_items",
+        source: { owner: "character", className: "warlock" },
+        destination: { owner: "vault" },
+        filters: { itemKind: "armor", includeEquipped: false },
+        maxItems: 25,
+      },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async (url, init = {}) => {
+          const textUrl = String(url);
+          if (textUrl.endsWith("/api/d2/inventory/qq/607972716/transfer-items")) {
+            posted.push(JSON.parse(init.body));
+            return jsonResponse({
+              success: true,
+              data: {
+                membershipType: 3,
+                membershipId: "4611686018428939884",
+                mode: "execute",
+                source: { owner: "character", className: "warlock" },
+                destination: { owner: "vault" },
+                filters: { itemKind: "armor", includeEquipped: false },
+                planned: 1,
+                moved: 1,
+                failed: 0,
+                skipped: 0,
+                message: "移动完成：成功 1，失败 0，跳过 0。",
+                updatedAt: "2026-06-03T00:00:00.000Z",
+                items: [
+                  {
+                    status: "moved",
+                    ok: true,
+                    name: "凤凰协议",
+                    itemId: "6917529",
+                    source: { owner: "inventory", characterId: "2305843" },
+                    target: { owner: "vault" },
+                  },
+                ],
+              },
+            });
+          }
+          if (textUrl.includes("/bindings/qq/")) {
+            return jsonResponse({ success: true, data: { qq: "607972716", membershipType: 3, membershipId: "4611686018428939884" } });
+          }
+          if (textUrl.includes("/namecard/")) {
+            return jsonResponse({ success: true, data: { membershipType: 3, membershipId: "4611686018428939884", profile: {} } });
+          }
+          throw new Error(`unexpected url ${textUrl}`);
+        },
+        renderHtmlToPng: async (html) => {
+          assert.match(html, /DESTINY 2 ITEM MOVE/);
+          assert.match(html, /凤凰协议/);
+          assert.match(html, /移动完成/);
+          return Buffer.from("png-bytes");
+        },
+      },
+    );
+
+    assert.equal(result.content[0].type, "image");
+    assert.equal(result.details.status, "ok");
+    assert.equal(result.details.action, "transfer_items");
+    assert.deepEqual(posted, [
+      {
+        mode: "execute",
+        source: { owner: "character", className: "warlock" },
+        destination: { owner: "vault" },
+        filters: {
+          itemIds: [],
+          itemKind: "armor",
+          q: "",
+          locked: null,
+          includeEquipped: false,
+        },
+        maxItems: 25,
+      },
+    ]);
+  });
+
+  it("rejects unsupported bulk item actions before calling Bungie", async () => {
+    let called = false;
+    const result = await itemAction(
+      {
+        target: "607972716",
+        action: "transfer",
+        transferToVault: true,
+        unsupportedBulk: true,
+        reason: "暂不支持按“全部/所有/防具”批量转移。",
+      },
+      { baseUrl: "http://d2.local" },
+      {
+        fetchImpl: async () => {
+          called = true;
+          return jsonResponse({ success: true, data: {} });
+        },
+      },
+    );
+
+    assert.equal(called, false);
+    assert.equal(result.content[0].type, "text");
+    assert.equal(result.details.status, "invalid_input");
+    assert.match(result.content[0].text, /批量转移/u);
+  });
+
   it("asks for class before loadout optimization", async () => {
     let called = false;
     const result = await queryLoadoutOptimizer(

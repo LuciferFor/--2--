@@ -289,6 +289,9 @@ function buildInventoryDataUrl(qq, params = {}, config = resolveConfig()) {
 
 function buildInventoryActionUrl(qq, action, config = resolveConfig()) {
   const base = `${config.baseUrl}/api/d2`;
+  if (action === "transfer_items") {
+    return `${base}/inventory/qq/${encodeURIComponent(qq)}/transfer-items`;
+  }
   if (action === "transfer") {
     return `${base}/inventory/qq/${encodeURIComponent(qq)}/transfer`;
   }
@@ -1477,8 +1480,21 @@ export async function itemAction(params = {}, rawConfig = {}, options = {}) {
     throw error;
   }
 
+  if (params.unsupportedBulk === true && action !== "transfer_items") {
+    return textResult(
+      params.reason ||
+        "暂不支持这种批量装备操作。请先查询具体物品，拿到 itemId、itemReferenceHash 和 characterId 后逐件操作；写操作会要求二次确认。",
+      {
+        status: "invalid_input",
+        action,
+        qq: target.qq,
+      },
+    );
+  }
+
   const body = buildInventoryActionBody(action, params);
-  if (params.confirm !== true) {
+  const isBatchTransfer = action === "transfer_items";
+  if (!isBatchTransfer && params.confirm !== true) {
     return textResult(inventoryConfirmationMessage(action, body), {
       status: "confirmation_required",
       qq: target.qq,
@@ -1490,6 +1506,50 @@ export async function itemAction(params = {}, rawConfig = {}, options = {}) {
   const url = buildInventoryActionUrl(target.qq, action, config);
   try {
     const data = await postEnvelope(url, body, config, options);
+    if (isBatchTransfer) {
+      const resolved = await withCardIdentity(await resolveTargetMembership(target.qq, config, options), config, options);
+      const html = renderInventoryTransferItemsHtml(resolved.player, data);
+      const png = await renderHtmlToPng(html, {
+        width: CARD_WIDTH,
+        height: estimateInventoryTransferItemsHeight(data),
+        signal: options.signal,
+        renderer: options.renderHtmlToPng,
+      });
+      const shareResult = await maybeShareImages({
+        config,
+        options,
+        card: "inventory_transfer_items",
+        sourceUrl: url,
+        title: "Destiny 2 item transfer",
+        description: "移动结果较大，已生成网页方便查看。",
+        images: [
+          {
+            base64: png.toString("base64"),
+            mimeType: "image/png",
+            bytes: png.length,
+            html,
+            caption: "移动结果",
+          },
+        ],
+      });
+      if (shareResult) {
+        return shareResult;
+      }
+      return imageResult({
+        label: "Destiny 2 item transfer result",
+        path: url,
+        base64: png.toString("base64"),
+        mimeType: "image/png",
+        details: {
+          status: "ok",
+          action,
+          bytes: png.length,
+          result: data,
+          url,
+          renderedBy: "openclaw-html",
+        },
+      });
+    }
     return textResult(data?.message || "装备操作已提交成功。", {
       status: "ok",
       action,
@@ -2644,6 +2704,123 @@ function renderInventoryListHtml(player, inventory, params = {}, view = "overvie
       ${membershipBlock(inventory?.membershipType, inventory?.membershipId)}
     `,
   });
+}
+
+function renderInventoryTransferItemsHtml(player, transfer) {
+  const items = Array.isArray(transfer?.items) ? transfer.items : [];
+  const moved = items.filter((item) => item?.status === "moved");
+  const failed = items.filter((item) => item?.status === "failed");
+  const skipped = items.filter((item) => item?.status === "skipped");
+  const planned = items.filter((item) => item?.status === "planned");
+  const modeLabel = transfer?.mode === "preview" ? "移动预览" : "移动结果";
+  const rows = items.slice(0, 120);
+  return cardPage({
+    width: CARD_WIDTH,
+    player,
+    title: formatPlayerName(player),
+    eyebrow: "DESTINY 2 ITEM MOVE",
+    subtitle: `${modeLabel} · ${dateOnly(transfer?.updatedAt || new Date().toISOString())}`,
+    body: `
+      <section class="metrics metrics-4">
+        ${metric("计划", int(transfer?.planned ?? planned.length + moved.length + failed.length))}
+        ${metric("成功", int(transfer?.moved ?? moved.length))}
+        ${metric("失败", int(transfer?.failed ?? failed.length))}
+        ${metric("跳过", int(transfer?.skipped ?? skipped.length))}
+      </section>
+      <section class="transfer-summary">
+        <strong>${escapeHtml(transfer?.message || (transfer?.mode === "preview" ? "下面是将要移动的物品。" : "下面是本次移动结果。"))}</strong>
+        <span>${escapeHtml(inventoryTransferScopeLine(transfer))}</span>
+      </section>
+      <section class="transfer-list">
+        ${rows.map(inventoryTransferItemHtml).join("") || emptyState("没有匹配到可移动物品。")}
+      </section>
+      ${items.length > rows.length ? `<footer class="card-footer">只展示前 ${int(rows.length)} 条结果；本次共 ${int(items.length)} 条。</footer>` : ""}
+      <footer class="card-footer">批量移动只调用 Bungie TransferItem，不做拆解、不改模组、不锁定/解锁；默认不包含已装备物品。</footer>
+      ${membershipBlock(transfer?.membershipType || player?.membershipType, transfer?.membershipId || player?.membershipId)}
+    `,
+  });
+}
+
+function inventoryTransferItemHtml(item) {
+  const tone = item?.status === "moved" || item?.status === "planned" ? "green" : item?.status === "failed" ? "red" : "muted";
+  const iconUrl = item?.iconPath ? bungieAssetUrl(item.iconPath) : "";
+  const statusLabel = inventoryTransferStatusLabel(item?.status);
+  const source = inventoryTransferLocationLabel(item?.source);
+  const target = inventoryTransferLocationLabel(item?.target || item?.destination);
+  const detail = [
+    item?.itemId ? `ID ${item.itemId}` : "",
+    source || target ? `${source || "-"} -> ${target || "-"}` : "",
+    item?.error || item?.reason || item?.bungieErrorStatus || item?.bungieErrorCode ? inventoryTransferErrorLabel(item) : "",
+  ].filter(Boolean).join(" · ");
+  return `
+    <article class="transfer-item ${tone}">
+      <div class="transfer-icon ${iconUrl ? "" : "empty"}">${iconUrl ? `<img src="${escapeHtml(iconUrl)}" />` : "?"}</div>
+      <div class="transfer-main">
+        <div class="transfer-title">
+          <strong>${escapeHtml(item?.name || "Unknown Item")}</strong>
+          <b>${escapeHtml(statusLabel)}</b>
+        </div>
+        <span>${escapeHtml([item?.itemTypeDisplayName, item?.bucketName, item?.owner].filter(Boolean).join(" · ") || "物品移动")}</span>
+        <small>${escapeHtml(detail || "-")}</small>
+      </div>
+    </article>
+  `;
+}
+
+function inventoryTransferScopeLine(transfer) {
+  const source = transferOwnerSummary(transfer?.source);
+  const destination = transferOwnerSummary(transfer?.destination);
+  const filters = transfer?.filters && typeof transfer.filters === "object" ? transfer.filters : {};
+  const filterText = [
+    filters.itemKind && filters.itemKind !== "all" ? (filters.itemKind === "armor" ? "防具" : "武器") : "全部物品",
+    filters.weaponType,
+    filters.armorSlot,
+    filters.bucket,
+    filters.q,
+    filters.includeEquipped ? "包含已装备" : "不含已装备",
+  ].filter(Boolean).join(" · ");
+  return `${source || "全部位置"} -> ${destination || "仓库"} · ${filterText}`;
+}
+
+function transferOwnerSummary(owner) {
+  if (!owner || typeof owner !== "object") return "";
+  const label = inventoryTransferOwnerLabel(owner.owner);
+  const detail = owner.className || owner.characterId || "";
+  return detail ? `${label}(${detail})` : label;
+}
+
+function inventoryTransferOwnerLabel(owner) {
+  const text = String(owner || "").trim();
+  if (text === "vault") return "仓库";
+  if (text === "inventory") return "角色背包";
+  if (text === "equipped") return "已装备";
+  if (text === "character") return "角色";
+  if (text === "all") return "全部位置";
+  return text || "位置";
+}
+
+function inventoryTransferLocationLabel(location) {
+  if (!location || typeof location !== "object") return "";
+  const owner = inventoryTransferOwnerLabel(location.owner);
+  const character = location.className || location.characterId || "";
+  return character ? `${owner} ${character}` : owner;
+}
+
+function inventoryTransferStatusLabel(status) {
+  if (status === "moved") return "已移动";
+  if (status === "planned") return "将移动";
+  if (status === "failed") return "失败";
+  if (status === "skipped") return "跳过";
+  return status || "-";
+}
+
+function inventoryTransferErrorLabel(item) {
+  return item?.error || item?.reason || item?.bungieErrorStatus || (item?.bungieErrorCode ? `Bungie ${item.bungieErrorCode}` : "");
+}
+
+function estimateInventoryTransferItemsHeight(transfer) {
+  const count = Math.min(120, Array.isArray(transfer?.items) ? transfer.items.length : 0);
+  return Math.max(760, Math.min(9800, 540 + count * 78));
 }
 
 function renderLoadoutOptimizerHtml(player, optimizer) {
@@ -5218,6 +5395,112 @@ function cardPage({ eyebrow, title, subtitle, body, player, width = CARD_WIDTH }
       font-weight: 900;
     }
     .inventory-item.green .inventory-item-main b { color: #21d07a; }
+    .transfer-summary {
+      display: grid;
+      gap: 8px;
+      margin-bottom: 18px;
+      padding: 16px 18px;
+      border-radius: 8px;
+      background: rgba(12, 12, 12, 0.72);
+      border: 1px solid rgba(255, 255, 255, 0.055);
+    }
+    .transfer-summary strong {
+      color: #ffffff;
+      font-size: 20px;
+      line-height: 1.25;
+      font-weight: 950;
+      overflow-wrap: anywhere;
+    }
+    .transfer-summary span {
+      color: #aab4bf;
+      font-size: 15px;
+      line-height: 1.35;
+      font-weight: 800;
+      overflow-wrap: anywhere;
+    }
+    .transfer-list {
+      display: grid;
+      gap: 10px;
+      padding: 18px;
+      border-radius: 8px;
+      background: rgba(17, 17, 17, 0.88);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .transfer-item {
+      display: grid;
+      grid-template-columns: 58px minmax(0, 1fr);
+      gap: 12px;
+      min-height: 72px;
+      padding: 10px 12px;
+      border-radius: 7px;
+      background: rgba(5, 5, 5, 0.48);
+      border-left: 5px solid #7f8a97;
+    }
+    .transfer-item.green { border-left-color: #21d07a; }
+    .transfer-item.red { border-left-color: #ff6b63; }
+    .transfer-item.muted { border-left-color: #7f8a97; }
+    .transfer-icon {
+      width: 54px;
+      height: 54px;
+      display: grid;
+      place-items: center;
+      border-radius: 5px;
+      overflow: hidden;
+      color: #7f8a97;
+      font-size: 22px;
+      font-weight: 950;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .transfer-icon img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .transfer-main {
+      min-width: 0;
+      display: grid;
+      gap: 4px;
+    }
+    .transfer-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    .transfer-title strong {
+      color: #ffffff;
+      font-size: 18px;
+      line-height: 1.18;
+      font-weight: 950;
+      overflow-wrap: anywhere;
+    }
+    .transfer-title b {
+      flex: 0 0 auto;
+      padding: 4px 8px;
+      border-radius: 4px;
+      color: #ffffff;
+      background: rgba(255, 255, 255, 0.10);
+      font-size: 13px;
+      line-height: 1;
+      font-weight: 950;
+    }
+    .transfer-item.green .transfer-title b { background: rgba(33, 208, 122, 0.76); }
+    .transfer-item.red .transfer-title b { background: rgba(255, 107, 99, 0.78); }
+    .transfer-main span,
+    .transfer-main small {
+      display: block;
+      color: #aab4bf;
+      font-size: 13px;
+      line-height: 1.25;
+      font-weight: 800;
+      overflow-wrap: anywhere;
+    }
+    .transfer-main small {
+      color: #d7e1ea;
+      font-size: 12px;
+    }
     .loadout-sections {
       display: grid;
       gap: 18px;
@@ -8089,13 +8372,14 @@ function normalizeOptimizerBuildId(value) {
 
 function normalizeItemAction(value) {
   const action = String(value || "").trim().toLowerCase();
+  if (/transfer_items|transfer-items|batch_transfer|batch-transfer|批量移动|批量转移|move|移动/u.test(action)) return "transfer_items";
   if (/转移|transfer/u.test(action)) return "transfer";
   if (/批量|equip_items|equip-items/u.test(action)) return "equip_items";
   if (/装备|equip/u.test(action)) return "equip";
   if (/解锁|unlock/u.test(action)) return "unlock";
   if (/锁定|lock/u.test(action)) return "lock";
   if (/套装|loadout/u.test(action)) return "equip_loadout";
-  throw new D2StatsInputError("装备操作 action 只支持 transfer、equip、equip_items、lock、unlock、equip_loadout。");
+  throw new D2StatsInputError("装备操作 action 只支持 transfer、transfer_items、equip、equip_items、lock、unlock、equip_loadout。");
 }
 
 function normalizeLoadoutManageOperation(value) {
@@ -8112,6 +8396,32 @@ function normalizeLoadoutManageOperation(value) {
 }
 
 function buildInventoryActionBody(action, params = {}) {
+  if (action === "transfer_items") {
+    const filters = params.filters && typeof params.filters === "object" ? params.filters : {};
+    const itemIds = Array.isArray(filters.itemIds)
+      ? filters.itemIds
+      : Array.isArray(params.itemIds)
+        ? params.itemIds
+        : String(filters.itemIds || params.itemIds || "")
+            .split(/[,，\s]+/u)
+            .filter(Boolean);
+    return {
+      mode: normalizeTransferItemsMode(params.mode),
+      source: normalizeTransferItemsSource(params.source),
+      destination: normalizeTransferItemsDestination(params.destination),
+      filters: {
+        itemIds: itemIds.map((id) => String(id).trim()).filter(Boolean).slice(0, 200),
+        itemKind: normalizeTransferItemsKind(filters.itemKind || params.itemKind),
+        ...(filters.weaponType || params.weaponType ? { weaponType: String(filters.weaponType || params.weaponType).trim() } : {}),
+        ...(filters.armorSlot || params.armorSlot ? { armorSlot: String(filters.armorSlot || params.armorSlot).trim() } : {}),
+        ...(filters.bucket || params.bucket ? { bucket: String(filters.bucket || params.bucket).trim() } : {}),
+        q: String(filters.q || params.q || params.query || "").trim(),
+        locked: filters.locked === undefined ? params.locked ?? null : filters.locked,
+        includeEquipped: Boolean(filters.includeEquipped ?? params.includeEquipped),
+      },
+      maxItems: clampInteger(params.maxItems || params.max, 100, 1, 100),
+    };
+  }
   if (action === "transfer") {
     return {
       itemReferenceHash: requiredActionNumber(params.itemReferenceHash, "itemReferenceHash"),
@@ -8152,6 +8462,48 @@ function buildInventoryActionBody(action, params = {}) {
     };
   }
   throw new D2StatsInputError("不支持的装备操作。");
+}
+
+function normalizeTransferItemsMode(value) {
+  const text = String(value || "execute").trim().toLowerCase();
+  return text === "preview" || text === "预览" ? "preview" : "execute";
+}
+
+function normalizeTransferItemsSource(value) {
+  const source = value && typeof value === "object" ? value : {};
+  const owner = normalizeTransferItemsOwner(source.owner, "all");
+  return {
+    owner,
+    ...(source.characterId ? { characterId: String(source.characterId).trim() } : {}),
+    ...(source.className ? { className: String(source.className).trim() } : {}),
+  };
+}
+
+function normalizeTransferItemsDestination(value) {
+  const destination = value && typeof value === "object" ? value : {};
+  const owner = String(destination.owner || "vault").trim().toLowerCase();
+  return {
+    owner: owner === "character" || owner === "角色" ? "character" : "vault",
+    ...(destination.characterId ? { characterId: String(destination.characterId).trim() } : {}),
+    ...(destination.className ? { className: String(destination.className).trim() } : {}),
+  };
+}
+
+function normalizeTransferItemsOwner(value, fallback = "all") {
+  const text = String(value || fallback).trim().toLowerCase();
+  if (["all", "vault", "inventory", "equipped", "character"].includes(text)) return text;
+  if (text === "仓库") return "vault";
+  if (text === "背包") return "inventory";
+  if (text === "已装备" || text === "身上") return "equipped";
+  if (text === "角色") return "character";
+  return fallback;
+}
+
+function normalizeTransferItemsKind(value) {
+  const text = String(value || "all").trim().toLowerCase();
+  if (/armor|防具|护甲/u.test(text)) return "armor";
+  if (/weapon|武器/u.test(text)) return "weapon";
+  return "all";
 }
 
 function buildLoadoutManageBody(operation, params = {}) {

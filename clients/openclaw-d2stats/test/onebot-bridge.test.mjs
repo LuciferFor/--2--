@@ -278,6 +278,39 @@ describe("onebot d2 direct bridge", () => {
     });
   });
 
+  it("routes bulk inventory write wording to item action instead of search", () => {
+    const invocation = bridge.buildD2DirectInvocation(event, "把我命运2的防具全部转移到仓库");
+
+    assert.equal(invocation.card, "item_action");
+    assert.equal(invocation.target, "1665240495");
+    assert.equal(invocation.params.action, "transfer_items");
+    assert.equal(invocation.params.mode, "execute");
+    assert.deepEqual(invocation.params.destination, { owner: "vault" });
+    assert.equal(invocation.params.filters.itemKind, "armor");
+    assert.equal(invocation.params.filters.includeEquipped, false);
+  });
+
+  it("parses batch move commands with character source and vault destination", () => {
+    const invocation = commands.parseCommandLine("--move --from warlock --to vault --kind weapon", { senderQq: "1665240495" });
+
+    assert.equal(invocation.command, "move");
+    assert.equal(invocation.card, "item_action");
+    assert.equal(invocation.params.action, "transfer_items");
+    assert.deepEqual(invocation.params.source, { owner: "character", className: "warlock" });
+    assert.deepEqual(invocation.params.destination, { owner: "vault" });
+    assert.equal(invocation.params.filters.itemKind, "weapon");
+  });
+
+  it("parses natural character backpack move requests", () => {
+    const invocation = bridge.buildD2DirectInvocation(event, "把术士背包武器放仓库");
+
+    assert.equal(invocation.card, "item_action");
+    assert.equal(invocation.params.action, "transfer_items");
+    assert.deepEqual(invocation.params.source, { owner: "character", className: "warlock" });
+    assert.deepEqual(invocation.params.destination, { owner: "vault" });
+    assert.equal(invocation.params.filters.itemKind, "weapon");
+  });
+
   it("routes stat target suit queries to the loadout optimizer", () => {
     const invocation = bridge.buildD2DirectInvocation(event, "查下我的术士有没有能凑100手雷 100职业 100生命值的套装");
 

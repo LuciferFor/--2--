@@ -6,6 +6,8 @@ import type { DestinyService } from "../destiny/destiny-service.js";
 import type {
   InventoryBucketFilter,
   InventoryActionResult,
+  InventoryTransferItemsRequest,
+  InventoryTransferItemsSummary,
   LoadoutOptimizerApplyResult,
   PlayerSearchResult,
   SavedLoadoutApplyResult
@@ -317,6 +319,15 @@ export async function registerD2Routes(app: FastifyInstance, deps: D2RouteDeps):
         itemId: parseNumericId(body.itemId, "itemId"),
         characterId: parseNumericId(body.characterId, "characterId")
       })
+    );
+  });
+
+  app.post("/api/d2/inventory/qq/:qq/transfer-items", async (request) => {
+    const qq = parseQq((request.params as Params).qq);
+    const { binding, accessToken } = await resolveQqOAuthContext(deps, qq, "Inventory batch transfer");
+    const body = parseInventoryTransferItemsRequest(request.body, qq);
+    return runInventoryAction(deps, request, qq, "inventory.transferItems", "batch", async () =>
+      deps.destinyService.transferInventoryItems(binding.membershipType, binding.membershipId, accessToken, body)
     );
   });
 
@@ -920,6 +931,77 @@ function parseInventoryBucket(value: unknown): InventoryBucketFilter {
   throw new BadRequestError("bucket must be one of all, vault, inventory, equipped");
 }
 
+function parseInventoryTransferItemsRequest(body: unknown, qq: string): InventoryTransferItemsRequest {
+  const record = requireRecordBody(body);
+  const source = isRecord(record.source) ? record.source : {};
+  const destination = isRecord(record.destination) ? record.destination : {};
+  const filters = isRecord(record.filters) ? record.filters : {};
+  return {
+    qq,
+    mode: parseTransferItemsMode(record.mode),
+    source: {
+      owner: parseTransferItemsSourceOwner(source.owner),
+      ...(source.characterId === undefined || source.characterId === ""
+        ? {}
+        : { characterId: parseNumericId(source.characterId, "source.characterId") }),
+      ...(source.className === undefined || source.className === "" ? {} : { className: parseOptionalQueryString(source.className) })
+    },
+    destination: {
+      owner: parseTransferItemsDestinationOwner(destination.owner),
+      ...(destination.characterId === undefined || destination.characterId === ""
+        ? {}
+        : { characterId: parseNumericId(destination.characterId, "destination.characterId") }),
+      ...(destination.className === undefined || destination.className === "" ? {} : { className: parseOptionalQueryString(destination.className) })
+    },
+    filters: {
+      itemIds:
+        filters.itemIds === undefined || filters.itemIds === null
+          ? []
+          : parseIdArray(filters.itemIds, "filters.itemIds", 0, 100),
+      itemKind: parseTransferItemsKind(filters.itemKind),
+      weaponType: parseOptionalQueryString(filters.weaponType),
+      armorSlot: parseOptionalQueryString(filters.armorSlot),
+      bucket: parseOptionalQueryString(filters.bucket),
+      q: typeof filters.q === "string" ? filters.q : "",
+      locked: filters.locked === undefined || filters.locked === null ? null : parseBoolean(filters.locked, "filters.locked"),
+      includeEquipped: parseOptionalBoolean(filters.includeEquipped, false)
+    },
+    maxItems: parseBoundedInteger(record.maxItems, "maxItems", 1, 100, 100)
+  };
+}
+
+function parseTransferItemsMode(value: unknown): "preview" | "execute" {
+  const mode = typeof value === "string" && value.trim() ? value.trim() : "execute";
+  if (mode === "preview" || mode === "execute") {
+    return mode;
+  }
+  throw new BadRequestError("mode must be preview or execute");
+}
+
+function parseTransferItemsSourceOwner(value: unknown): "all" | "vault" | "inventory" | "equipped" | "character" {
+  const owner = typeof value === "string" && value.trim() ? value.trim() : "all";
+  if (owner === "all" || owner === "vault" || owner === "inventory" || owner === "equipped" || owner === "character") {
+    return owner;
+  }
+  throw new BadRequestError("source.owner must be one of all, vault, inventory, equipped, character");
+}
+
+function parseTransferItemsDestinationOwner(value: unknown): "vault" | "character" {
+  const owner = typeof value === "string" && value.trim() ? value.trim() : "vault";
+  if (owner === "vault" || owner === "character") {
+    return owner;
+  }
+  throw new BadRequestError("destination.owner must be vault or character");
+}
+
+function parseTransferItemsKind(value: unknown): "all" | "weapon" | "armor" {
+  const kind = typeof value === "string" && value.trim() ? value.trim() : "all";
+  if (kind === "all" || kind === "weapon" || kind === "armor") {
+    return kind;
+  }
+  throw new BadRequestError("filters.itemKind must be all, weapon, or armor");
+}
+
 function parseBoolean(value: unknown, name: string): boolean {
   if (typeof value === "boolean") {
     return value;
@@ -1100,7 +1182,7 @@ async function runInventoryAction(
   qq: string,
   action: string,
   target: unknown,
-  execute: () => Promise<InventoryActionResult | LoadoutOptimizerApplyResult | SavedLoadoutApplyResult>
+  execute: () => Promise<InventoryActionResult | InventoryTransferItemsSummary | LoadoutOptimizerApplyResult | SavedLoadoutApplyResult>
 ) {
   const started = Date.now();
   try {
@@ -1109,14 +1191,18 @@ async function runInventoryAction(
       ok: true,
       resultAction: "action" in data ? data.action : "loadoutOptimizerApply",
       itemId: "itemId" in data ? data.itemId : undefined,
-      itemIds: "equippedItemIds" in data ? data.equippedItemIds : data.itemIds,
+      itemIds: "equippedItemIds" in data ? data.equippedItemIds : "itemIds" in data ? data.itemIds : undefined,
       itemHash: "itemHash" in data ? data.itemHash : undefined,
-      characterId: data.characterId,
+      characterId: "characterId" in data ? data.characterId : undefined,
       loadoutIndex: "loadoutIndex" in data ? data.loadoutIndex : undefined,
       sessionId: "sessionId" in data ? data.sessionId : undefined,
       buildId: "buildId" in data ? data.buildId : undefined,
       savedLoadoutId: "savedLoadoutId" in data ? data.savedLoadoutId : undefined,
-      savedLoadoutName: "savedLoadoutName" in data ? data.savedLoadoutName : undefined
+      savedLoadoutName: "savedLoadoutName" in data ? data.savedLoadoutName : undefined,
+      planned: "planned" in data ? data.planned : undefined,
+      moved: "moved" in data ? data.moved : undefined,
+      failed: "failed" in data ? data.failed : undefined,
+      skipped: "skipped" in data ? data.skipped : undefined
     });
     await deps.store.touchQqBinding(qq);
     await recordQuery(deps.store, request, false);

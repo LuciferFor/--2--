@@ -47,6 +47,9 @@ import type {
   InventoryArmorStatsSummary,
   InventoryActionResult,
   InventoryBucketFilter,
+  InventoryTransferItemsRequest,
+  InventoryTransferItemsSummary,
+  InventoryTransferItemResult,
   InventoryItemSummary,
   InventoryOwner,
   InventoryPlugSummary,
@@ -1374,6 +1377,130 @@ export class DestinyService {
       ...(criteria.perk ? { perk: criteria.perk } : {}),
       items,
       total: items.length,
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  async transferInventoryItems(
+    membershipType: number,
+    membershipId: string,
+    accessToken: string,
+    request: InventoryTransferItemsRequest
+  ): Promise<InventoryTransferItemsSummary> {
+    const inventory = await this.getPrivateInventory(membershipType, membershipId, accessToken, request.qq);
+    const transferRequest = resolveInventoryTransferCharacters(inventory, request);
+    const { plannedItems, skippedItems } = buildInventoryTransferPlan(inventory, transferRequest);
+    const results: InventoryTransferItemResult[] = [
+      ...skippedItems,
+      ...plannedItems.map((item) => toInventoryTransferItemResult(item, transferRequest, "planned"))
+    ];
+
+    if (transferRequest.mode === "execute") {
+      for (const item of plannedItems) {
+        const resultIndex = results.findIndex(
+          (entry) => entry.status === "planned" && entry.itemId === item.itemInstanceId
+        );
+        try {
+          const responses: unknown[] = [];
+          if (transferRequest.destination.owner === "vault") {
+            const transfer = await this.transferInventoryItem(membershipType, membershipId, accessToken, {
+              qq: transferRequest.qq,
+              itemReferenceHash: item.itemHash,
+              stackSize: Math.max(1, item.quantity || 1),
+              transferToVault: true,
+              itemId: requireInventoryItemInstanceId(item),
+              characterId: requireInventoryItemCharacterId(item)
+            });
+            responses.push(transfer.bungieResponse);
+          } else {
+            const destinationCharacterId = requireTransferDestinationCharacterId(transferRequest);
+            if (item.owner === "vault") {
+              const transfer = await this.transferInventoryItem(membershipType, membershipId, accessToken, {
+                qq: transferRequest.qq,
+                itemReferenceHash: item.itemHash,
+                stackSize: Math.max(1, item.quantity || 1),
+                transferToVault: false,
+                itemId: requireInventoryItemInstanceId(item),
+                characterId: destinationCharacterId
+              });
+              responses.push(transfer.bungieResponse);
+            } else {
+              const toVault = await this.transferInventoryItem(membershipType, membershipId, accessToken, {
+                qq: transferRequest.qq,
+                itemReferenceHash: item.itemHash,
+                stackSize: Math.max(1, item.quantity || 1),
+                transferToVault: true,
+                itemId: requireInventoryItemInstanceId(item),
+                characterId: requireInventoryItemCharacterId(item)
+              });
+              responses.push(toVault.bungieResponse);
+              const fromVault = await this.transferInventoryItem(membershipType, membershipId, accessToken, {
+                qq: transferRequest.qq,
+                itemReferenceHash: item.itemHash,
+                stackSize: Math.max(1, item.quantity || 1),
+                transferToVault: false,
+                itemId: requireInventoryItemInstanceId(item),
+                characterId: destinationCharacterId
+              });
+              responses.push(fromVault.bungieResponse);
+            }
+          }
+          const moved = toInventoryTransferItemResult(item, transferRequest, "moved");
+          moved.bungieResponse = responses.length === 1 ? responses[0] : responses;
+          if (resultIndex >= 0) {
+            results[resultIndex] = moved;
+          } else {
+            results.push(moved);
+          }
+        } catch (error) {
+          const failed = toInventoryTransferItemResult(item, transferRequest, "failed", friendlyTransferItemError(error));
+          failed.bungieErrorCode = (error as { bungieErrorCode?: unknown }).bungieErrorCode;
+          failed.bungieErrorStatus = (error as { bungieErrorStatus?: unknown }).bungieErrorStatus;
+          if (resultIndex >= 0) {
+            results[resultIndex] = failed;
+          } else {
+            results.push(failed);
+          }
+        }
+      }
+    }
+
+    const moved = results.filter((item) => item.status === "moved").length;
+    const failed = results.filter((item) => item.status === "failed").length;
+    const skipped = results.filter((item) => item.status === "skipped").length;
+    const planned = plannedItems.length;
+    const errors = results
+      .filter((item) => item.status === "failed" || item.status === "skipped")
+      .map((item) => ({
+        itemId: item.itemId,
+        name: item.name,
+        message: item.message,
+        code: item.bungieErrorCode,
+        status: item.bungieErrorStatus
+      }));
+    const message =
+      transferRequest.mode === "preview"
+        ? `将移动 ${planned} 件物品，跳过 ${skipped} 件。`
+        : `移动完成：成功 ${moved} 件，失败 ${failed} 件，跳过 ${skipped} 件。`;
+
+    return {
+      qq: transferRequest.qq,
+      membershipType,
+      membershipId,
+      action: "transferItems",
+      mode: transferRequest.mode,
+      ok: failed === 0,
+      planned,
+      moved,
+      failed,
+      skipped,
+      source: transferRequest.source,
+      destination: transferRequest.destination,
+      filters: transferRequest.filters,
+      maxItems: transferRequest.maxItems,
+      items: results,
+      errors,
+      message,
       updatedAt: new Date().toISOString()
     };
   }
@@ -5549,6 +5676,270 @@ function inventoryItemSearchText(item: InventoryItemSummary): string {
   return normalizeSearchText(
     `${item.name} ${item.itemTypeDisplayName ?? ""} ${item.bucketName ?? ""} ${inventoryItemPlugText(item)} ${rpm}`
   );
+}
+
+function resolveInventoryTransferCharacters(
+  inventory: InventorySummary,
+  request: InventoryTransferItemsRequest
+): InventoryTransferItemsRequest {
+  const sourceCharacterId =
+    request.source.characterId ||
+    (request.source.className ? inventoryCharacterIdByClassName(inventory, request.source.className) : undefined);
+  const destinationCharacterId =
+    request.destination.characterId ||
+    (request.destination.className ? inventoryCharacterIdByClassName(inventory, request.destination.className) : undefined);
+  if (request.source.owner === "character" && !sourceCharacterId) {
+    throw new BadRequestError("source.characterId or source.className is required when source.owner is character");
+  }
+  if (request.destination.owner === "character" && !destinationCharacterId) {
+    throw new BadRequestError("destination.characterId or destination.className is required when destination.owner is character");
+  }
+  return {
+    ...request,
+    source: { ...request.source, ...(sourceCharacterId ? { characterId: sourceCharacterId } : {}) },
+    destination: { ...request.destination, ...(destinationCharacterId ? { characterId: destinationCharacterId } : {}) }
+  };
+}
+
+function inventoryCharacterIdByClassName(inventory: InventorySummary, className: string): string | undefined {
+  const normalized = normalizeClassNameText(className);
+  if (!normalized) {
+    return undefined;
+  }
+  return inventory.characters.find((character) => normalizeClassNameText(character.className) === normalized)?.characterId;
+}
+
+function normalizeClassNameText(value: string): string {
+  const text = normalizeSearchText(value).toLowerCase();
+  if (/warlock|术士|術士|术/u.test(text)) return "warlock";
+  if (/hunter|猎人|獵人|猎/u.test(text)) return "hunter";
+  if (/titan|泰坦|坦/u.test(text)) return "titan";
+  return text;
+}
+
+function buildInventoryTransferPlan(
+  inventory: InventorySummary,
+  request: InventoryTransferItemsRequest
+): { plannedItems: InventoryItemSummary[]; skippedItems: InventoryTransferItemResult[] } {
+  const skippedItems: InventoryTransferItemResult[] = [];
+  const destinationCharacter =
+    request.destination.owner === "character"
+      ? inventory.characters.find((character) => character.characterId === request.destination.characterId)
+      : undefined;
+  const candidates = inventory.items.filter((item) => {
+    const skipReason = inventoryTransferSkipReason(item, request, destinationCharacter);
+    if (skipReason) {
+      if (inventoryTransferSourceCouldMatch(item, request) && inventoryTransferFiltersCouldMatch(item, request)) {
+        skippedItems.push(toInventoryTransferItemResult(item, request, "skipped", skipReason));
+      }
+      return false;
+    }
+    return inventoryTransferSourceCouldMatch(item, request) && inventoryTransferFiltersCouldMatch(item, request);
+  });
+  const plannedItems = candidates.slice(0, request.maxItems);
+  for (const item of candidates.slice(request.maxItems)) {
+    skippedItems.push(toInventoryTransferItemResult(item, request, "skipped", `超过本次 maxItems=${request.maxItems} 上限`));
+  }
+  return { plannedItems, skippedItems };
+}
+
+function inventoryTransferSkipReason(
+  item: InventoryItemSummary,
+  request: InventoryTransferItemsRequest,
+  destinationCharacter: CharacterSummary | undefined
+): string | undefined {
+  if (!item.itemInstanceId) {
+    return "物品没有 itemInstanceId，无法移动";
+  }
+  if (item.itemHash === undefined) {
+    return "物品没有 itemHash，无法移动";
+  }
+  if (item.owner === "equipped" && !request.filters.includeEquipped) {
+    return "已装备物品默认不移动";
+  }
+  if (item.owner !== "vault" && !item.characterId) {
+    return "物品没有来源角色，无法移动";
+  }
+  if (item.transferStatus !== undefined && item.transferStatus !== 0) {
+    return "Bungie 标记该物品不可转移";
+  }
+  if (request.destination.owner === "vault" && item.owner === "vault") {
+    return "物品已经在仓库";
+  }
+  if (request.destination.owner === "character") {
+    if (!request.destination.characterId) {
+      return "目标角色缺失";
+    }
+    if (item.owner !== "vault" && item.characterId === request.destination.characterId) {
+      return "物品已经在目标角色";
+    }
+    if (
+      destinationCharacter &&
+      item.classType !== undefined &&
+      item.classType !== 3 &&
+      item.classType !== destinationCharacter.classType &&
+      inventoryTransferItemKind(item) === "armor"
+    ) {
+      return "防具职业与目标角色不匹配";
+    }
+  }
+  return undefined;
+}
+
+function inventoryTransferSourceCouldMatch(item: InventoryItemSummary, request: InventoryTransferItemsRequest): boolean {
+  const source = request.source;
+  if (source.owner === "all") {
+    return true;
+  }
+  if (source.owner === "character") {
+    if (!source.characterId) {
+      return false;
+    }
+    return item.owner !== "vault" && item.characterId === source.characterId;
+  }
+  if (source.owner !== item.owner) {
+    return false;
+  }
+  if (source.characterId && item.characterId !== source.characterId) {
+    return false;
+  }
+  return true;
+}
+
+function inventoryTransferFiltersCouldMatch(item: InventoryItemSummary, request: InventoryTransferItemsRequest): boolean {
+  const filters = request.filters;
+  if (filters.itemIds.length > 0 && (!item.itemInstanceId || !filters.itemIds.includes(item.itemInstanceId))) {
+    return false;
+  }
+  if (filters.itemKind !== "all" && inventoryTransferItemKind(item) !== filters.itemKind) {
+    return false;
+  }
+  if (filters.weaponType && !inventoryItemMatchesText([filters.weaponType], inventoryItemTypeText(item))) {
+    return false;
+  }
+  if (filters.armorSlot && !inventoryTransferArmorSlotMatches(item, filters.armorSlot)) {
+    return false;
+  }
+  if (filters.bucket && !inventoryItemMatchesText([filters.bucket], `${item.bucketName ?? ""}`)) {
+    return false;
+  }
+  if (filters.locked !== null && filters.locked !== undefined && item.locked !== filters.locked) {
+    return false;
+  }
+  const queries = inventorySearchCandidates(filters.q || "");
+  if (queries.length > 0) {
+    const itemText = inventoryItemSearchText(item);
+    if (!queries.some((query) => itemText.includes(query))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function inventoryTransferItemKind(item: InventoryItemSummary): "weapon" | "armor" | "other" {
+  const bucketHash = Number(item.bucketHash);
+  if (KINETIC_BUCKET_HASHES.has(bucketHash) || ENERGY_BUCKET_HASHES.has(bucketHash) || POWER_BUCKET_HASHES.has(bucketHash)) {
+    return "weapon";
+  }
+  if (ARMOR_BUCKETS[bucketHash]) {
+    return "armor";
+  }
+  const text = normalizeSearchText(`${item.itemTypeDisplayName ?? ""} ${item.bucketName ?? ""}`);
+  if (/武器|weapon|步枪|手炮|冲锋枪|机枪|手枪|弓|剑|榴弹|火箭|狙击|融合|霰弹/u.test(text)) {
+    return "weapon";
+  }
+  if (/防具|护甲|头盔|臂铠|胸甲|腿甲|职业物品|armor|helmet|gauntlet|chest|leg|class item/u.test(text)) {
+    return "armor";
+  }
+  return "other";
+}
+
+function inventoryTransferArmorSlotMatches(item: InventoryItemSummary, armorSlot: string): boolean {
+  const normalized = normalizeInventoryArmorSlot(armorSlot);
+  if (!normalized) {
+    return false;
+  }
+  const bucket = item.bucketHash !== undefined ? ARMOR_BUCKETS[item.bucketHash] : undefined;
+  if (bucket?.slot === normalized) {
+    return true;
+  }
+  return inventoryItemMatchesText([armorSlot, bucket?.label ?? ""].filter(Boolean), `${item.bucketName ?? ""} ${item.itemTypeDisplayName ?? ""}`);
+}
+
+function normalizeInventoryArmorSlot(value: string): string | undefined {
+  const text = normalizeSearchText(value);
+  if (!text) {
+    return undefined;
+  }
+  if (/头|头盔|helmet/u.test(text)) return "helmet";
+  if (/手|臂|臂铠|手套|gauntlet|arm/u.test(text)) return "gauntlets";
+  if (/胸|胸甲|chest/u.test(text)) return "chest";
+  if (/腿|腿甲|leg|legs/u.test(text)) return "legs";
+  if (/职业|职业物品|class/u.test(text)) return "class_item";
+  return undefined;
+}
+
+function toInventoryTransferItemResult(
+  item: InventoryItemSummary,
+  request: InventoryTransferItemsRequest,
+  status: "planned" | "moved" | "failed" | "skipped",
+  message?: string
+): InventoryTransferItemResult {
+  const destinationCharacterId = request.destination.owner === "character" ? request.destination.characterId : undefined;
+  return {
+    itemId: item.itemInstanceId,
+    itemHash: item.itemHash,
+    name: item.name,
+    itemTypeDisplayName: item.itemTypeDisplayName,
+    bucketName: item.bucketName,
+    sourceOwner: item.owner,
+    sourceCharacterId: item.characterId,
+    destinationOwner: request.destination.owner,
+    destinationCharacterId,
+    ok: status === "moved" || status === "planned",
+    status,
+    message:
+      message ||
+      (status === "planned"
+        ? "等待移动"
+        : status === "moved"
+          ? "已移动"
+          : status === "skipped"
+            ? "已跳过"
+            : "移动失败")
+  };
+}
+
+function requireInventoryItemInstanceId(item: InventoryItemSummary): string {
+  if (!item.itemInstanceId) {
+    throw new BadRequestError("itemInstanceId is required for transfer");
+  }
+  return item.itemInstanceId;
+}
+
+function requireInventoryItemCharacterId(item: InventoryItemSummary): string {
+  if (!item.characterId) {
+    throw new BadRequestError("source characterId is required for transfer");
+  }
+  return item.characterId;
+}
+
+function requireTransferDestinationCharacterId(request: InventoryTransferItemsRequest): string {
+  if (request.destination.owner !== "character" || !request.destination.characterId) {
+    throw new BadRequestError("destination.characterId is required");
+  }
+  return request.destination.characterId;
+}
+
+function friendlyTransferItemError(error: unknown): string {
+  const status = String((error as { bungieErrorStatus?: unknown }).bungieErrorStatus ?? "");
+  if (/CannotPerformAction|NotInOrbit|Character/i.test(status)) {
+    return "Bungie 拒绝移动；通常需要角色在轨道、社交空间或离线";
+  }
+  if (/Transfer|Bucket|Full|Item/i.test(status)) {
+    return "物品当前不可转移或目标背包已满";
+  }
+  return (error as { message?: string })?.message || "移动失败";
 }
 
 function escapeRegExp(value: string): string {

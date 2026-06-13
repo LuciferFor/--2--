@@ -20,6 +20,7 @@ const COMMANDS = [
   { name: "equipped", flags: ["--equipped"], aliases: ["/装备", "当前装备", "身上装备", "现有装备"], card: "inventory", output: "image", description: "OAuth 当前装备图。" },
   { name: "inventory", flags: ["--inventory"], aliases: ["/背包", "背包", "库存"], card: "inventory", output: "image", description: "OAuth 背包/库存图。" },
   { name: "search", flags: ["--search"], aliases: ["/仓库搜索", "仓库搜索", "搜索"], card: "inventory", output: "image", description: "OAuth 物品搜索，支持 weaponType/rpm/perk 等结构化条件。" },
+  { name: "move", flags: ["--move"], aliases: ["/移动", "/转移", "移动物品", "转移物品"], card: "item_action", output: "text", description: "OAuth 批量移动物品，支持 --to vault、--kind armor、--weapon-type 手炮。" },
   { name: "bind", flags: ["--bind", "--login"], aliases: ["/d2bind", "/d2绑定", "/绑定命运2", "d2bind", "d2绑定", "绑定命运2", "命运2绑定", "登录命运2", "命运2登录", "棒鸡绑定", "绑定棒鸡"], card: "bind", output: "bind_link", description: "生成 QQ -> Bungie OAuth 绑定链接。" },
   { name: "catalysts", flags: ["--catalysts"], aliases: ["/催化", "我的催化", "催化进度"], card: "catalysts", output: "image", description: "OAuth 全量催化进度。" },
   { name: "catalyst", flags: ["--catalyst"], aliases: ["单武器催化"], card: "catalyst_status", output: "image", description: "OAuth 单把金枪催化状态 + 效果。" },
@@ -68,6 +69,7 @@ const D2_WORDS = [
   "loadout", "build", "宗师", "日落", "夜幕", "gm", "热力图", "活跃", "锻造", "图纸", "催化", "仓库", "库存", "背包",
   "装备", "equipped", "武器", "名片", "生涯", "pvp", "熔炉", "试炼", "最近", "活动", "单局", "pgcr", "绑定", "登录", "授权", "bind", "login",
   "perk", "perks", "特性", "词条", "能出", "可出", "来源", "出处", "怎么获取", "哪里出", "怎么得", "如何获得", "是什么武器",
+  "转移", "移到", "移动", "锁定", "解锁", "换上",
 ];
 
 const INVENTORY_SEARCH_WORDS = WEAPON_TYPE_ALIASES.flatMap((entry) => entry.terms);
@@ -129,6 +131,9 @@ function commandHelpText() {
     "  d2stats --inventory",
     "  d2stats --search 冲锋枪 --bucket vault",
     "  d2stats --search --weapon-type 手炮 --rpm 120 --bucket vault",
+    "  d2stats --move --to vault --kind armor",
+    "  d2stats --move --from warlock --to vault --kind weapon",
+    "  d2stats --move --from vault --to hunter --weapon-type 手炮",
     "",
     "催化 / 锻造 / 配装：",
     "  d2stats --item 极高反射",
@@ -303,6 +308,9 @@ function buildInvocationForCommand(command, parsed) {
       },
     };
   }
+  if (card === "item_action") {
+    return { command: command.name, card, target, params: moveParamsFromCommand(commandLine, positional, flags, target) };
+  }
   if (card === "catalyst_status") {
     const q = cleanCatalystQuery(positional.join(" ") || flags.get("q") || flags.get("weapon") || commandLine);
     return { command: command.name, card, target, params: { target, card, q } };
@@ -391,6 +399,10 @@ function buildCommandInvocationFromText(event = {}, text = "") {
   if (!value) return null;
   if (isFlagLike(value)) {
     return parseCommandLine(value, { senderQq: event.user_id || event.senderQq || event.qq });
+  }
+  if (hasItemActionIntent(value)) {
+    const target = extractTarget(value, event, "item_action");
+    return target ? { command: "item_action", card: "item_action", target, params: itemActionParamsFromText(value, target) } : null;
   }
   const directPerkWeapons = directKnownPerkWeaponsInvocation(value);
   if (directPerkWeapons) return directPerkWeapons;
@@ -508,6 +520,7 @@ function inferCard(text) {
   ) return null;
   if (hasAny(value, ["帮助", "菜单", "help", "指令", "命令"])) return "help";
   if (hasAny(value, ["d2bind", "d2绑定", "绑定命运2", "命运2绑定", "登录命运2", "命运2登录", "棒鸡绑定", "绑定棒鸡", "bungie绑定", "绑定bungie", "oauth绑定", "授权绑定"])) return "bind";
+  if (hasItemActionIntent(value)) return "item_action";
   if (looksLikeKnownPerkWeaponQuery(value)) return "perk_weapons";
   if (hasLoadoutManageIntent(value)) return "loadout_manage";
   if (hasLoadoutIntent(value)) return "loadout_optimizer";
@@ -532,6 +545,154 @@ function inferCard(text) {
   if (hasAny(value, ["资料", "角色", "profile"])) return "profile";
   if (hasAny(value, ["战绩", "总览", "命运2", "destiny 2", "destiny2", "d2"])) return "summary";
   return null;
+}
+
+function hasItemActionIntent(text) {
+  const value = normalizeText(text);
+  if (!value) return false;
+  if (hasLoadoutManageIntent(value)) return false;
+  const hasExplicitId = /\b[0-9]{8,30}\b/u.test(value) || hasAny(value, ["itemId", "itemInstanceId"]);
+  const hasWriteVerb =
+    hasAny(value, ["转移", "移到", "移动", "转到", "放到", "放进", "放仓库", "存到", "存仓库", "锁定", "解锁"]) ||
+    (hasAny(value, ["换上", "装备"]) && hasExplicitId);
+  if (!hasWriteVerb) return false;
+  return hasAny(value, ["仓库", "背包", "角色", "防具", "护甲", "武器", "装备", "itemId", "itemInstanceId", "characterId"]);
+}
+
+function itemActionParamsFromText(text, target) {
+  const value = normalizeText(text);
+  const action = hasAny(value, ["锁定"]) ? "lock"
+      : hasAny(value, ["解锁"]) ? "unlock"
+      : hasAny(value, ["换上", "装备"]) && !hasAny(value, ["转移", "移到", "转到", "放到", "放进", "放仓库", "存到", "存仓库"]) ? "equip"
+        : "transfer_items";
+  const transferToVault = hasAny(value, ["仓库", "vault"]);
+  const ids = [...value.matchAll(/\b([0-9]{8,30})\b/gu)].map((match) => match[1]);
+  const batch = action === "transfer_items";
+  return {
+    target,
+    action,
+    ...(batch
+      ? transferItemsParamsFromText(value, target, ids)
+      : {
+          ...(transferToVault ? { transferToVault: true } : {}),
+          ...(ids[0] ? { itemId: ids[0] } : {}),
+          ...(ids[1] ? { characterId: ids[1] } : {}),
+        }),
+  };
+}
+
+function moveParamsFromCommand(commandLine, positional, flags, target) {
+  const itemIds = String(flags.get("item-ids") || flags.get("itemIds") || "")
+    .split(/[,，\s]+/u)
+    .filter(Boolean);
+  return {
+    target,
+    action: "transfer_items",
+    mode: String(flags.get("mode") || "execute"),
+    source: transferSourceFromText(String(flags.get("from") || ""), commandLine),
+    destination: transferDestinationFromText(String(flags.get("to") || ""), commandLine),
+    filters: {
+      itemIds,
+      itemKind: transferItemKind(flags.get("kind") || flags.get("item-kind") || flags.get("itemKind") || commandLine),
+      ...(flags.get("weapon-type") || flags.get("weaponType") || weaponTypeFromText(commandLine)
+        ? { weaponType: normalizeWeaponType(flags.get("weapon-type") || flags.get("weaponType") || weaponTypeFromText(commandLine)) }
+        : {}),
+      ...(flags.get("armor-slot") || flags.get("armorSlot") || armorSlotFromText(commandLine)
+        ? { armorSlot: String(flags.get("armor-slot") || flags.get("armorSlot") || armorSlotFromText(commandLine)) }
+        : {}),
+      ...(flags.get("bucket") ? { bucket: String(flags.get("bucket")) } : {}),
+      q: flags.get("q") || positional.filter((item) => !isTargetLike(item)).join(" "),
+      locked: flags.get("locked") === undefined ? null : /true|1|yes|on|锁/u.test(String(flags.get("locked"))),
+      includeEquipped: hasAny(commandLine, ["包含已装备", "包含身上", "身上也", "已装备也", "穿着也"]),
+    },
+    maxItems: integerValue(flags.get("max") || flags.get("maxItems"), 100),
+  };
+}
+
+function transferItemsParamsFromText(value, target, ids = []) {
+  return {
+    target,
+    mode: "execute",
+    source: transferSourceFromText("", value),
+    destination: transferDestinationFromText("", value),
+    filters: {
+      itemIds: ids,
+      itemKind: transferItemKind(value),
+      ...(weaponTypeFromText(value) ? { weaponType: normalizeWeaponType(weaponTypeFromText(value)) } : {}),
+      ...(armorSlotFromText(value) ? { armorSlot: armorSlotFromText(value) } : {}),
+      q: transferResidualQuery(value),
+      locked: null,
+      includeEquipped: hasAny(value, ["包含已装备", "包含身上", "身上也", "已装备也", "穿着也"]),
+    },
+    maxItems: 100,
+  };
+}
+
+function transferSourceFromText(flagValue, fullText) {
+  const flag = normalizeText(flagValue);
+  const text = normalizeText(fullText);
+  const sourceText = flag || text;
+  if (hasAny(sourceText, ["vault", "仓库"])) {
+    if (flag || hasAny(text, ["从仓库", "仓库里", "仓库里的"])) return { owner: "vault" };
+  }
+  if (hasAny(sourceText, ["equipped", "已装备", "身上", "穿着"])) return { owner: "equipped" };
+  if (hasAny(sourceText, ["inventory", "背包"])) {
+    const className = classNameFromText(sourceText);
+    return className ? { owner: "character", className } : { owner: "inventory" };
+  }
+  const className = classNameFromText(flag || sourceClassPhrase(text));
+  if (className) return { owner: "character", className };
+  return { owner: "all" };
+}
+
+function transferDestinationFromText(flagValue, fullText) {
+  const flag = normalizeText(flagValue);
+  const text = normalizeText(fullText);
+  const destinationText = flag || text;
+  if (!flag && hasAny(text, ["仓库", "vault"])) return { owner: "vault" };
+  if (hasAny(destinationText, ["vault", "仓库"])) return { owner: "vault" };
+  const className = classNameFromText(flag || destinationClassPhrase(text));
+  if (className) return { owner: "character", className };
+  return { owner: "vault" };
+}
+
+function sourceClassPhrase(text) {
+  const match = /(术士|猎人|泰坦|warlock|hunter|titan)\s*(?:背包|身上|已装备|装备|的)/iu.exec(text);
+  return match?.[1] || "";
+}
+
+function destinationClassPhrase(text) {
+  const match = /(?:给|到|移到|转到|放到|放进)\s*(术士|猎人|泰坦|warlock|hunter|titan)/iu.exec(text);
+  return match?.[1] || "";
+}
+
+function transferItemKind(value) {
+  const text = normalizeText(value);
+  if (hasAny(text, ["防具", "护甲", "armor"])) return "armor";
+  if (hasAny(text, ["武器", "weapon"])) return "weapon";
+  return "all";
+}
+
+function armorSlotFromText(value) {
+  const text = normalizeText(value);
+  if (/头|头盔|helmet/u.test(text)) return "头盔";
+  if (/手|臂|臂铠|手套|gauntlet/u.test(text)) return "臂铠";
+  if (/胸|胸甲|chest/u.test(text)) return "胸甲";
+  if (/腿|腿甲|leg/u.test(text)) return "腿甲";
+  if (/职业物品|职业|class item/u.test(text)) return "职业物品";
+  return "";
+}
+
+function transferResidualQuery(value) {
+  const weaponType = weaponTypeFromText(value);
+  const armorSlot = armorSlotFromText(value);
+  return normalizeText(value)
+    .replace(/命运2|destiny\s*2|d2|把|将|请|帮我|我的|我|全部|所有|全都|一键|转移|移动|移到|转到|放到|放进|存到|仓库|vault|背包|inventory|身上|已装备|装备|防具|护甲|武器|包含已装备|包含身上|也/giu, " ")
+    .replace(weaponType || "", " ")
+    .replace(armorSlot || "", " ")
+    .replace(/术士|猎人|泰坦|warlock|hunter|titan/giu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
 }
 
 function looksLikeKnownPerkWeaponQuery(value) {

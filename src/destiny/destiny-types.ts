@@ -203,6 +203,76 @@ export interface InventorySearchSummary {
   updatedAt: string;
 }
 
+export type InventoryTransferItemsMode = "preview" | "execute";
+export type InventoryTransferItemsOwner = "all" | "vault" | "inventory" | "equipped" | "character";
+export type InventoryTransferItemsDestinationOwner = "vault" | "character";
+export type InventoryTransferItemsKind = "all" | "weapon" | "armor";
+
+export interface InventoryTransferItemsRequest {
+  qq?: string;
+  mode: InventoryTransferItemsMode;
+  source: {
+    owner: InventoryTransferItemsOwner;
+    characterId?: string;
+    className?: string;
+  };
+  destination: {
+    owner: InventoryTransferItemsDestinationOwner;
+    characterId?: string;
+    className?: string;
+  };
+  filters: {
+    itemIds: string[];
+    itemKind: InventoryTransferItemsKind;
+    weaponType?: string;
+    armorSlot?: string;
+    bucket?: string;
+    q?: string;
+    locked?: boolean | null;
+    includeEquipped: boolean;
+  };
+  maxItems: number;
+}
+
+export interface InventoryTransferItemResult {
+  itemId?: string;
+  itemHash?: number;
+  name: string;
+  itemTypeDisplayName?: string;
+  bucketName?: string;
+  sourceOwner: InventoryOwner;
+  sourceCharacterId?: string;
+  destinationOwner: InventoryTransferItemsDestinationOwner;
+  destinationCharacterId?: string;
+  ok: boolean;
+  status: "planned" | "moved" | "failed" | "skipped";
+  message: string;
+  bungieErrorCode?: unknown;
+  bungieErrorStatus?: unknown;
+  bungieResponse?: unknown;
+}
+
+export interface InventoryTransferItemsSummary {
+  qq?: string;
+  membershipType: number;
+  membershipId: string;
+  action: "transferItems";
+  mode: InventoryTransferItemsMode;
+  ok: boolean;
+  planned: number;
+  moved: number;
+  failed: number;
+  skipped: number;
+  source: InventoryTransferItemsRequest["source"];
+  destination: InventoryTransferItemsRequest["destination"];
+  filters: InventoryTransferItemsRequest["filters"];
+  maxItems: number;
+  items: InventoryTransferItemResult[];
+  errors: { itemId?: string; name?: string; message: string; code?: unknown; status?: unknown }[];
+  message: string;
+  updatedAt: string;
+}
+
 export interface InventoryActionResult {
   qq?: string;
   membershipType: number;

@@ -290,7 +290,7 @@ const itemActionParameters = {
     ...senderQqProperties,
     action: {
       type: "string",
-      enum: ["transfer", "equip", "equip_items", "lock", "unlock", "equip_loadout"],
+      enum: ["transfer", "transfer_items", "equip", "equip_items", "lock", "unlock", "equip_loadout"],
       description: "Operation to perform.",
     },
     command: {
@@ -317,6 +317,67 @@ const itemActionParameters = {
     transferToVault: {
       type: "boolean",
       description: "For transfer: true moves to vault, false moves from vault to character.",
+    },
+    mode: {
+      type: "string",
+      enum: ["preview", "execute"],
+      description: "For transfer_items: preview only lists items, execute performs Bungie TransferItem calls.",
+    },
+    source: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        owner: { type: "string", enum: ["all", "vault", "inventory", "equipped", "character"] },
+        characterId: { type: "string" },
+        className: { type: "string", enum: ["warlock", "hunter", "titan"] },
+      },
+      description: "For transfer_items: source scope.",
+    },
+    destination: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        owner: { type: "string", enum: ["vault", "character"] },
+        characterId: { type: "string" },
+        className: { type: "string", enum: ["warlock", "hunter", "titan"] },
+      },
+      description: "For transfer_items: destination scope.",
+    },
+    filters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        itemIds: { type: "array", items: { type: "string" } },
+        itemKind: { type: "string", enum: ["all", "weapon", "armor"] },
+        weaponType: { type: "string" },
+        armorSlot: { type: "string" },
+        bucket: { type: "string" },
+        q: { type: "string" },
+        locked: { anyOf: [{ type: "boolean" }, { type: "null" }] },
+        includeEquipped: { type: "boolean" },
+      },
+      description: "For transfer_items: structured filters. Do not put the whole user sentence into q.",
+    },
+    itemKind: {
+      type: "string",
+      enum: ["all", "weapon", "armor"],
+      description: "Shortcut for transfer_items filters.itemKind.",
+    },
+    weaponType: {
+      type: "string",
+      description: "Shortcut for transfer_items filters.weaponType.",
+    },
+    armorSlot: {
+      type: "string",
+      description: "Shortcut for transfer_items filters.armorSlot.",
+    },
+    q: {
+      type: "string",
+      description: "Shortcut for transfer_items leftover search text.",
+    },
+    maxItems: {
+      type: "number",
+      description: "For transfer_items: maximum number of matched items to move, default 100.",
     },
     characterId: {
       type: "string",
@@ -577,7 +638,7 @@ export function registerD2StatsRuntime(api, options = {}) {
     {
       name: "destiny2_item_action",
       description:
-        "Safely operate the bound QQ owner's Destiny 2 equipment: transfer, equip, bulk equip, lock/unlock, or equip in-game loadout. Never use for arbitrary membership IDs. First call without confirm=true to ask for confirmation; only execute after explicit user confirmation.",
+        "Safely operate the bound QQ owner's Destiny 2 equipment: transfer_items can batch move items between vault and characters and executes directly; transfer/equip/bulk equip/lock/unlock/loadout still require explicit confirmation. Never use for arbitrary membership IDs.",
       parameters: itemActionParameters,
       async execute(_toolCallId, params, signal) {
         const config = getConfig();

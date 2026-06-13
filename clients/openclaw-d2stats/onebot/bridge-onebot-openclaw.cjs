@@ -1247,6 +1247,7 @@ function inferD2DirectCard(text) {
       !personalItemInfoIntent)
   ) return null;
   if (hasAnyD2Word(value, ["\u5e2e\u52a9", "\u83dc\u5355", "help", "\u6307\u4ee4", "\u547d\u4ee4"])) return "help";
+  if (hasD2ItemActionIntent(value)) return "item_action";
   if (hasD2LoadoutManageIntent(value)) return "loadout_manage";
   if (hasD2LoadoutIntent(value)) return "loadout_optimizer";
   if (personalItemInfoIntent) return "inventory";
@@ -1279,6 +1280,129 @@ function hasD2ItemInfoIntent(text) {
     return false;
   }
   return hasAnyD2Word(value, ["\u67e5\u4e2a\u6b66\u5668", "\u6b66\u5668\u67e5\u8be2", "\u67e5\u6b66\u5668", "\u6b66\u5668\u8d44\u6599", "\u7269\u54c1\u67e5\u8be2", "perk", "perks", "\u6765\u6e90", "\u51fa\u5904", "\u600e\u4e48\u83b7\u53d6", "\u54ea\u91cc\u51fa", "\u600e\u4e48\u5f97", "\u5982\u4f55\u83b7\u5f97", "\u662f\u4ec0\u4e48\u6b66\u5668", "\u662f\u4ec0\u4e48", "\u597d\u4e0d\u597d\u7528", "\u597d\u7528\u5417"]);
+}
+
+function hasD2ItemActionIntent(text) {
+  const value = normalizeD2Text(text);
+  if (!value) return false;
+  if (hasD2LoadoutManageIntent(value)) return false;
+  const hasExplicitId = /\b[0-9]{8,30}\b/u.test(value) || hasAnyD2Word(value, ["itemId", "itemInstanceId"]);
+  const hasWriteVerb =
+    hasAnyD2Word(value, ["\u8f6c\u79fb", "\u79fb\u5230", "\u79fb\u52a8", "\u8f6c\u5230", "\u653e\u5230", "\u653e\u8fdb", "\u653e\u4ed3\u5e93", "\u5b58\u5230", "\u5b58\u4ed3\u5e93", "\u9501\u5b9a", "\u89e3\u9501"]) ||
+    (hasAnyD2Word(value, ["\u6362\u4e0a", "\u88c5\u5907"]) && hasExplicitId);
+  if (!hasWriteVerb) return false;
+  return hasAnyD2Word(value, ["\u4ed3\u5e93", "\u80cc\u5305", "\u89d2\u8272", "\u9632\u5177", "\u62a4\u7532", "\u6b66\u5668", "\u88c5\u5907", "itemId", "itemInstanceId", "characterId"]);
+}
+
+function d2ItemActionParams(text, target) {
+  const value = normalizeD2Text(text);
+  const action = hasAnyD2Word(value, ["\u9501\u5b9a"]) ? "lock"
+      : hasAnyD2Word(value, ["\u89e3\u9501"]) ? "unlock"
+      : hasAnyD2Word(value, ["\u6362\u4e0a", "\u88c5\u5907"]) && !hasAnyD2Word(value, ["\u8f6c\u79fb", "\u79fb\u5230", "\u8f6c\u5230", "\u653e\u5230", "\u653e\u8fdb", "\u653e\u4ed3\u5e93", "\u5b58\u5230", "\u5b58\u4ed3\u5e93"]) ? "equip"
+        : "transfer_items";
+  const transferToVault = hasAnyD2Word(value, ["\u4ed3\u5e93", "vault"]);
+  const ids = [...value.matchAll(/\b([0-9]{8,30})\b/gu)].map((match) => match[1]);
+  if (action === "transfer_items") {
+    return {
+      target,
+      action,
+      mode: "execute",
+      source: d2TransferSourceFromText("", value),
+      destination: d2TransferDestinationFromText("", value),
+      filters: {
+        itemIds: ids,
+        itemKind: d2TransferItemKind(value),
+        ...(d2InventoryWeaponTypeFromText(value) ? { weaponType: d2InventoryWeaponTypeFromText(value) } : {}),
+        ...(d2TransferArmorSlotFromText(value) ? { armorSlot: d2TransferArmorSlotFromText(value) } : {}),
+        q: d2TransferResidualQuery(value),
+        locked: null,
+        includeEquipped: hasAnyD2Word(value, ["\u5305\u542b\u5df2\u88c5\u5907", "\u5305\u542b\u8eab\u4e0a", "\u8eab\u4e0a\u4e5f", "\u5df2\u88c5\u5907\u4e5f", "\u7a7f\u7740\u4e5f"]),
+      },
+      maxItems: 100,
+    };
+  }
+  return {
+    target,
+    action,
+    ...(transferToVault ? { transferToVault: true } : {}),
+    ...(ids[0] ? { itemId: ids[0] } : {}),
+    ...(ids[1] ? { characterId: ids[1] } : {}),
+  };
+}
+
+function d2TransferSourceFromText(flagValue, fullText) {
+  const flag = normalizeD2Text(flagValue);
+  const text = normalizeD2Text(fullText);
+  const sourceText = flag || text;
+  if (hasAnyD2Word(sourceText, ["vault", "\u4ed3\u5e93"])) {
+    if (flag || hasAnyD2Word(text, ["\u4ece\u4ed3\u5e93", "\u4ed3\u5e93\u91cc", "\u4ed3\u5e93\u91cc\u7684"])) return { owner: "vault" };
+  }
+  if (hasAnyD2Word(sourceText, ["equipped", "\u5df2\u88c5\u5907", "\u8eab\u4e0a", "\u7a7f\u7740"])) return { owner: "equipped" };
+  if (hasAnyD2Word(sourceText, ["inventory", "\u80cc\u5305"])) {
+    const className = d2ClassNameFromText(sourceText);
+    return className ? { owner: "character", className } : { owner: "inventory" };
+  }
+  const className = d2ClassNameFromText(flag || d2SourceClassPhrase(text));
+  if (className) return { owner: "character", className };
+  return { owner: "all" };
+}
+
+function d2TransferDestinationFromText(flagValue, fullText) {
+  const flag = normalizeD2Text(flagValue);
+  const text = normalizeD2Text(fullText);
+  const destinationText = flag || text;
+  if (!flag && hasAnyD2Word(text, ["\u4ed3\u5e93", "vault"])) return { owner: "vault" };
+  if (hasAnyD2Word(destinationText, ["vault", "\u4ed3\u5e93"])) return { owner: "vault" };
+  const className = d2ClassNameFromText(flag || d2DestinationClassPhrase(text));
+  if (className) return { owner: "character", className };
+  return { owner: "vault" };
+}
+
+function d2SourceClassPhrase(text) {
+  const match = /(\u672f\u58eb|\u730e\u4eba|\u6cf0\u5766|warlock|hunter|titan)\s*(?:\u80cc\u5305|\u8eab\u4e0a|\u5df2\u88c5\u5907|\u88c5\u5907|\u7684)/iu.exec(text);
+  return match?.[1] || "";
+}
+
+function d2DestinationClassPhrase(text) {
+  const match = /(?:\u7ed9|\u5230|\u79fb\u5230|\u8f6c\u5230|\u653e\u5230|\u653e\u8fdb)\s*(\u672f\u58eb|\u730e\u4eba|\u6cf0\u5766|warlock|hunter|titan)/iu.exec(text);
+  return match?.[1] || "";
+}
+
+function d2ClassNameFromText(text) {
+  const value = normalizeD2Text(text);
+  if (hasAnyD2Word(value, ["\u672f\u58eb", "warlock"])) return "warlock";
+  if (hasAnyD2Word(value, ["\u730e\u4eba", "hunter"])) return "hunter";
+  if (hasAnyD2Word(value, ["\u6cf0\u5766", "titan"])) return "titan";
+  return "";
+}
+
+function d2TransferItemKind(value) {
+  const text = normalizeD2Text(value);
+  if (hasAnyD2Word(text, ["\u9632\u5177", "\u62a4\u7532", "armor"])) return "armor";
+  if (hasAnyD2Word(text, ["\u6b66\u5668", "weapon"])) return "weapon";
+  return "all";
+}
+
+function d2TransferArmorSlotFromText(value) {
+  const text = normalizeD2Text(value);
+  if (/\u5934|\u5934\u76d4|helmet/u.test(text)) return "\u5934\u76d4";
+  if (/\u624b|\u81c2|\u81c2\u94e0|\u624b\u5957|gauntlet/u.test(text)) return "\u81c2\u94e0";
+  if (/\u80f8|\u80f8\u7532|chest/u.test(text)) return "\u80f8\u7532";
+  if (/\u817f|\u817f\u7532|leg/u.test(text)) return "\u817f\u7532";
+  if (/\u804c\u4e1a\u7269\u54c1|\u804c\u4e1a|class item/u.test(text)) return "\u804c\u4e1a\u7269\u54c1";
+  return "";
+}
+
+function d2TransferResidualQuery(value) {
+  const weaponType = d2InventoryWeaponTypeFromText(value);
+  const armorSlot = d2TransferArmorSlotFromText(value);
+  return normalizeD2Text(value)
+    .replace(/\u547d\u8fd02|destiny\s*2|d2|\u628a|\u5c06|\u8bf7|\u5e2e\u6211|\u6211\u7684|\u6211|\u5168\u90e8|\u6240\u6709|\u5168\u90fd|\u4e00\u952e|\u8f6c\u79fb|\u79fb\u52a8|\u79fb\u5230|\u8f6c\u5230|\u653e\u5230|\u653e\u8fdb|\u5b58\u5230|\u4ed3\u5e93|vault|\u80cc\u5305|inventory|\u8eab\u4e0a|\u5df2\u88c5\u5907|\u88c5\u5907|\u9632\u5177|\u62a4\u7532|\u6b66\u5668|\u5305\u542b\u5df2\u88c5\u5907|\u5305\u542b\u8eab\u4e0a|\u4e5f/giu, " ")
+    .replace(weaponType || "", " ")
+    .replace(armorSlot || "", " ")
+    .replace(/\u672f\u58eb|\u730e\u4eba|\u6cf0\u5766|warlock|hunter|titan/giu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
 }
 
 function hasD2PersonalItemInfoIntent(text) {
@@ -1611,6 +1735,9 @@ function d2DirectFallbackMessage(card, operation, rawMessage) {
   if (card === "catalyst_status") {
     return `\u6ca1\u6709\u751f\u6210\u50ac\u5316\u56fe\u7247\uff1a${message}`;
   }
+  if (card === "item_action") {
+    return message;
+  }
   return isLoadoutRead
     ? `\u6ca1\u6709\u751f\u6210\u914d\u88c5\u56fe\u7247\uff1a${message}`
     : `\u6ca1\u6709\u751f\u6210\u56fe\u7247\uff1a${message}`;
@@ -1776,6 +1903,9 @@ function buildD2DirectInvocation(event, text) {
     const q = extractD2CatalystInfoQuery(text);
     if (!q) return null;
     return { card, target, params: { target, card, q } };
+  }
+  if (card === "item_action") {
+    return { card, target, params: d2ItemActionParams(text, target) };
   }
   const params = card === "help"
     ? { card }
